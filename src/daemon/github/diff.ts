@@ -42,6 +42,20 @@ const wasEdited = (
   return prev !== next || (previousUpdatedAt ?? "") !== (nextUpdatedAt ?? "")
 }
 
+const groupKinds = new Set([
+  "check.created",
+  "check.queued",
+  "check.in_progress",
+  "check.succeeded",
+  "check.failed",
+  "issue_comment.created",
+  "issue_comment.edited",
+  "issue_comment.deleted",
+  "review_comment.created",
+  "review_comment.edited",
+  "review_comment.deleted",
+])
+
 export function diffSnapshot(previous: PullRequestSnapshot | null, next: PullRequestSnapshot): NormalizedPrEvent[] {
   if (!previous) {
     return [
@@ -147,6 +161,7 @@ export function diffSnapshot(previous: PullRequestSnapshot | null, next: PullReq
 
   const previousIssueCommentIds = new Set(previous.issueComments.map((comment) => comment.id))
   const previousIssueComments = new Map(previous.issueComments.map((comment) => [comment.id, comment]))
+  const nextIssueCommentIds = new Set(next.issueComments.map((comment) => comment.id))
   for (const comment of next.issueComments) {
     const previousComment = previousIssueComments.get(comment.id)
     if (previousComment) {
@@ -187,8 +202,26 @@ export function diffSnapshot(previous: PullRequestSnapshot | null, next: PullReq
     })
   }
 
+  for (const previousComment of previous.issueComments) {
+    if (nextIssueCommentIds.has(previousComment.id)) continue
+    const user = previousComment.user?.login ?? "unknown"
+    events.push({
+      dedupeKey: `issue_comment.deleted:${previousComment.id}:${next.core.headRefOid}`,
+      kind: "issue_comment.deleted",
+      priority: "medium",
+      summary: `Issue comment deleted by ${user}${compact(previousComment.body) ? `: ${compact(previousComment.body)}` : ""}`,
+      detailFilePath: next.core.url,
+      payload: {
+        commentId: previousComment.id,
+        user,
+        previousBody: previousComment.body ?? null,
+      },
+    })
+  }
+
   const previousReviewCommentIds = new Set(previous.reviewComments.map((comment) => comment.id))
   const previousReviewComments = new Map(previous.reviewComments.map((comment) => [comment.id, comment]))
+  const nextReviewCommentIds = new Set(next.reviewComments.map((comment) => comment.id))
   for (const comment of next.reviewComments) {
     const previousComment = previousReviewComments.get(comment.id)
     if (previousComment) {
@@ -235,6 +268,28 @@ export function diffSnapshot(previous: PullRequestSnapshot | null, next: PullReq
     })
   }
 
+  for (const previousComment of previous.reviewComments) {
+    if (nextReviewCommentIds.has(previousComment.id)) continue
+    const user = previousComment.user?.login ?? "unknown"
+    const location = previousComment.path
+      ? ` on ${previousComment.path}${previousComment.line ? `:${previousComment.line}` : ""}`
+      : ""
+    events.push({
+      dedupeKey: `review_comment.deleted:${previousComment.id}:${next.core.headRefOid}`,
+      kind: "review_comment.deleted",
+      priority: "medium",
+      summary: `Review comment deleted by ${user}${location}${compact(previousComment.body) ? `: ${compact(previousComment.body)}` : ""}`,
+      detailFilePath: next.core.url,
+      payload: {
+        commentId: previousComment.id,
+        user,
+        path: previousComment.path ?? null,
+        line: previousComment.line ?? null,
+        previousBody: previousComment.body ?? null,
+      },
+    })
+  }
+
   const previousChecks = new Map(previous.checks.map((check) => [check.name, check]))
   for (const check of next.checks) {
     const prev = previousChecks.get(check.name)
@@ -255,5 +310,41 @@ export function diffSnapshot(previous: PullRequestSnapshot | null, next: PullReq
     })
   }
 
-  return events
+  const grouped = new Map<string, NormalizedPrEvent[]>()
+  const ordered: NormalizedPrEvent[] = []
+
+  for (const event of events) {
+    if (!groupKinds.has(event.kind)) {
+      ordered.push(event)
+      continue
+    }
+    const bucket = grouped.get(event.kind)
+    if (bucket) bucket.push(event)
+    else grouped.set(event.kind, [event])
+  }
+
+  for (const [kind, bucket] of grouped) {
+    if (bucket.length === 1) {
+      ordered.push(bucket[0])
+      continue
+    }
+
+    ordered.push({
+      dedupeKey: `${kind}:group:${next.core.headRefOid}:${bucket.length}`,
+      kind,
+      priority: bucket.some((event) => event.priority === "high")
+        ? "high"
+        : bucket.some((event) => event.priority === "medium")
+          ? "medium"
+          : "low",
+      summary: `${bucket.length} ${kind.replaceAll("_", " ")} events`,
+      detailFilePath: next.core.url,
+      payload: {
+        count: bucket.length,
+        events: bucket.map((event) => ({ summary: event.summary, payload: event.payload })),
+      },
+    })
+  }
+
+  return ordered
 }

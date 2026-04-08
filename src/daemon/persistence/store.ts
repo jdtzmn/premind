@@ -43,6 +43,16 @@ type EventRow = {
   detail_file_path: string | null
 }
 
+type GroupedReminderEvent = ReminderEvent & {
+  count?: number
+}
+
+const priorityRank: Record<ReminderEvent["priority"], number> = {
+  high: 0,
+  medium: 1,
+  low: 2,
+}
+
 export class StateStore {
   private readonly db: Database.Database
   private readonly detailFiles = new DetailFileWriter()
@@ -427,7 +437,7 @@ export class StateStore {
     const events = this.listUndeliveredEvents(sessionId)
     if (events.length === 0) return null
 
-    const reminderEvents: ReminderEvent[] = events.map((event) => ({
+    const reminderEvents: GroupedReminderEvent[] = events.map((event) => ({
       eventId: String(event.seq),
       kind: event.kind,
       priority: event.priority,
@@ -435,23 +445,46 @@ export class StateStore {
       detailFilePath: event.detail_file_path ?? undefined,
     }))
 
+    const grouped = new Map<string, GroupedReminderEvent[]>()
+    for (const event of reminderEvents) {
+      const key = event.priority === "low" || event.priority === "medium" ? `${event.priority}:${event.kind}` : event.eventId
+      const bucket = grouped.get(key)
+      if (bucket) bucket.push(event)
+      else grouped.set(key, [event])
+    }
+
+    const condensed = Array.from(grouped.values()).map((bucket) => {
+      if (bucket.length === 1 || bucket[0].priority === "high") return bucket[0]
+      return {
+        ...bucket[0],
+        summary: `${bucket.length} ${bucket[0].kind.replaceAll("_", " ")} events`,
+        count: bucket.length,
+      }
+    })
+
+    condensed.sort((left, right) => {
+      const priorityDelta = priorityRank[left.priority] - priorityRank[right.priority]
+      if (priorityDelta !== 0) return priorityDelta
+      return Number(left.eventId) - Number(right.eventId)
+    })
+
     const reminderText = [
       "<system-reminder>",
       "New pull request context was detected since the last reminder.",
       "",
       "Changes:",
-      ...reminderEvents.map((event, index) => `${index + 1}. ${event.kind} - ${event.summary}${event.detailFilePath ? ` (${event.detailFilePath})` : ""}`),
+      ...condensed.map((event, index) => `${index + 1}. ${event.kind} - ${event.summary}${event.detailFilePath ? ` (${event.detailFilePath})` : ""}`),
       "",
       "Please incorporate only the new information above into your reasoning and continue the current task.",
       "</system-reminder>",
     ].join("\n")
 
-    const batchId = this.createOrReplaceReminder(sessionId, reminderText, reminderEvents, now)
+    const batchId = this.createOrReplaceReminder(sessionId, reminderText, condensed, now)
     return {
       batchId,
       sessionId,
       reminderText,
-      events: reminderEvents,
+      events: condensed,
     }
   }
 

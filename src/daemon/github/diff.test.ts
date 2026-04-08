@@ -141,4 +141,47 @@ describe("diffSnapshot", () => {
     assert.equal(reviewEdit.priority, "medium")
     assert.equal(reviewEdit.payload.previousBody, "Original review comment")
   })
+
+  test("detects deleted comments and groups repeated low-signal changes", () => {
+    const previous: PullRequestSnapshot = {
+      ...baseSnapshot(),
+      core: {
+        ...baseSnapshot().core,
+        isDraft: false,
+      },
+      issueComments: [
+        { id: 51, body: "Old issue comment A", user: { login: "frank" } },
+        { id: 52, body: "Old issue comment B", user: { login: "frank" } },
+      ],
+      reviewComments: [
+        { id: 61, body: "Old review comment", path: "src/a.ts", line: 1, user: { login: "grace" } },
+      ],
+      checks: [
+        { name: "unit", state: "queued" },
+        { name: "lint", state: "queued" },
+      ],
+    }
+
+    const next: PullRequestSnapshot = {
+      ...previous,
+      issueComments: [],
+      reviewComments: [],
+      checks: [
+        { name: "unit", state: "success" },
+        { name: "lint", state: "success" },
+      ],
+    }
+
+    const events = diffSnapshot(previous, next)
+    const issueDeleted = events.find((event) => event.kind === "issue_comment.deleted")
+    const reviewDeleted = events.find((event) => event.kind === "review_comment.deleted")
+    const groupedChecks = events.find((event) => event.kind === "check.succeeded")
+
+    assert.ok(issueDeleted)
+    assert.equal(issueDeleted.payload.count, 2)
+    assert.ok(reviewDeleted)
+    assert.equal(reviewDeleted.payload.previousBody, "Old review comment")
+    assert.ok(groupedChecks)
+    assert.equal(groupedChecks.payload.count, 2)
+  })
 })
