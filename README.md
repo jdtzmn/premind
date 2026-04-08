@@ -6,9 +6,22 @@ When a PR receives new comments, review feedback, check results, or merge confli
 
 ## Install
 
-### From npm (recommended)
+### From GitHub (recommended)
 
 Add `premind` to your `opencode.json`:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": ["github:jdtzmn/premind"]
+}
+```
+
+OpenCode will install it automatically on next startup.
+
+### From npm
+
+If published to npm:
 
 ```json
 {
@@ -16,8 +29,6 @@ Add `premind` to your `opencode.json`:
   "plugin": ["premind"]
 }
 ```
-
-OpenCode will install it automatically on next startup.
 
 ### From local checkout
 
@@ -45,11 +56,13 @@ ln -s "$(pwd)/src/plugin/index.ts" .opencode/plugins/premind.ts
 
 ## Commands
 
-premind adds three commands you can invoke:
+premind registers three slash commands automatically:
 
-- `premind-status` — show current daemon state, attached sessions, and pending reminder counts
-- `premind-pause` — pause reminders for the current session (events still accumulate)
-- `premind-resume` — resume reminders for the current session
+- `/premind-status` — show current daemon state, attached sessions, and pending reminder counts
+- `/premind-pause` — pause reminders for the current session (events still accumulate)
+- `/premind-resume` — resume reminders for the current session
+
+These also work as tools that the model can call directly (e.g., if you ask "show premind status").
 
 ## Requirements
 
@@ -63,7 +76,7 @@ See [PLAN.md](./PLAN.md) for the full design document.
 
 The system has two runtime components:
 
-- **Plugin** — thin OpenCode hook that registers sessions, observes idle/busy transitions, and injects reminders
+- **Plugin** — thin OpenCode hook that registers sessions, observes idle/busy transitions, registers commands/tools, and injects reminders
 - **Daemon** — local background process that polls GitHub, diffs PR snapshots, and manages per-session event queues with SQLite persistence
 
 Multiple OpenCode sessions on the same PR share one daemon watcher. Each session has its own delivery cursor so reminders are incremental per session.

@@ -1,28 +1,3 @@
-type CommandExecuteBeforeInput = {
-  command?: string
-  sessionID?: string
-}
-
-export const isPremindStatusCommand = (input: unknown) => {
-  const record = (input ?? {}) as CommandExecuteBeforeInput
-  return record.command === "premind-status"
-}
-
-export const isPremindPauseCommand = (input: unknown) => {
-  const record = (input ?? {}) as CommandExecuteBeforeInput
-  return record.command === "premind-pause"
-}
-
-export const isPremindResumeCommand = (input: unknown) => {
-  const record = (input ?? {}) as CommandExecuteBeforeInput
-  return record.command === "premind-resume"
-}
-
-export const getCommandSessionId = (input: unknown) => {
-  const record = (input ?? {}) as CommandExecuteBeforeInput
-  return typeof record.sessionID === "string" && record.sessionID.length > 0 ? record.sessionID : undefined
-}
-
 export const renderPremindStatus = (status: {
   daemon: { protocolVersion: number }
   activeClients: number

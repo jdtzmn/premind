@@ -1,17 +1,19 @@
-import type { Plugin } from "@opencode-ai/plugin"
+import { tool, type Plugin } from "@opencode-ai/plugin"
 import { PREMIND_CLIENT_HEARTBEAT_MS } from "../shared/constants.js"
 import { PremindDaemonClient } from "./daemon-client.js"
-import {
-  getCommandSessionId,
-  isPremindPauseCommand,
-  isPremindResumeCommand,
-  isPremindStatusCommand,
-  renderPremindStatus,
-} from "./commands.js"
+import { renderPremindStatus } from "./commands.js"
 import { detectGitContext } from "./git-context.js"
 import { ensureDaemonRunning } from "./daemon-launcher.js"
 
 const REMINDER_MARKER_PREFIX = "premind://reminder/"
+
+const COMMAND_MARKERS = {
+  status: "[PREMIND_STATUS]",
+  pause: "[PREMIND_PAUSE]",
+  resume: "[PREMIND_RESUME]",
+} as const
+
+const ABORT_SENTINEL = "__PREMIND_HANDLED__"
 
 type DaemonClientLike = {
   registerClient: (projectRoot: string, sessionSource?: string) => Promise<any>
@@ -27,13 +29,24 @@ type DaemonClientLike = {
   debugStatus: () => Promise<any>
 }
 
+type PromptInput = {
+  path: { id: string }
+  body: {
+    noReply?: boolean
+    agent?: string
+    model?: { providerID: string; modelID: string }
+    parts: Array<{ type: "text"; text: string; ignored?: boolean }>
+  }
+}
+
 type PluginContext = {
   directory: string
   worktree?: string
   client: {
     session: {
       get: (input: { path: { id: string } }) => Promise<{ data?: { parentID?: string | null } }>
-      promptAsync: (input: { path: { id: string }; body: { parts: Array<{ type: "text"; text: string }> } }) => Promise<unknown>
+      prompt: (input: PromptInput) => Promise<unknown>
+      promptAsync: (input: PromptInput) => Promise<unknown>
     }
   }
 }
@@ -41,7 +54,6 @@ type PluginContext = {
 export type PremindPluginDependencies = {
   createDaemonClient?: () => DaemonClientLike
   detectGit?: (cwd: string) => Promise<{ repo: string; branch: string }>
-  writeOutput?: (text: string) => void
   ensureDaemon?: () => Promise<void>
 }
 
@@ -72,7 +84,6 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
   const { directory, worktree, client } = input as unknown as PluginContext
   const root = worktree || directory
   const gitDetector = dependencies.detectGit ?? detectGitContext
-  const writeOutput = dependencies.writeOutput ?? ((text: string) => process.stdout.write(text))
   const startDaemon = dependencies.ensureDaemon ?? ensureDaemonRunning
 
   await startDaemon()
@@ -83,9 +94,7 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
   let lastPrimarySessionId: string | undefined
 
   const heartbeat = setInterval(() => {
-    void daemon.heartbeat().catch(() => {
-      // Keep the first scaffold quiet; reconnect logic comes later.
-    })
+    void daemon.heartbeat().catch(() => {})
   }, lease.heartbeatMs ?? PREMIND_CLIENT_HEARTBEAT_MS)
   if (typeof heartbeat.unref === "function") heartbeat.unref()
 
@@ -137,7 +146,90 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
     }
   }
 
+  const injectResponse = async (sessionID: string, text: string, inputRef?: { agent?: string; model?: { providerID: string; modelID: string } }) => {
+    await client.session.prompt({
+      path: { id: sessionID },
+      body: {
+        noReply: true,
+        agent: inputRef?.agent,
+        model: inputRef?.model,
+        parts: [{ type: "text", text, ignored: true }],
+      },
+    })
+    throw new Error(ABORT_SENTINEL)
+  }
+
+  const handleStatusCommand = async (sessionID: string, inputRef?: { agent?: string; model?: { providerID: string; modelID: string } }) => {
+    const status = await daemon.debugStatus()
+    await injectResponse(sessionID, renderPremindStatus(status), inputRef)
+  }
+
+  const handlePauseCommand = async (sessionID: string, inputRef?: { agent?: string; model?: { providerID: string; modelID: string } }) => {
+    await daemon.pauseSession(sessionID)
+    await injectResponse(sessionID, `premind paused for session ${sessionID}`, inputRef)
+  }
+
+  const handleResumeCommand = async (sessionID: string, inputRef?: { agent?: string; model?: { providerID: string; modelID: string } }) => {
+    await daemon.resumeSession(sessionID)
+    await injectResponse(sessionID, `premind resumed for session ${sessionID}`, inputRef)
+  }
+
   return {
+    // Register slash commands via config mutation.
+    config: async (configInput: any) => {
+      configInput.command ??= {}
+      configInput.command["premind-status"] = {
+        template: COMMAND_MARKERS.status,
+        description: "Show premind daemon status, attached sessions, and pending reminders",
+      }
+      configInput.command["premind-pause"] = {
+        template: COMMAND_MARKERS.pause,
+        description: "Pause premind reminders for this session (events still accumulate)",
+      }
+      configInput.command["premind-resume"] = {
+        template: COMMAND_MARKERS.resume,
+        description: "Resume premind reminders for this session",
+      }
+
+      // Keep the heartbeat alive for the lifetime of the plugin instance.
+      process.on("exit", () => {
+        clearInterval(heartbeat)
+        void daemon.release().catch(() => {})
+      })
+    },
+
+    // Register tools so the model can also call them.
+    tool: {
+      premind_status: tool({
+        description: "Show premind daemon status including active sessions, watchers, and pending reminder counts",
+        args: {},
+        async execute(_args, ctx) {
+          const status = await daemon.debugStatus()
+          return renderPremindStatus(status)
+        },
+      }),
+      premind_pause: tool({
+        description: "Pause premind PR reminders for the current session. Events still accumulate and will be delivered when resumed.",
+        args: {},
+        async execute(_args, ctx) {
+          const sessionId = ctx.sessionID ?? lastPrimarySessionId
+          if (!sessionId) return "premind pause failed: no active session"
+          await daemon.pauseSession(sessionId)
+          return `premind paused for session ${sessionId}`
+        },
+      }),
+      premind_resume: tool({
+        description: "Resume premind PR reminders for the current session",
+        args: {},
+        async execute(_args, ctx) {
+          const sessionId = ctx.sessionID ?? lastPrimarySessionId
+          if (!sessionId) return "premind resume failed: no active session"
+          await daemon.resumeSession(sessionId)
+          return `premind resumed for session ${sessionId}`
+        },
+      }),
+    },
+
     event: async ({ event }) => {
       const sessionID = getEventSessionId(event)
       if (!sessionID) return
@@ -146,7 +238,6 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
         await attachSession(sessionID)
       }
 
-      // Handle session.idle as a dedicated event.
       if (event.type === "session.idle") {
         await handleSessionIdle(sessionID)
       }
@@ -156,7 +247,6 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
         if (statusType === "busy" || statusType === "retry") {
           await daemon.updateSessionState({ sessionId: sessionID, busyState: "busy" })
         }
-        // Also handle idle through session.status for backward compatibility.
         if (statusType === "idle") {
           await handleSessionIdle(sessionID)
         }
@@ -167,15 +257,26 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
       }
     },
 
-    // Hook signature: (input, output) per @opencode-ai/plugin types.
+    // Handle both slash command markers and reminder confirmation.
     "chat.message": async (input, output) => {
       if (!input.sessionID) return
 
-      // Check both input and output for marker text.
-      const inputText = extractText(input)
       const outputText = extractText(output)
-      const fullText = `${inputText}\n${outputText}`
+      const inputRef = { agent: input.agent, model: input.model }
 
+      // Handle slash command markers injected via config.
+      if (outputText.includes(COMMAND_MARKERS.status)) {
+        await handleStatusCommand(input.sessionID, inputRef)
+      }
+      if (outputText.includes(COMMAND_MARKERS.pause)) {
+        await handlePauseCommand(input.sessionID, inputRef)
+      }
+      if (outputText.includes(COMMAND_MARKERS.resume)) {
+        await handleResumeCommand(input.sessionID, inputRef)
+      }
+
+      // Check for reminder confirmation marker.
+      const fullText = `${extractText(input)}\n${outputText}`
       const expectedBatchId = inflightReminders.get(input.sessionID)
       if (expectedBatchId && fullText.includes(`${REMINDER_MARKER_PREFIX}${expectedBatchId}`)) {
         await daemon.ackReminder({
@@ -188,46 +289,6 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
       }
 
       await daemon.updateSessionState({ sessionId: input.sessionID, busyState: "busy" })
-    },
-
-    // Hook signature: (input, output) per @opencode-ai/plugin types.
-    "command.execute.before": async (input, _output) => {
-      const targetSessionId = (input as any).sessionID ?? lastPrimarySessionId
-
-      if (isPremindStatusCommand(input)) {
-        const status = await daemon.debugStatus()
-        writeOutput(`${renderPremindStatus(status)}\n`)
-        return
-      }
-
-      if (isPremindPauseCommand(input)) {
-        if (!targetSessionId) {
-          writeOutput("premind pause failed: no active session\n")
-          return
-        }
-        await daemon.pauseSession(targetSessionId)
-        writeOutput(`premind paused for session ${targetSessionId}\n`)
-        return
-      }
-
-      if (isPremindResumeCommand(input)) {
-        if (!targetSessionId) {
-          writeOutput("premind resume failed: no active session\n")
-          return
-        }
-        await daemon.resumeSession(targetSessionId)
-        writeOutput(`premind resumed for session ${targetSessionId}\n`)
-      }
-    },
-
-    config: async () => {
-      // Keep the heartbeat alive for the lifetime of the plugin instance.
-      process.on("exit", () => {
-        clearInterval(heartbeat)
-        void daemon.release().catch(() => {
-          // Ignore shutdown cleanup failures.
-        })
-      })
     },
   }
 }
