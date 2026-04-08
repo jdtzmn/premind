@@ -6,7 +6,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "check": "tsc -p tsconfig.json --noEmit",
-    "daemon": "tsx src/daemon/index.ts"
+    "daemon": "tsx src/daemon/index.ts",
+    "test": "node --import tsx --test src/daemon/github/diff.test.ts src/daemon/persistence/store.test.ts"
   },
   "dependencies": {
     "@opencode-ai/plugin": "latest",
