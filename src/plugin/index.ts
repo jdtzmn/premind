@@ -3,6 +3,8 @@ import { PREMIND_CLIENT_HEARTBEAT_MS } from "../shared/constants.js"
 import { PremindDaemonClient } from "./daemon-client.js"
 import { detectGitContext } from "./git-context.js"
 
+const REMINDER_MARKER_PREFIX = "premind://reminder/"
+
 const getEventSessionId = (event: { properties?: unknown }) => {
   const properties = (event.properties ?? {}) as Record<string, unknown>
   const direct = properties.sessionID
@@ -10,10 +12,27 @@ const getEventSessionId = (event: { properties?: unknown }) => {
   return undefined
 }
 
+const extractText = (value: unknown): string => {
+  if (typeof value === "string") return value
+  if (!value || typeof value !== "object") return ""
+
+  if (Array.isArray(value)) {
+    return value.map(extractText).filter(Boolean).join("\n")
+  }
+
+  const record = value as Record<string, unknown>
+  const ownText = typeof record.text === "string" ? record.text : ""
+  const partText = extractText(record.parts)
+  const messageText = extractText(record.message)
+  const outputText = extractText(record.output)
+  return [ownText, partText, messageText, outputText].filter(Boolean).join("\n")
+}
+
 export const PremindPlugin: Plugin = async ({ directory, worktree, client }) => {
   const daemon = new PremindDaemonClient()
   const root = worktree || directory
   const lease = await daemon.registerClient(root, "opencode-plugin")
+  const inflightReminders = new Map<string, string>()
 
   const heartbeat = setInterval(() => {
     void daemon.heartbeat().catch(() => {
@@ -63,18 +82,23 @@ export const PremindPlugin: Plugin = async ({ directory, worktree, client }) => 
             state: "handed_off",
           })
 
-          await client.session.promptAsync({
-            path: { id: sessionID },
-            body: {
-              parts: [{ type: "text", text: `${pending.batch.reminderText}\n\npremind://reminder/${pending.batch.batchId}` }],
-            },
-          })
-
-          await daemon.ackReminder({
-            batchId: pending.batch.batchId,
-            sessionId: sessionID,
-            state: "confirmed",
-          })
+          inflightReminders.set(sessionID, pending.batch.batchId)
+          try {
+            await client.session.promptAsync({
+              path: { id: sessionID },
+              body: {
+                parts: [{ type: "text", text: `${pending.batch.reminderText}\n\n${REMINDER_MARKER_PREFIX}${pending.batch.batchId}` }],
+              },
+            })
+          } catch (error) {
+            inflightReminders.delete(sessionID)
+            await daemon.ackReminder({
+              batchId: pending.batch.batchId,
+              sessionId: sessionID,
+              state: "failed",
+              error: error instanceof Error ? error.message : String(error),
+            })
+          }
         }
       }
 
@@ -84,6 +108,19 @@ export const PremindPlugin: Plugin = async ({ directory, worktree, client }) => 
     },
     "chat.message": async (input) => {
       if (!input.sessionID) return
+
+      const text = extractText(input)
+      const expectedBatchId = inflightReminders.get(input.sessionID)
+      if (expectedBatchId && text.includes(`${REMINDER_MARKER_PREFIX}${expectedBatchId}`)) {
+        await daemon.ackReminder({
+          batchId: expectedBatchId,
+          sessionId: input.sessionID,
+          state: "confirmed",
+        })
+        inflightReminders.delete(input.sessionID)
+        return
+      }
+
       await daemon.updateSessionState({ sessionId: input.sessionID, busyState: "busy" })
     },
     "command.execute.before": async () => {
@@ -93,6 +130,9 @@ export const PremindPlugin: Plugin = async ({ directory, worktree, client }) => 
       // Keep the heartbeat alive for the lifetime of the plugin instance.
       process.on("exit", () => {
         clearInterval(heartbeat)
+        void daemon.release().catch(() => {
+          // Ignore shutdown cleanup failures.
+        })
       })
     },
   }

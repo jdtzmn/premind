@@ -12,6 +12,7 @@ import type {
   UpdateSessionStatePayload,
 } from "../../shared/schema.js"
 import type { NormalizedPrEvent, PullRequestSnapshot } from "../github/types.js"
+import { DetailFileWriter } from "../reminders/detail-files.js"
 
 type SessionRow = {
   session_id: string
@@ -44,6 +45,7 @@ type EventRow = {
 
 export class StateStore {
   private readonly db: Database.Database
+  private readonly detailFiles = new DetailFileWriter()
 
   constructor(dbPath = PREMIND_DB_PATH) {
     fs.mkdirSync(path.dirname(dbPath), { recursive: true })
@@ -265,6 +267,7 @@ export class StateStore {
 
     const transaction = this.db.transaction((items: NormalizedPrEvent[]) => {
       for (const event of items) {
+        const detailFilePath = this.detailFiles.write(repo, prNumber, event)
         insert.run({
           repo,
           prNumber,
@@ -272,7 +275,7 @@ export class StateStore {
           kind: event.kind,
           priority: event.priority,
           summary: event.summary,
-          detailFilePath: event.detailFilePath ?? null,
+          detailFilePath,
           payloadJson: JSON.stringify(event.payload),
           now,
         })
