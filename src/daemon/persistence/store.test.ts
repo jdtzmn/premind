@@ -134,4 +134,53 @@ describe("StateStore", () => {
 
     store.close()
   })
+
+  test("paused sessions block delivery and resumed sessions recover", () => {
+    const store = createStore()
+
+    store.registerClient("client-3", { pid: 789, projectRoot: "/tmp/project" })
+    store.registerSession({
+      clientId: "client-3",
+      sessionId: "session-3",
+      repo: "acme/repo",
+      branch: "feature/z",
+      isPrimary: true,
+      status: "active",
+      busyState: "idle",
+    })
+    store.recordBranchAssociation("acme/repo", "feature/z", 10)
+    store.insertEvents("acme/repo", 10, [
+      {
+        dedupeKey: "check.failed:build:sha-10",
+        kind: "check.failed",
+        priority: "high",
+        summary: "Check failed: build",
+        payload: { name: "build" },
+      },
+    ])
+
+    // Pause the session — should block delivery.
+    store.setSessionPaused("session-3", true)
+    assert.equal(store.buildReminderBatch("session-3"), null)
+
+    // Events should still accumulate while paused.
+    store.insertEvents("acme/repo", 10, [
+      {
+        dedupeKey: "issue_comment.created:99",
+        kind: "issue_comment.created",
+        priority: "high",
+        summary: "New comment while paused",
+        payload: { commentId: 99 },
+      },
+    ])
+    assert.equal(store.buildReminderBatch("session-3"), null)
+
+    // Resume — should now deliver both events.
+    store.setSessionPaused("session-3", false)
+    const batch = store.buildReminderBatch("session-3")
+    assert.ok(batch)
+    assert.equal(batch.events.length, 2)
+
+    store.close()
+  })
 })

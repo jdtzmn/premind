@@ -478,6 +478,9 @@ export class StateStore {
   }
 
   buildReminderBatch(sessionId: string, now = Date.now()): ReminderBatch | null {
+    const session = this.getSession(sessionId)
+    if (!session || session.status === "paused" || session.status === "closed") return null
+
     const existing = this.getPendingReminder(sessionId)
     if (existing) return existing
 
