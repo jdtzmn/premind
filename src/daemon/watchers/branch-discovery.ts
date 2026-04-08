@@ -1,13 +1,13 @@
 import { createLogger } from "../logging/logger.js"
 import { StateStore } from "../persistence/store.js"
-import { GitHubClient } from "../github/client.js"
+import type { GitHubClientLike } from "../github/client.js"
 
 export class BranchDiscoveryWatcher {
   private readonly logger = createLogger("daemon.branch-discovery")
 
   constructor(
     private readonly store: StateStore,
-    private readonly github: GitHubClient,
+    private readonly github: GitHubClientLike,
   ) {}
 
   async tick(now = Date.now()) {

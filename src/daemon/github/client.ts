@@ -11,12 +11,17 @@ import type {
 
 const execFileAsync = promisify(execFile)
 
-type PullRequestSummary = {
+export type PullRequestSummary = {
   number: number
   title: string
   url: string
   draft: boolean
   state: string
+}
+
+export type GitHubClientLike = {
+  findOpenPullRequestForBranch(repo: string, branch: string): Promise<PullRequestSummary | null>
+  fetchPullRequestSnapshot(repo: string, prNumber: number): Promise<PullRequestSnapshot>
 }
 
 const execGh = async (args: string[]) => {
@@ -34,7 +39,7 @@ const flatten = <T>(value: unknown): T[] => {
   return items
 }
 
-export class GitHubClient {
+export class GitHubClient implements GitHubClientLike {
   async findOpenPullRequestForBranch(repo: string, branch: string): Promise<PullRequestSummary | null> {
     const [owner] = repo.split("/")
     if (!owner || !branch || branch === "HEAD" || branch === "unknown") return null

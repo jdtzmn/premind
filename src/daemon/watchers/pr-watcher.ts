@@ -1,5 +1,5 @@
 import { diffSnapshot } from "../github/diff.js"
-import { GitHubClient } from "../github/client.js"
+import type { GitHubClientLike } from "../github/client.js"
 import { createLogger } from "../logging/logger.js"
 import { StateStore } from "../persistence/store.js"
 
@@ -8,7 +8,7 @@ export class PullRequestWatcher {
 
   constructor(
     private readonly store: StateStore,
-    private readonly github: GitHubClient,
+    private readonly github: GitHubClientLike,
   ) {}
 
   async tick(now = Date.now()) {
