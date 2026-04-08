@@ -7,7 +7,8 @@
     "build": "tsc -p tsconfig.json",
     "check": "tsc -p tsconfig.json --noEmit",
     "daemon": "tsx src/daemon/index.ts",
-    "test": "node --import tsx --test src/daemon/github/diff.test.ts src/daemon/persistence/store.test.ts src/plugin/__tests__/commands.test.ts"
+    "test": "node --import tsx --test src/daemon/github/diff.test.ts src/daemon/persistence/store.test.ts src/plugin/__tests__/commands.test.ts src/plugin/__tests__/compatibility.test.ts",
+    "test:compat": "node --import tsx --test src/plugin/__tests__/compatibility.test.ts"
   },
   "dependencies": {
     "@opencode-ai/plugin": "latest",
