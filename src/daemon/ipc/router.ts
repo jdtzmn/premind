@@ -29,6 +29,16 @@ export class Router {
       case "unregisterSession":
         this.store.unregisterSession(request.payload.sessionId)
         return this.ok({ unregistered: true })
+      case "pauseSession": {
+        const paused = this.store.setSessionPaused(request.payload.sessionId, true)
+        if (!paused) return this.fail("SESSION_NOT_FOUND", `Unknown session: ${request.payload.sessionId}`)
+        return this.ok({ paused: true })
+      }
+      case "resumeSession": {
+        const resumed = this.store.setSessionPaused(request.payload.sessionId, false)
+        if (!resumed) return this.fail("SESSION_NOT_FOUND", `Unknown session: ${request.payload.sessionId}`)
+        return this.ok({ resumed: true })
+      }
       case "getPendingReminder":
         return this.ok({ batch: this.store.buildReminderBatch(request.payload.sessionId) })
       case "ackReminder":
@@ -45,6 +55,7 @@ export class Router {
             activeClients: this.store.countActiveClients(),
             activeSessions: this.store.countActiveSessions(),
             activeWatchers: this.store.countActiveWatchers(),
+            sessions: this.store.listSessionSummaries(),
           }),
         )
     }

@@ -15,6 +15,7 @@ import {
   registerSessionPayloadSchema,
   releaseClientPayloadSchema,
   reminderBatchSchema,
+  sessionControlPayloadSchema,
   unregisterSessionPayloadSchema,
   updateSessionStatePayloadSchema,
 } from "./schema.js"
@@ -26,6 +27,8 @@ export const requestSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("registerSession"), protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION), payload: registerSessionPayloadSchema }),
   z.object({ type: z.literal("updateSessionState"), protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION), payload: updateSessionStatePayloadSchema }),
   z.object({ type: z.literal("unregisterSession"), protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION), payload: unregisterSessionPayloadSchema }),
+  z.object({ type: z.literal("pauseSession"), protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION), payload: sessionControlPayloadSchema }),
+  z.object({ type: z.literal("resumeSession"), protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION), payload: sessionControlPayloadSchema }),
   z.object({ type: z.literal("getPendingReminder"), protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION), payload: getPendingReminderPayloadSchema }),
   z.object({ type: z.literal("ackReminder"), protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION), payload: ackReminderPayloadSchema }),
   z.object({ type: z.literal("debugStatus"), protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION), payload: debugStatusPayloadSchema }),

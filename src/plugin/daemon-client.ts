@@ -72,6 +72,22 @@ export class PremindDaemonClient {
     })
   }
 
+  async pauseSession(sessionId: string) {
+    await this.request({
+      type: "pauseSession",
+      protocolVersion: PREMIND_PROTOCOL_VERSION,
+      payload: { sessionId },
+    })
+  }
+
+  async resumeSession(sessionId: string) {
+    await this.request({
+      type: "resumeSession",
+      protocolVersion: PREMIND_PROTOCOL_VERSION,
+      payload: { sessionId },
+    })
+  }
+
   async getPendingReminder(sessionId: string) {
     const response = await this.request({
       type: "getPendingReminder",

@@ -81,6 +81,12 @@ export const unregisterSessionPayloadSchema = z
   })
   .strict()
 
+export const sessionControlPayloadSchema = z
+  .object({
+    sessionId: z.string().min(1),
+  })
+  .strict()
+
 export const reminderEventSchema = z
   .object({
     eventId: z.string().min(1),
@@ -132,6 +138,19 @@ export const debugStatusResponseSchema = z
     activeClients: z.number().int().nonnegative(),
     activeSessions: z.number().int().nonnegative(),
     activeWatchers: z.number().int().nonnegative(),
+    sessions: z.array(
+      z
+        .object({
+          sessionId: z.string().min(1),
+          repo: z.string().min(1),
+          branch: z.string().min(1),
+          prNumber: z.number().int().nullable(),
+          status: sessionStatusSchema,
+          busyState: busyStateSchema,
+          pendingReminderCount: z.number().int().nonnegative(),
+        })
+        .strict(),
+    ),
   })
   .strict()
 
@@ -143,6 +162,7 @@ export type ReleaseClientPayload = z.infer<typeof releaseClientPayloadSchema>
 export type RegisterSessionPayload = z.infer<typeof registerSessionPayloadSchema>
 export type UpdateSessionStatePayload = z.infer<typeof updateSessionStatePayloadSchema>
 export type UnregisterSessionPayload = z.infer<typeof unregisterSessionPayloadSchema>
+export type SessionControlPayload = z.infer<typeof sessionControlPayloadSchema>
 export type ReminderEvent = z.infer<typeof reminderEventSchema>
 export type ReminderBatch = z.infer<typeof reminderBatchSchema>
 export type AckReminderPayload = z.infer<typeof ackReminderPayloadSchema>

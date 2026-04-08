@@ -176,6 +176,52 @@ export class StateStore {
     return this.db.prepare(`SELECT * FROM sessions WHERE session_id = ?`).get(sessionId) as SessionRow | undefined
   }
 
+  listSessionSummaries() {
+    const sessions = this.db
+      .prepare(`SELECT session_id, repo, branch, pr_number, status, busy_state, last_delivered_event_seq FROM sessions ORDER BY updated_at DESC`)
+      .all() as Array<{
+      session_id: string
+      repo: string
+      branch: string
+      pr_number: number | null
+      status: "active" | "paused" | "closed"
+      busy_state: "busy" | "idle"
+      last_delivered_event_seq: number
+    }>
+
+    return sessions.map((session) => {
+      const pendingReminderCount = session.pr_number === null
+        ? 0
+        : (this.db
+            .prepare(
+              `SELECT COUNT(*) AS count FROM pr_events WHERE repo = @repo AND pr_number = @prNumber AND seq > @lastDeliveredEventSeq`,
+            )
+            .get({
+              repo: session.repo,
+              prNumber: session.pr_number,
+              lastDeliveredEventSeq: session.last_delivered_event_seq,
+            }) as { count: number }).count
+
+      return {
+        sessionId: session.session_id,
+        repo: session.repo,
+        branch: session.branch,
+        prNumber: session.pr_number,
+        status: session.status,
+        busyState: session.busy_state,
+        pendingReminderCount,
+      }
+    })
+  }
+
+  setSessionPaused(sessionId: string, paused: boolean, now = Date.now()) {
+    const status = paused ? "paused" : "active"
+    const result = this.db
+      .prepare(`UPDATE sessions SET status = @status, updated_at = @now WHERE session_id = @sessionId`)
+      .run({ status, now, sessionId })
+    return result.changes > 0
+  }
+
   countActiveClients(now = Date.now()) {
     this.pruneExpiredClients(now)
     const row = this.db.prepare(`SELECT COUNT(*) AS count FROM client_leases`).get() as { count: number }

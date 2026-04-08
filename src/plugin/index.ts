@@ -1,7 +1,13 @@
 import type { Plugin } from "@opencode-ai/plugin"
 import { PREMIND_CLIENT_HEARTBEAT_MS } from "../shared/constants.js"
 import { PremindDaemonClient } from "./daemon-client.js"
-import { isPremindStatusCommand, renderPremindStatus } from "./commands.js"
+import {
+  getCommandSessionId,
+  isPremindPauseCommand,
+  isPremindResumeCommand,
+  isPremindStatusCommand,
+  renderPremindStatus,
+} from "./commands.js"
 import { detectGitContext } from "./git-context.js"
 
 const REMINDER_MARKER_PREFIX = "premind://reminder/"
@@ -34,6 +40,7 @@ export const PremindPlugin: Plugin = async ({ directory, worktree, client }) => 
   const root = worktree || directory
   const lease = await daemon.registerClient(root, "opencode-plugin")
   const inflightReminders = new Map<string, string>()
+  let lastPrimarySessionId: string | undefined
 
   const heartbeat = setInterval(() => {
     void daemon.heartbeat().catch(() => {
@@ -55,6 +62,7 @@ export const PremindPlugin: Plugin = async ({ directory, worktree, client }) => 
       status: "active",
       busyState: "idle",
     })
+    lastPrimarySessionId = sessionID
   }
 
   return {
@@ -125,9 +133,32 @@ export const PremindPlugin: Plugin = async ({ directory, worktree, client }) => 
       await daemon.updateSessionState({ sessionId: input.sessionID, busyState: "busy" })
     },
     "command.execute.before": async (input) => {
-      if (!isPremindStatusCommand(input)) return
-      const status = await daemon.debugStatus()
-      process.stdout.write(`${renderPremindStatus(status)}\n`)
+      const targetSessionId = getCommandSessionId(input) ?? lastPrimarySessionId
+
+      if (isPremindStatusCommand(input)) {
+        const status = await daemon.debugStatus()
+        process.stdout.write(`${renderPremindStatus(status)}\n`)
+        return
+      }
+
+      if (isPremindPauseCommand(input)) {
+        if (!targetSessionId) {
+          process.stdout.write("premind pause failed: no active session\n")
+          return
+        }
+        await daemon.pauseSession(targetSessionId)
+        process.stdout.write(`premind paused for session ${targetSessionId}\n`)
+        return
+      }
+
+      if (isPremindResumeCommand(input)) {
+        if (!targetSessionId) {
+          process.stdout.write("premind resume failed: no active session\n")
+          return
+        }
+        await daemon.resumeSession(targetSessionId)
+        process.stdout.write(`premind resumed for session ${targetSessionId}\n`)
+      }
     },
     config: async () => {
       // Keep the heartbeat alive for the lifetime of the plugin instance.
