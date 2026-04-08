@@ -331,3 +331,8 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
 }
 
 export const PremindPlugin = createPremindPlugin()
+
+export default {
+  id: "premind",
+  server: PremindPlugin,
+}

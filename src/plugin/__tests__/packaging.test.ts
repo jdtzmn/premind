@@ -23,6 +23,9 @@ describe("plugin packaging", () => {
     const mod = await import("../../plugin/index.js")
     assert.equal(typeof mod.PremindPlugin, "function", "PremindPlugin should be a function")
     assert.equal(typeof mod.createPremindPlugin, "function", "createPremindPlugin should be a function")
+    assert.equal(typeof mod.default, "object", "default export should be an object")
+    assert.equal(mod.default?.id, "premind", "default export should declare plugin id")
+    assert.equal(typeof mod.default?.server, "function", "default export should expose server plugin")
   })
 
   test("daemon entry file exists relative to plugin", () => {
