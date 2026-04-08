@@ -1,6 +1,7 @@
 import type { Plugin } from "@opencode-ai/plugin"
 import { PREMIND_CLIENT_HEARTBEAT_MS } from "../shared/constants.js"
 import { PremindDaemonClient } from "./daemon-client.js"
+import { isPremindStatusCommand, renderPremindStatus } from "./commands.js"
 import { detectGitContext } from "./git-context.js"
 
 const REMINDER_MARKER_PREFIX = "premind://reminder/"
@@ -123,8 +124,10 @@ export const PremindPlugin: Plugin = async ({ directory, worktree, client }) => 
 
       await daemon.updateSessionState({ sessionId: input.sessionID, busyState: "busy" })
     },
-    "command.execute.before": async () => {
-      // Reserved for future plugin commands.
+    "command.execute.before": async (input) => {
+      if (!isPremindStatusCommand(input)) return
+      const status = await daemon.debugStatus()
+      process.stdout.write(`${renderPremindStatus(status)}\n`)
     },
     config: async () => {
       // Keep the heartbeat alive for the lifetime of the plugin instance.

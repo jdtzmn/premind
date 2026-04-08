@@ -135,6 +135,38 @@ export function diffSnapshot(previous: PullRequestSnapshot | null, next: PullReq
     }
   }
 
+  if (previous.core.reviewDecision !== next.core.reviewDecision) {
+    const nextDecision = next.core.reviewDecision
+    if (nextDecision === "APPROVED") {
+      events.push({
+        dedupeKey: `pr.review_decision.approved:${next.core.number}:${next.core.headRefOid}`,
+        kind: "pr.review_decision.approved",
+        priority: "high",
+        summary: `PR review decision is now approved for #${next.core.number}`,
+        detailFilePath: next.core.url,
+        payload: { reviewDecision: nextDecision },
+      })
+    } else if (nextDecision === "CHANGES_REQUESTED") {
+      events.push({
+        dedupeKey: `pr.review_decision.changes_requested:${next.core.number}:${next.core.headRefOid}`,
+        kind: "pr.review_decision.changes_requested",
+        priority: "high",
+        summary: `PR review decision now requests changes for #${next.core.number}`,
+        detailFilePath: next.core.url,
+        payload: { reviewDecision: nextDecision },
+      })
+    } else if (nextDecision === "REVIEW_REQUIRED") {
+      events.push({
+        dedupeKey: `pr.review_decision.review_required:${next.core.number}:${next.core.headRefOid}`,
+        kind: "pr.review_decision.review_required",
+        priority: "medium",
+        summary: `PR review decision now requires review for #${next.core.number}`,
+        detailFilePath: next.core.url,
+        payload: { reviewDecision: nextDecision },
+      })
+    }
+  }
+
   const previousReviewRequests = new Set((previous.core.reviewRequests ?? []).map((request) => request.login))
   const nextReviewRequests = new Set((next.core.reviewRequests ?? []).map((request) => request.login))
   for (const reviewer of nextReviewRequests) {

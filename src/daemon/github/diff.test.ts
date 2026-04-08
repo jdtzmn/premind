@@ -226,4 +226,30 @@ describe("diffSnapshot", () => {
     assert.ok(dismissed)
     assert.equal(dismissed.payload.state, "DISMISSED")
   })
+
+  test("detects review decision changes from core state", () => {
+    const previous: PullRequestSnapshot = {
+      ...baseSnapshot(),
+      core: {
+        ...baseSnapshot().core,
+        isDraft: false,
+        reviewDecision: "REVIEW_REQUIRED",
+      },
+    }
+
+    const next: PullRequestSnapshot = {
+      ...previous,
+      core: {
+        ...previous.core,
+        reviewDecision: "CHANGES_REQUESTED",
+      },
+    }
+
+    const events = diffSnapshot(previous, next)
+    const decisionEvent = events.find((event) => event.kind === "pr.review_decision.changes_requested")
+
+    assert.ok(decisionEvent)
+    assert.equal(decisionEvent.priority, "high")
+    assert.equal(decisionEvent.payload.reviewDecision, "CHANGES_REQUESTED")
+  })
 })

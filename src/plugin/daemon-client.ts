@@ -2,6 +2,7 @@ import net from "node:net"
 import { randomUUID } from "node:crypto"
 import { PREMIND_PROTOCOL_VERSION, PREMIND_SOCKET_PATH } from "../shared/constants.js"
 import {
+  debugStatusResponseSchema,
   getPendingReminderResponseSchema,
   registerClientResponseSchema,
   responseSchema,
@@ -89,11 +90,12 @@ export class PremindDaemonClient {
   }
 
   async debugStatus() {
-    return this.request({
+    const response = await this.request({
       type: "debugStatus",
       protocolVersion: PREMIND_PROTOCOL_VERSION,
       payload: {},
     })
+    return debugStatusResponseSchema.parse(response)
   }
 
   private async request(message: unknown) {
