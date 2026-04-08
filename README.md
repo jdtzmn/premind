@@ -64,6 +64,24 @@ premind registers three slash commands automatically:
 
 These also work as tools that the model can call directly (e.g., if you ask "show premind status").
 
+premind also exposes a `premind_probe` tool that returns runtime diagnostics. This is useful if you want to verify that the plugin actually initialized even when slash commands are not showing up yet.
+
+## Debugging
+
+premind writes plugin runtime state to:
+
+- macOS: `~/Library/Application Support/premind/plugin-runtime.json`
+
+This file records whether the plugin initialized, whether the daemon started, whether the client registered, and whether commands were registered.
+
+If you're debugging a local install, useful checks are:
+
+```sh
+cat ~/Library/Application\ Support/premind/plugin-runtime.json
+ls ~/.cache/opencode/node_modules/premind/
+ls /var/folders/*/*/*/T/premind.sock 2>/dev/null
+```
+
 ## Requirements
 
 - OpenCode

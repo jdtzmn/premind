@@ -164,6 +164,7 @@ describe("premind plugin compatibility harness", () => {
     assert.ok(runtime.tool.premind_status, "premind_status tool should exist")
     assert.ok(runtime.tool.premind_pause, "premind_pause tool should exist")
     assert.ok(runtime.tool.premind_resume, "premind_resume tool should exist")
+    assert.ok(runtime.tool.premind_probe, "premind_probe tool should exist")
 
     const toolStatusResult = await runtime.tool.premind_status.execute({}, { sessionID: "session-1" })
     assert.match(toolStatusResult, /premind status/)
@@ -173,6 +174,10 @@ describe("premind plugin compatibility harness", () => {
 
     const toolResumeResult = await runtime.tool.premind_resume.execute({}, { sessionID: "session-1" })
     assert.match(toolResumeResult, /premind resumed/)
+
+    const toolProbeResult = await runtime.tool.premind_probe.execute({}, { sessionID: "session-1" })
+    assert.match(toolProbeResult, /premind probe/)
+    assert.match(toolProbeResult, /commands registered: yes/)
 
     // 9. session.deleted unregisters.
     await runtime.event({ event: { type: "session.deleted", properties: { sessionID: "session-1" } } })

@@ -2,6 +2,7 @@ import { tool, type Plugin } from "@opencode-ai/plugin"
 import { PREMIND_CLIENT_HEARTBEAT_MS } from "../shared/constants.js"
 import { PremindDaemonClient } from "./daemon-client.js"
 import { renderPremindStatus } from "./commands.js"
+import { getPluginRuntimeStatePath, readPluginRuntimeState, writePluginRuntimeState } from "./debug-state.js"
 import { detectGitContext } from "./git-context.js"
 import { ensureDaemonRunning } from "./daemon-launcher.js"
 
@@ -86,10 +87,24 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
   const gitDetector = dependencies.detectGit ?? detectGitContext
   const startDaemon = dependencies.ensureDaemon ?? ensureDaemonRunning
 
-  await startDaemon()
+  writePluginRuntimeState({ phase: "initializing", root })
+
+  try {
+    await startDaemon()
+    writePluginRuntimeState({ phase: "daemon-started", root, daemonStarted: true })
+  } catch (error) {
+    writePluginRuntimeState({
+      phase: "daemon-start-failed",
+      root,
+      daemonStarted: false,
+      error: error instanceof Error ? error.message : String(error),
+    })
+    throw error
+  }
 
   const daemon = dependencies.createDaemonClient?.() ?? new PremindDaemonClient()
   const lease = await daemon.registerClient(root, "opencode-plugin")
+  writePluginRuntimeState({ phase: "client-registered", root, daemonStarted: true, clientRegistered: true })
   const inflightReminders = new Map<string, string>()
   let lastPrimarySessionId: string | undefined
 
@@ -113,6 +128,7 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
       busyState: "idle",
     })
     lastPrimarySessionId = sessionID
+    writePluginRuntimeState({ phase: "session-attached", lastSessionId: sessionID })
   }
 
   const handleSessionIdle = async (sessionID: string) => {
@@ -196,6 +212,8 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
         clearInterval(heartbeat)
         void daemon.release().catch(() => {})
       })
+
+      writePluginRuntimeState({ phase: "commands-registered", commandsRegistered: true })
     },
 
     // Register tools so the model can also call them.
@@ -226,6 +244,25 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
           if (!sessionId) return "premind resume failed: no active session"
           await daemon.resumeSession(sessionId)
           return `premind resumed for session ${sessionId}`
+        },
+      }),
+      premind_probe: tool({
+        description: "Verify premind plugin initialization and return runtime diagnostics",
+        args: {},
+        async execute() {
+          const state = readPluginRuntimeState()
+          return [
+            "premind probe",
+            `- state file: ${getPluginRuntimeStatePath()}`,
+            `- phase: ${state.phase ?? "unknown"}`,
+            `- daemon started: ${state.daemonStarted === true ? "yes" : state.daemonStarted === false ? "no" : "unknown"}`,
+            `- client registered: ${state.clientRegistered === true ? "yes" : state.clientRegistered === false ? "no" : "unknown"}`,
+            `- commands registered: ${state.commandsRegistered === true ? "yes" : state.commandsRegistered === false ? "no" : "unknown"}`,
+            `- root: ${state.root ?? "unknown"}`,
+            `- last session: ${state.lastSessionId ?? "none"}`,
+            `- updated at: ${state.updatedAt ?? "unknown"}`,
+            ...(state.error ? [`- error: ${state.error}`] : []),
+          ].join("\n")
         },
       }),
     },
