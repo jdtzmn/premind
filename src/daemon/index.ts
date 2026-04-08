@@ -12,6 +12,16 @@ async function main() {
   const github = new GitHubClient()
   const discoveryWatcher = new BranchDiscoveryWatcher(server.store, github)
   const pullRequestWatcher = new PullRequestWatcher(server.store, github)
+
+  const recovery = server.store.recoverFromRestart()
+  logger.info("startup recovery", {
+    prunedClients: recovery.prunedClients,
+    resetBatches: recovery.resetBatches,
+    recoveredSessions: recovery.recoveredSessions,
+    recoveredBranchWatchers: recovery.recoveredBranchWatchers,
+    recoveredPrWatchers: recovery.recoveredPrWatchers,
+  })
+
   await server.listen()
 
   const watcherInterval = setInterval(() => {

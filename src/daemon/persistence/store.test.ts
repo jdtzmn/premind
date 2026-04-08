@@ -183,4 +183,65 @@ describe("StateStore", () => {
 
     store.close()
   })
+
+  test("restart recovery prunes stale leases and resets handed-off batches", () => {
+    const store = createStore()
+
+    // Simulate a previous daemon session: register client, session, PR, events, and a batch.
+    store.registerClient("client-old", { pid: 111, projectRoot: "/tmp/project" })
+    store.registerSession({
+      clientId: "client-old",
+      sessionId: "session-restart",
+      repo: "acme/repo",
+      branch: "feature/restart",
+      isPrimary: true,
+      status: "active",
+      busyState: "idle",
+    })
+    store.recordBranchAssociation("acme/repo", "feature/restart", 20)
+    store.insertEvents("acme/repo", 20, [
+      {
+        dedupeKey: "check.failed:ci:sha-20",
+        kind: "check.failed",
+        priority: "high",
+        summary: "Check failed: ci",
+        payload: { name: "ci" },
+      },
+    ])
+
+    // Build a batch and mark it handed_off (simulating crash mid-delivery).
+    const batch = store.buildReminderBatch("session-restart")
+    assert.ok(batch)
+    store.ackReminder({
+      batchId: batch.batchId,
+      sessionId: "session-restart",
+      state: "handed_off",
+    })
+
+    // Verify pre-recovery state.
+    assert.equal(store.countActiveClients(), 1)
+    assert.ok(store.getPendingReminder("session-restart"))
+
+    // Simulate daemon restart.
+    const recovery = store.recoverFromRestart()
+
+    // Stale client leases should be pruned.
+    assert.equal(recovery.prunedClients, 1)
+    assert.equal(store.countActiveClients(), 0)
+
+    // Handed-off batch should be reset (deleted).
+    assert.equal(recovery.resetBatches, 1)
+    assert.equal(store.getPendingReminder("session-restart"), null)
+
+    // Session and watcher state should survive.
+    assert.equal(recovery.recoveredSessions, 1)
+    assert.ok(store.getSession("session-restart"))
+
+    // Events survive, so rebuilding should work after a new client registers.
+    const rebuilt = store.buildReminderBatch("session-restart")
+    assert.ok(rebuilt)
+    assert.equal(rebuilt.events.length, 1)
+
+    store.close()
+  })
 })

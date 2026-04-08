@@ -96,6 +96,29 @@ export class StateStore {
       })
   }
 
+  recoverFromRestart(now = Date.now()) {
+    // Prune all client leases — previous daemon process is dead,
+    // so all leases from it are stale regardless of expiry.
+    const deletedClients = this.db.prepare(`DELETE FROM client_leases`).run()
+
+    // Clear any in-flight reminder batches that were handed_off but never confirmed.
+    // They'll be rebuilt from the event log on next idle.
+    const resetBatches = this.db.prepare(`DELETE FROM reminder_batches WHERE state = 'handed_off'`).run()
+
+    // Count what we're recovering.
+    const sessions = this.countActiveSessions()
+    const branchWatchers = (this.db.prepare(`SELECT COUNT(*) AS count FROM branch_watchers WHERE active_session_count > 0`).get() as { count: number }).count
+    const prWatchers = this.countActiveWatchers()
+
+    return {
+      prunedClients: deletedClients.changes,
+      resetBatches: resetBatches.changes,
+      recoveredSessions: sessions,
+      recoveredBranchWatchers: branchWatchers,
+      recoveredPrWatchers: prWatchers,
+    }
+  }
+
   heartbeatClient(clientId: string, now = Date.now()) {
     const result = this.db
       .prepare(`UPDATE client_leases SET expires_at = @expiresAt, updated_at = @now WHERE client_id = @clientId`)
