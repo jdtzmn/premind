@@ -56,6 +56,8 @@ const groupKinds = new Set([
   "review_comment.deleted",
 ])
 
+const sampleSummaries = (bucket: NormalizedPrEvent[], max = 2) => bucket.slice(0, max).map((event) => event.summary)
+
 export function diffSnapshot(previous: PullRequestSnapshot | null, next: PullRequestSnapshot): NormalizedPrEvent[] {
   if (!previous) {
     return [
@@ -133,6 +135,32 @@ export function diffSnapshot(previous: PullRequestSnapshot | null, next: PullReq
     }
   }
 
+  const previousReviewRequests = new Set((previous.core.reviewRequests ?? []).map((request) => request.login))
+  const nextReviewRequests = new Set((next.core.reviewRequests ?? []).map((request) => request.login))
+  for (const reviewer of nextReviewRequests) {
+    if (previousReviewRequests.has(reviewer)) continue
+    events.push({
+      dedupeKey: `reviewer.requested:${reviewer}:${next.core.headRefOid}`,
+      kind: "reviewer.requested",
+      priority: "high",
+      summary: `Reviewer requested: ${reviewer}`,
+      detailFilePath: next.core.url,
+      payload: { reviewer },
+    })
+  }
+
+  for (const reviewer of previousReviewRequests) {
+    if (nextReviewRequests.has(reviewer)) continue
+    events.push({
+      dedupeKey: `reviewer.removed:${reviewer}:${next.core.headRefOid}`,
+      kind: "reviewer.removed",
+      priority: "medium",
+      summary: `Reviewer removed: ${reviewer}`,
+      detailFilePath: next.core.url,
+      payload: { reviewer },
+    })
+  }
+
   const previousReviewIds = new Set(previous.reviews.map((review) => review.id))
   for (const review of next.reviews) {
     if (previousReviewIds.has(review.id)) continue
@@ -143,6 +171,8 @@ export function diffSnapshot(previous: PullRequestSnapshot | null, next: PullReq
         ? "review.approved"
         : state === "CHANGES_REQUESTED"
           ? "review.changes_requested"
+          : state === "DISMISSED"
+            ? "review.dismissed"
           : "review.commented"
     events.push({
       dedupeKey: `${kind}:${review.id}`,
@@ -337,10 +367,11 @@ export function diffSnapshot(previous: PullRequestSnapshot | null, next: PullReq
         : bucket.some((event) => event.priority === "medium")
           ? "medium"
           : "low",
-      summary: `${bucket.length} ${kind.replaceAll("_", " ")} events`,
+      summary: `${bucket.length} ${kind.replaceAll("_", " ")} events${sampleSummaries(bucket).length > 0 ? ` (${sampleSummaries(bucket).join("; ")})` : ""}`,
       detailFilePath: next.core.url,
       payload: {
         count: bucket.length,
+        samples: sampleSummaries(bucket),
         events: bucket.map((event) => ({ summary: event.summary, payload: event.payload })),
       },
     })

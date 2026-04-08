@@ -15,6 +15,7 @@ const baseSnapshot = (): PullRequestSnapshot => ({
     headRefOid: "sha-1",
     mergeStateStatus: "CLEAN",
     reviewDecision: null,
+    reviewRequests: [],
     updatedAt: "2026-04-08T00:00:00Z",
   },
   reviews: [],
@@ -183,5 +184,46 @@ describe("diffSnapshot", () => {
     assert.equal(reviewDeleted.payload.previousBody, "Old review comment")
     assert.ok(groupedChecks)
     assert.equal(groupedChecks.payload.count, 2)
+    assert.equal(Array.isArray(groupedChecks.payload.samples), true)
+  })
+
+  test("detects reviewer request changes and dismissed reviews", () => {
+    const previous: PullRequestSnapshot = {
+      ...baseSnapshot(),
+      core: {
+        ...baseSnapshot().core,
+        isDraft: false,
+        reviewRequests: [{ login: "alice" }],
+      },
+      reviews: [],
+    }
+
+    const next: PullRequestSnapshot = {
+      ...previous,
+      core: {
+        ...previous.core,
+        reviewRequests: [{ login: "bob" }],
+      },
+      reviews: [
+        {
+          id: 71,
+          state: "DISMISSED",
+          body: "Superseded by new commits",
+          user: { login: "maintainer" },
+        },
+      ],
+    }
+
+    const events = diffSnapshot(previous, next)
+    const reviewerRequested = events.find((event) => event.kind === "reviewer.requested")
+    const reviewerRemoved = events.find((event) => event.kind === "reviewer.removed")
+    const dismissed = events.find((event) => event.kind === "review.dismissed")
+
+    assert.ok(reviewerRequested)
+    assert.equal(reviewerRequested.payload.reviewer, "bob")
+    assert.ok(reviewerRemoved)
+    assert.equal(reviewerRemoved.payload.reviewer, "alice")
+    assert.ok(dismissed)
+    assert.equal(dismissed.payload.state, "DISMISSED")
   })
 })

@@ -45,6 +45,7 @@ type EventRow = {
 
 type GroupedReminderEvent = ReminderEvent & {
   count?: number
+  samples?: string[]
 }
 
 const priorityRank: Record<ReminderEvent["priority"], number> = {
@@ -457,8 +458,12 @@ export class StateStore {
       if (bucket.length === 1 || bucket[0].priority === "high") return bucket[0]
       return {
         ...bucket[0],
-        summary: `${bucket.length} ${bucket[0].kind.replaceAll("_", " ")} events`,
+        summary: `${bucket.length} ${bucket[0].kind.replaceAll("_", " ")} events (${bucket
+          .slice(0, 2)
+          .map((event) => event.summary)
+          .join("; ")})`,
         count: bucket.length,
+        samples: bucket.slice(0, 2).map((event) => event.summary),
       }
     })
 

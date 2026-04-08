@@ -70,7 +70,7 @@ export class GitHubClient {
         "-R",
         repo,
         "--json",
-        "number,title,url,state,isDraft,headRefName,baseRefName,headRefOid,mergeStateStatus,reviewDecision,updatedAt",
+        "number,title,url,state,isDraft,headRefName,baseRefName,headRefOid,mergeStateStatus,reviewDecision,updatedAt,reviewRequests",
       ]),
       execGh(["api", "--paginate", "--slurp", `repos/${repo}/pulls/${prNumber}/reviews?per_page=100`]),
       execGh(["api", "--paginate", "--slurp", `repos/${repo}/issues/${prNumber}/comments?per_page=100`]),

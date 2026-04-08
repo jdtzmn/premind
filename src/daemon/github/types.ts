@@ -10,6 +10,7 @@ export type PullRequestCore = {
   mergeStateStatus?: string
   reviewDecision?: string | null
   updatedAt?: string
+  reviewRequests?: Array<{ login: string }>
 }
 
 export type PullRequestReview = {
@@ -17,6 +18,7 @@ export type PullRequestReview = {
   state?: string
   body?: string | null
   submitted_at?: string
+  authorAssociation?: string
   user?: { login?: string }
 }
 
