@@ -31,6 +31,17 @@ const checkSummary = (check: PullRequestCheck, kind: string) => {
   return `New check detected: ${name}`
 }
 
+const wasEdited = (
+  previousBody: string | null | undefined,
+  nextBody: string | null | undefined,
+  previousUpdatedAt: string | undefined,
+  nextUpdatedAt: string | undefined,
+) => {
+  const prev = (previousBody ?? "").trim()
+  const next = (nextBody ?? "").trim()
+  return prev !== next || (previousUpdatedAt ?? "") !== (nextUpdatedAt ?? "")
+}
+
 export function diffSnapshot(previous: PullRequestSnapshot | null, next: PullRequestSnapshot): NormalizedPrEvent[] {
   if (!previous) {
     return [
@@ -135,7 +146,31 @@ export function diffSnapshot(previous: PullRequestSnapshot | null, next: PullReq
   }
 
   const previousIssueCommentIds = new Set(previous.issueComments.map((comment) => comment.id))
+  const previousIssueComments = new Map(previous.issueComments.map((comment) => [comment.id, comment]))
   for (const comment of next.issueComments) {
+    const previousComment = previousIssueComments.get(comment.id)
+    if (previousComment) {
+      if (
+        wasEdited(previousComment.body, comment.body, previousComment.updated_at, comment.updated_at)
+      ) {
+        const user = comment.user?.login ?? previousComment.user?.login ?? "unknown"
+        events.push({
+          dedupeKey: `issue_comment.edited:${comment.id}:${comment.updated_at ?? "unknown"}`,
+          kind: "issue_comment.edited",
+          priority: "medium",
+          summary: `Issue comment edited by ${user}${compact(comment.body) ? `: ${compact(comment.body)}` : ""}`,
+          detailFilePath: next.core.url,
+          payload: {
+            commentId: comment.id,
+            user,
+            previousBody: previousComment.body ?? null,
+            body: comment.body ?? null,
+            updatedAt: comment.updated_at ?? null,
+          },
+        })
+      }
+      continue
+    }
     if (previousIssueCommentIds.has(comment.id)) continue
     const user = comment.user?.login ?? "unknown"
     events.push({
@@ -153,7 +188,34 @@ export function diffSnapshot(previous: PullRequestSnapshot | null, next: PullReq
   }
 
   const previousReviewCommentIds = new Set(previous.reviewComments.map((comment) => comment.id))
+  const previousReviewComments = new Map(previous.reviewComments.map((comment) => [comment.id, comment]))
   for (const comment of next.reviewComments) {
+    const previousComment = previousReviewComments.get(comment.id)
+    if (previousComment) {
+      if (
+        wasEdited(previousComment.body, comment.body, previousComment.updated_at, comment.updated_at)
+      ) {
+        const user = comment.user?.login ?? previousComment.user?.login ?? "unknown"
+        const location = comment.path ? ` on ${comment.path}${comment.line ? `:${comment.line}` : ""}` : ""
+        events.push({
+          dedupeKey: `review_comment.edited:${comment.id}:${comment.updated_at ?? "unknown"}`,
+          kind: "review_comment.edited",
+          priority: "medium",
+          summary: `Review comment edited by ${user}${location}${compact(comment.body) ? `: ${compact(comment.body)}` : ""}`,
+          detailFilePath: next.core.url,
+          payload: {
+            commentId: comment.id,
+            user,
+            previousBody: previousComment.body ?? null,
+            body: comment.body ?? null,
+            path: comment.path ?? null,
+            line: comment.line ?? null,
+            updatedAt: comment.updated_at ?? null,
+          },
+        })
+      }
+      continue
+    }
     if (previousReviewCommentIds.has(comment.id)) continue
     const user = comment.user?.login ?? "unknown"
     const location = comment.path ? ` on ${comment.path}${comment.line ? `:${comment.line}` : ""}` : ""

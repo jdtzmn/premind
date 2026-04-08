@@ -79,4 +79,66 @@ describe("diffSnapshot", () => {
     assert.ok(kinds.includes("review_comment.created"))
     assert.ok(kinds.includes("check.failed"))
   })
+
+  test("detects edited issue and review comments", () => {
+    const previous: PullRequestSnapshot = {
+      ...baseSnapshot(),
+      core: {
+        ...baseSnapshot().core,
+        isDraft: false,
+      },
+      issueComments: [
+        {
+          id: 31,
+          body: "Original issue comment",
+          updated_at: "2026-04-08T00:00:00Z",
+          user: { login: "dana" },
+        },
+      ],
+      reviewComments: [
+        {
+          id: 41,
+          body: "Original review comment",
+          updated_at: "2026-04-08T00:00:00Z",
+          path: "src/daemon/index.ts",
+          line: 12,
+          user: { login: "erin" },
+        },
+      ],
+    }
+
+    const next: PullRequestSnapshot = {
+      ...previous,
+      issueComments: [
+        {
+          id: 31,
+          body: "Edited issue comment with more detail",
+          updated_at: "2026-04-08T00:10:00Z",
+          user: { login: "dana" },
+        },
+      ],
+      reviewComments: [
+        {
+          id: 41,
+          body: "Edited review comment with more detail",
+          updated_at: "2026-04-08T00:12:00Z",
+          path: "src/daemon/index.ts",
+          line: 12,
+          user: { login: "erin" },
+        },
+      ],
+    }
+
+    const events = diffSnapshot(previous, next)
+    const issueEdit = events.find((event) => event.kind === "issue_comment.edited")
+    const reviewEdit = events.find((event) => event.kind === "review_comment.edited")
+
+    assert.ok(issueEdit)
+    assert.equal(issueEdit.priority, "medium")
+    assert.equal(issueEdit.payload.previousBody, "Original issue comment")
+
+    assert.ok(reviewEdit)
+    assert.equal(reviewEdit.priority, "medium")
+    assert.equal(reviewEdit.payload.previousBody, "Original review comment")
+  })
 })
