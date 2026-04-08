@@ -4,6 +4,7 @@ import { IpcServer } from "./ipc/server.js"
 import { GitHubClient } from "./github/client.js"
 import { BranchDiscoveryWatcher } from "./watchers/branch-discovery.js"
 import { PullRequestWatcher } from "./watchers/pr-watcher.js"
+import { PollScheduler } from "./watchers/poll-scheduler.js"
 
 const logger = createLogger("daemon")
 
@@ -24,36 +25,41 @@ async function main() {
 
   await server.listen()
 
-  const watcherInterval = setInterval(() => {
-    void Promise.all([discoveryWatcher.tick(), pullRequestWatcher.tick()]).catch((error) => {
-      logger.warn("watcher tick failed", {
-        error: error instanceof Error ? error.message : String(error),
-      })
-    })
-  }, 15_000)
+  const discoveryScheduler = new PollScheduler(
+    "branch-discovery",
+    () => discoveryWatcher.tick(),
+    { baseIntervalMs: 60_000, maxIntervalMs: 180_000, jitterFactor: 0.25 },
+  )
 
-  const interval = setInterval(async () => {
+  const prScheduler = new PollScheduler(
+    "pr-watcher",
+    () => pullRequestWatcher.tick(),
+    { baseIntervalMs: 20_000, maxIntervalMs: 120_000, jitterFactor: 0.2 },
+  )
+
+  discoveryScheduler.start()
+  prScheduler.start()
+
+  const shutdownCheck = setInterval(async () => {
     if (!server.shouldShutdown()) return
-    clearInterval(interval)
-    clearInterval(watcherInterval)
+    clearInterval(shutdownCheck)
+    discoveryScheduler.stop()
+    prScheduler.stop()
     logger.info("graceful shutdown", { reason: "no_active_clients_or_sessions" })
     await server.close()
     process.exit(0)
   }, PREMIND_IDLE_SHUTDOWN_GRACE_MS)
 
-  process.on("SIGINT", async () => {
-    clearInterval(interval)
-    clearInterval(watcherInterval)
+  const cleanup = async () => {
+    clearInterval(shutdownCheck)
+    discoveryScheduler.stop()
+    prScheduler.stop()
     await server.close()
     process.exit(0)
-  })
+  }
 
-  process.on("SIGTERM", async () => {
-    clearInterval(interval)
-    clearInterval(watcherInterval)
-    await server.close()
-    process.exit(0)
-  })
+  process.on("SIGINT", cleanup)
+  process.on("SIGTERM", cleanup)
 }
 
 void main().catch((error) => {
