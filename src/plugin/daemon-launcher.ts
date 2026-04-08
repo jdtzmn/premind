@@ -60,26 +60,37 @@ export async function ensureDaemonRunning(socketPath = PREMIND_SOCKET_PATH) {
 type Runner = { command: string; args: string[] }
 
 function findRunner(): Runner | undefined {
-  // Prefer bun since OpenCode runs under bun and it handles .ts natively.
-  const bunPath = findExecutable("bun")
-  if (bunPath) return { command: bunPath, args: ["run"] }
+  // The daemon uses better-sqlite3 which is a native Node addon.
+  // Bun does not support better-sqlite3 yet, so we must run the daemon
+  // under Node with tsx, not bun.
 
-  // Fall back to tsx for Node-based environments.
+  // Prefer tsx (Node + TypeScript).
   const tsxPath = findExecutable("tsx")
   if (tsxPath) return { command: tsxPath, args: [] }
 
-  // Last resort: node with tsx loader if tsx is available as a package.
+  // Fall back to node with tsx loader.
   const nodePath = findExecutable("node")
-  const tsxPkg = findExecutable("tsx")
-  if (nodePath && tsxPkg) return { command: nodePath, args: ["--import", "tsx"] }
+  if (nodePath && tsxPath) return { command: nodePath, args: ["--import", "tsx"] }
+
+  // Last resort: try bun anyway in case better-sqlite3 support lands.
+  const bunPath = findExecutable("bun")
+  if (bunPath) return { command: bunPath, args: ["run"] }
 
   return undefined
 }
 
 function findExecutable(name: string) {
-  // Check relative to the package first (handles npm install paths).
-  const pkgBin = path.resolve(THIS_DIR, "..", "..", "node_modules", ".bin", name)
-  if (fs.existsSync(pkgBin)) return pkgBin
+  // Walk up from the package directory looking for node_modules/.bin.
+  // This handles both direct installs (premind/node_modules/.bin/tsx)
+  // and hoisted installs (~/.cache/opencode/node_modules/.bin/tsx).
+  let searchDir = path.resolve(THIS_DIR, "..", "..")
+  for (let i = 0; i < 5; i++) {
+    const candidate = path.join(searchDir, "node_modules", ".bin", name)
+    if (fs.existsSync(candidate)) return candidate
+    const parent = path.dirname(searchDir)
+    if (parent === searchDir) break
+    searchDir = parent
+  }
 
   // Check project-local node_modules.
   const localBin = path.resolve("node_modules", ".bin", name)
