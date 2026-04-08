@@ -64,6 +64,7 @@ describe("premind plugin compatibility harness", () => {
       writeOutput: (text) => {
         outputs.push(text)
       },
+      ensureDaemon: async () => {},
     })({
       directory: "/tmp/project",
       worktree: "/tmp/project",

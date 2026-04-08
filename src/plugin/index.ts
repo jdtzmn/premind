@@ -9,6 +9,7 @@ import {
   renderPremindStatus,
 } from "./commands.js"
 import { detectGitContext } from "./git-context.js"
+import { ensureDaemonRunning } from "./daemon-launcher.js"
 
 const REMINDER_MARKER_PREFIX = "premind://reminder/"
 
@@ -41,6 +42,7 @@ type PremindPluginDependencies = {
   createDaemonClient?: () => DaemonClientLike
   detectGit?: (cwd: string) => Promise<{ repo: string; branch: string }>
   writeOutput?: (text: string) => void
+  ensureDaemon?: () => Promise<void>
 }
 
 const getEventSessionId = (event: { properties?: unknown }) => {
@@ -68,10 +70,14 @@ const extractText = (value: unknown): string => {
 
 export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}): Plugin => async (input) => {
   const { directory, worktree, client } = input as unknown as PluginContext
-  const daemon = dependencies.createDaemonClient?.() ?? new PremindDaemonClient()
   const root = worktree || directory
   const gitDetector = dependencies.detectGit ?? detectGitContext
   const writeOutput = dependencies.writeOutput ?? ((text: string) => process.stdout.write(text))
+  const startDaemon = dependencies.ensureDaemon ?? ensureDaemonRunning
+
+  await startDaemon()
+
+  const daemon = dependencies.createDaemonClient?.() ?? new PremindDaemonClient()
   const lease = await daemon.registerClient(root, "opencode-plugin")
   const inflightReminders = new Map<string, string>()
   let lastPrimarySessionId: string | undefined
