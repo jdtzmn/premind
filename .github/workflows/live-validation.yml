@@ -1,0 +1,44 @@
+name: Live validation
+
+on:
+  schedule:
+    - cron: "0 6 * * 1-5" # weekdays at 6am UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  live:
+    name: Validate against real OpenCode runtime
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      # A cheap provider is required for the live test to actually run a prompt.
+      # Set OPENCODE_PROVIDER and OPENCODE_API_KEY as repository secrets.
+      OPENCODE_PROVIDER: ${{ secrets.OPENCODE_PROVIDER }}
+      OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: bun install --frozen-lockfile
+      - name: Skip if no provider configured
+        id: check-secrets
+        run: |
+          if [ -z "$OPENCODE_PROVIDER" ] || [ -z "$OPENCODE_API_KEY" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "No provider secrets configured, skipping live validation"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Run live validation
+        if: steps.check-secrets.outputs.skip != 'true'
+        run: node --import tsx src/test/live-validation.ts
+        timeout-minutes: 5
+      - name: Run contract-only validation (no provider needed)
+        if: steps.check-secrets.outputs.skip == 'true'
+        run: node --import tsx src/test/live-validation.ts --contract-only
+        timeout-minutes: 5
