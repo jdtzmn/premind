@@ -5,6 +5,7 @@ import { GitHubClient } from "./github/client.js"
 import { BranchDiscoveryWatcher } from "./watchers/branch-discovery.js"
 import { PullRequestWatcher } from "./watchers/pr-watcher.js"
 import { PollScheduler } from "./watchers/poll-scheduler.js"
+import { DetailFileWriter } from "./reminders/detail-files.js"
 
 const logger = createLogger("daemon")
 
@@ -22,6 +23,13 @@ async function main() {
     recoveredBranchWatchers: recovery.recoveredBranchWatchers,
     recoveredPrWatchers: recovery.recoveredPrWatchers,
   })
+
+  // Run cache cleanup on startup.
+  const detailFiles = new DetailFileWriter()
+  const cleanedFiles = detailFiles.cleanup()
+  if (cleanedFiles > 0) {
+    logger.info("detail file cleanup", { removed: cleanedFiles })
+  }
 
   await server.listen()
 

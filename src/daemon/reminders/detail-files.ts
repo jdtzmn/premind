@@ -1,13 +1,66 @@
 import fs from "node:fs"
 import path from "node:path"
 import { PREMIND_EVENT_DETAIL_DIR } from "../../shared/constants.js"
+import { createLogger } from "../logging/logger.js"
 import type { NormalizedPrEvent } from "../github/types.js"
 
 const sanitize = (value: string) => value.replace(/[^a-zA-Z0-9._-]+/g, "-")
 
+const DEFAULT_TTL_MS = 14 * 24 * 60 * 60 * 1000 // 14 days
+
 export class DetailFileWriter {
+  private readonly logger = createLogger("daemon.detail-files")
+
   constructor(private readonly baseDir = PREMIND_EVENT_DETAIL_DIR) {
     fs.mkdirSync(this.baseDir, { recursive: true })
+  }
+
+  cleanup(ttlMs = DEFAULT_TTL_MS, now = Date.now()) {
+    let removed = 0
+    const cutoff = now - ttlMs
+
+    try {
+      removed = this.cleanDir(this.baseDir, cutoff)
+    } catch (error) {
+      this.logger.warn("detail file cleanup failed", {
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
+
+    return removed
+  }
+
+  private cleanDir(dirPath: string, cutoff: number): number {
+    if (!fs.existsSync(dirPath)) return 0
+
+    let removed = 0
+    const entries = fs.readdirSync(dirPath, { withFileTypes: true })
+
+    for (const entry of entries) {
+      const entryPath = path.join(dirPath, entry.name)
+
+      if (entry.isDirectory()) {
+        removed += this.cleanDir(entryPath, cutoff)
+        // Remove empty directories.
+        const remaining = fs.readdirSync(entryPath)
+        if (remaining.length === 0) {
+          fs.rmdirSync(entryPath)
+        }
+        continue
+      }
+
+      try {
+        const stat = fs.statSync(entryPath)
+        if (stat.mtimeMs < cutoff) {
+          fs.unlinkSync(entryPath)
+          removed++
+        }
+      } catch {
+        // File may have been removed concurrently; skip.
+      }
+    }
+
+    return removed
   }
 
   write(repo: string, prNumber: number, event: NormalizedPrEvent) {
