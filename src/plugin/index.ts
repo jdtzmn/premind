@@ -38,7 +38,7 @@ type PluginContext = {
   }
 }
 
-type PremindPluginDependencies = {
+export type PremindPluginDependencies = {
   createDaemonClient?: () => DaemonClientLike
   detectGit?: (cwd: string) => Promise<{ repo: string; branch: string }>
   writeOutput?: (text: string) => void
@@ -106,6 +106,37 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
     lastPrimarySessionId = sessionID
   }
 
+  const handleSessionIdle = async (sessionID: string) => {
+    const git = await gitDetector(root)
+    await daemon.updateSessionState({ sessionId: sessionID, busyState: "idle", repo: git.repo, branch: git.branch })
+    const pending = await daemon.getPendingReminder(sessionID)
+    if (!pending.batch) return
+
+    await daemon.ackReminder({
+      batchId: pending.batch.batchId,
+      sessionId: sessionID,
+      state: "handed_off",
+    })
+
+    inflightReminders.set(sessionID, pending.batch.batchId)
+    try {
+      await client.session.promptAsync({
+        path: { id: sessionID },
+        body: {
+          parts: [{ type: "text", text: `${pending.batch.reminderText}\n\n${REMINDER_MARKER_PREFIX}${pending.batch.batchId}` }],
+        },
+      })
+    } catch (error) {
+      inflightReminders.delete(sessionID)
+      await daemon.ackReminder({
+        batchId: pending.batch.batchId,
+        sessionId: sessionID,
+        state: "failed",
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
+
   return {
     event: async ({ event }) => {
       const sessionID = getEventSessionId(event)
@@ -115,40 +146,19 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
         await attachSession(sessionID)
       }
 
+      // Handle session.idle as a dedicated event.
+      if (event.type === "session.idle") {
+        await handleSessionIdle(sessionID)
+      }
+
       if (event.type === "session.status") {
-        const statusType = event.properties?.status?.type
+        const statusType = (event.properties as Record<string, any>)?.status?.type
         if (statusType === "busy" || statusType === "retry") {
           await daemon.updateSessionState({ sessionId: sessionID, busyState: "busy" })
         }
+        // Also handle idle through session.status for backward compatibility.
         if (statusType === "idle") {
-          const git = await gitDetector(root)
-          await daemon.updateSessionState({ sessionId: sessionID, busyState: "idle", repo: git.repo, branch: git.branch })
-          const pending = await daemon.getPendingReminder(sessionID)
-          if (!pending.batch) return
-
-          await daemon.ackReminder({
-            batchId: pending.batch.batchId,
-            sessionId: sessionID,
-            state: "handed_off",
-          })
-
-          inflightReminders.set(sessionID, pending.batch.batchId)
-          try {
-            await client.session.promptAsync({
-              path: { id: sessionID },
-              body: {
-                parts: [{ type: "text", text: `${pending.batch.reminderText}\n\n${REMINDER_MARKER_PREFIX}${pending.batch.batchId}` }],
-              },
-            })
-          } catch (error) {
-            inflightReminders.delete(sessionID)
-            await daemon.ackReminder({
-              batchId: pending.batch.batchId,
-              sessionId: sessionID,
-              state: "failed",
-              error: error instanceof Error ? error.message : String(error),
-            })
-          }
+          await handleSessionIdle(sessionID)
         }
       }
 
@@ -156,12 +166,18 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
         await daemon.unregisterSession(sessionID)
       }
     },
-    "chat.message": async (input) => {
+
+    // Hook signature: (input, output) per @opencode-ai/plugin types.
+    "chat.message": async (input, output) => {
       if (!input.sessionID) return
 
-      const text = extractText(input)
+      // Check both input and output for marker text.
+      const inputText = extractText(input)
+      const outputText = extractText(output)
+      const fullText = `${inputText}\n${outputText}`
+
       const expectedBatchId = inflightReminders.get(input.sessionID)
-      if (expectedBatchId && text.includes(`${REMINDER_MARKER_PREFIX}${expectedBatchId}`)) {
+      if (expectedBatchId && fullText.includes(`${REMINDER_MARKER_PREFIX}${expectedBatchId}`)) {
         await daemon.ackReminder({
           batchId: expectedBatchId,
           sessionId: input.sessionID,
@@ -173,8 +189,10 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
 
       await daemon.updateSessionState({ sessionId: input.sessionID, busyState: "busy" })
     },
-    "command.execute.before": async (input) => {
-      const targetSessionId = getCommandSessionId(input) ?? lastPrimarySessionId
+
+    // Hook signature: (input, output) per @opencode-ai/plugin types.
+    "command.execute.before": async (input, _output) => {
+      const targetSessionId = (input as any).sessionID ?? lastPrimarySessionId
 
       if (isPremindStatusCommand(input)) {
         const status = await daemon.debugStatus()
@@ -201,6 +219,7 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
         writeOutput(`premind resumed for session ${targetSessionId}\n`)
       }
     },
+
     config: async () => {
       // Keep the heartbeat alive for the lifetime of the plugin instance.
       process.on("exit", () => {
