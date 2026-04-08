@@ -112,8 +112,14 @@ export function diffSnapshot(previous: PullRequestSnapshot | null, next: PullReq
   }
 
   if (previous.core.mergeStateStatus !== next.core.mergeStateStatus) {
+    const previousState = (previous.core.mergeStateStatus ?? "").toUpperCase()
     const nextState = (next.core.mergeStateStatus ?? "").toUpperCase()
-    if (nextState === "DIRTY") {
+
+    // Debounce: do not emit merge events when either side is UNKNOWN or empty.
+    // GitHub transiently reports UNKNOWN while computing mergeability.
+    const isStable = previousState !== "UNKNOWN" && previousState !== "" && nextState !== "UNKNOWN" && nextState !== ""
+
+    if (isStable && nextState === "DIRTY") {
       events.push({
         dedupeKey: `merge_conflict.detected:${next.core.number}:${next.core.headRefOid}`,
         kind: "merge_conflict.detected",
@@ -123,7 +129,7 @@ export function diffSnapshot(previous: PullRequestSnapshot | null, next: PullReq
         payload: { mergeStateStatus: next.core.mergeStateStatus ?? null },
       })
     }
-    if (nextState === "CLEAN") {
+    if (isStable && nextState === "CLEAN") {
       events.push({
         dedupeKey: `merge_conflict.cleared:${next.core.number}:${next.core.headRefOid}`,
         kind: "merge_conflict.cleared",
