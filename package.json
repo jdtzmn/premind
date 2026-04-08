@@ -1,0 +1,22 @@
+{
+  "name": "premind",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "daemon": "tsx src/daemon/index.ts"
+  },
+  "dependencies": {
+    "@opencode-ai/plugin": "latest",
+    "better-sqlite3": "^12.4.1",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^24.6.0",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3"
+  }
+}
