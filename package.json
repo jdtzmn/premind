@@ -1,27 +1,45 @@
 {
   "name": "premind",
-  "version": "0.0.0",
-  "private": true,
+  "version": "0.1.0",
+  "description": "OpenCode plugin that keeps sessions up to date with pull request changes",
   "type": "module",
+  "exports": {
+    ".": "./src/plugin/index.ts"
+  },
+  "main": "./src/plugin/index.ts",
+  "files": [
+    "src",
+    "PLAN.md"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "check": "tsc -p tsconfig.json --noEmit",
     "daemon": "tsx src/daemon/index.ts",
-    "test": "node --import tsx --test src/daemon/github/diff.test.ts src/daemon/persistence/store.test.ts src/daemon/watchers/integration.test.ts src/daemon/watchers/poll-scheduler.test.ts src/daemon/reminders/detail-files.test.ts src/plugin/__tests__/commands.test.ts src/plugin/__tests__/compatibility.test.ts",
+    "test": "node --import tsx --test src/daemon/github/diff.test.ts src/daemon/persistence/store.test.ts src/daemon/watchers/integration.test.ts src/daemon/watchers/poll-scheduler.test.ts src/daemon/reminders/detail-files.test.ts src/plugin/__tests__/commands.test.ts src/plugin/__tests__/compatibility.test.ts src/plugin/__tests__/packaging.test.ts",
     "test:compat": "node --import tsx --test src/plugin/__tests__/compatibility.test.ts",
     "test:live": "node --import tsx src/test/live-validation.ts",
     "test:live:contract": "node --import tsx src/test/live-validation.ts --contract-only"
   },
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "github",
+    "pull-request",
+    "pr",
+    "review",
+    "notifications"
+  ],
+  "license": "MIT",
   "dependencies": {
     "@opencode-ai/plugin": "latest",
     "@opencode-ai/sdk": "latest",
     "better-sqlite3": "^12.4.1",
+    "tsx": "^4.20.6",
     "zod": "^3.25.76"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^24.6.0",
-    "tsx": "^4.20.6",
     "typescript": "^5.9.3"
   }
 }

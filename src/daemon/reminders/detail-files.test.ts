@@ -57,8 +57,8 @@ describe("DetailFileWriter", () => {
     const removedNone = writer.cleanup(14 * 24 * 60 * 60 * 1000)
     assert.equal(removedNone, 0)
 
-    // Cleanup with TTL=0 should remove everything (all files are older than now).
-    const removedAll = writer.cleanup(0)
+    // Cleanup with TTL=0 and a slightly future now should remove everything.
+    const removedAll = writer.cleanup(0, Date.now() + 1_000)
     assert.equal(removedAll, 2)
     assert.ok(!fs.existsSync(path1))
     assert.ok(!fs.existsSync(path2))
