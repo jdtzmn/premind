@@ -131,9 +131,18 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
     writePluginRuntimeState({ phase: "session-attached", lastSessionId: sessionID })
   }
 
+  const isSessionNotFound = (error: unknown) =>
+    error instanceof Error && error.message.startsWith("SESSION_NOT_FOUND")
+
   const handleSessionIdle = async (sessionID: string) => {
     const git = await gitDetector(root)
-    await daemon.updateSessionState({ sessionId: sessionID, busyState: "idle", repo: git.repo, branch: git.branch })
+    try {
+      await daemon.updateSessionState({ sessionId: sessionID, busyState: "idle", repo: git.repo, branch: git.branch })
+    } catch (error) {
+      // Session may not be registered (e.g. child session, or created event missed). Skip silently.
+      if (isSessionNotFound(error)) return
+      throw error
+    }
     const pending = await daemon.getPendingReminder(sessionID)
     if (!pending.batch) return
 
@@ -282,7 +291,9 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
       if (event.type === "session.status") {
         const statusType = (event.properties as Record<string, any>)?.status?.type
         if (statusType === "busy" || statusType === "retry") {
-          await daemon.updateSessionState({ sessionId: sessionID, busyState: "busy" })
+          await daemon.updateSessionState({ sessionId: sessionID, busyState: "busy" }).catch((error) => {
+            if (!isSessionNotFound(error)) throw error
+          })
         }
         if (statusType === "idle") {
           await handleSessionIdle(sessionID)
@@ -325,7 +336,9 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
         return
       }
 
-      await daemon.updateSessionState({ sessionId: input.sessionID, busyState: "busy" })
+      await daemon.updateSessionState({ sessionId: input.sessionID, busyState: "busy" }).catch((error) => {
+        if (!isSessionNotFound(error)) throw error
+      })
     },
   }
 }
