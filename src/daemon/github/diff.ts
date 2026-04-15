@@ -1,4 +1,4 @@
-import type { NormalizedPrEvent, PullRequestCheck, PullRequestSnapshot } from "./types.js"
+import type { NormalizedPrEvent, PullRequestCheck, PullRequestSnapshot } from "./types.ts"
 
 const compact = (value: string | null | undefined, max = 160) => {
   const text = (value ?? "").replace(/\s+/g, " ").trim()

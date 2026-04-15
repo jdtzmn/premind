@@ -1,4 +1,4 @@
-import { createLogger } from "../logging/logger.js"
+import { createLogger } from "../logging/logger.ts"
 
 type PollSchedulerOptions = {
   /** Base interval in ms between successful ticks. */

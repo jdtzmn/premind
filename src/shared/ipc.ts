@@ -4,7 +4,7 @@ import {
   PREMIND_CLIENT_LEASE_TTL_MS,
   PREMIND_IDLE_SHUTDOWN_GRACE_MS,
   PREMIND_PROTOCOL_VERSION,
-} from "./constants.js"
+} from "./constants.ts"
 import {
   ackReminderPayloadSchema,
   debugStatusPayloadSchema,
@@ -18,7 +18,7 @@ import {
   sessionControlPayloadSchema,
   unregisterSessionPayloadSchema,
   updateSessionStatePayloadSchema,
-} from "./schema.js"
+} from "./schema.ts"
 
 export const requestSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("registerClient"), protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION), payload: registerClientPayloadSchema }),

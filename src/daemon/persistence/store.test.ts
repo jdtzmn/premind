@@ -3,8 +3,8 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { afterEach, describe, test } from "node:test"
-import { StateStore } from "./store.js"
-import type { PullRequestSnapshot } from "../github/types.js"
+import { StateStore } from "./store.ts"
+import type { PullRequestSnapshot } from "../github/types.ts"
 
 const tempPaths: string[] = []
 

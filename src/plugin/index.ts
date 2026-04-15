@@ -1,10 +1,10 @@
 import { tool, type Plugin } from "@opencode-ai/plugin"
-import { PREMIND_CLIENT_HEARTBEAT_MS } from "../shared/constants.js"
-import { PremindDaemonClient } from "./daemon-client.js"
-import { renderPremindStatus } from "./commands.js"
-import { getPluginRuntimeStatePath, readPluginRuntimeState, writePluginRuntimeState } from "./debug-state.js"
-import { detectGitContext } from "./git-context.js"
-import { ensureDaemonRunning } from "./daemon-launcher.js"
+import { PREMIND_CLIENT_HEARTBEAT_MS } from "../shared/constants.ts"
+import { PremindDaemonClient } from "./daemon-client.ts"
+import { renderPremindStatus } from "./commands.ts"
+import { getPluginRuntimeStatePath, readPluginRuntimeState, writePluginRuntimeState } from "./debug-state.ts"
+import { detectGitContext } from "./git-context.ts"
+import { ensureDaemonRunning } from "./daemon-launcher.ts"
 
 const REMINDER_MARKER_PREFIX = "premind://reminder/"
 
@@ -20,13 +20,13 @@ type DaemonClientLike = {
   registerClient: (projectRoot: string, sessionSource?: string) => Promise<any>
   heartbeat: () => Promise<unknown>
   release: () => Promise<unknown>
-  registerSession: (payload: Omit<import("../shared/schema.js").RegisterSessionPayload, "clientId">) => Promise<unknown>
-  updateSessionState: (payload: import("../shared/schema.js").UpdateSessionStatePayload) => Promise<unknown>
+  registerSession: (payload: Omit<import("../shared/schema.ts").RegisterSessionPayload, "clientId">) => Promise<unknown>
+  updateSessionState: (payload: import("../shared/schema.ts").UpdateSessionStatePayload) => Promise<unknown>
   unregisterSession: (sessionId: string) => Promise<unknown>
   pauseSession: (sessionId: string) => Promise<unknown>
   resumeSession: (sessionId: string) => Promise<unknown>
-  getPendingReminder: (sessionId: string) => Promise<{ batch: import("../shared/schema.js").ReminderBatch | null }>
-  ackReminder: (payload: import("../shared/schema.js").AckReminderPayload) => Promise<unknown>
+  getPendingReminder: (sessionId: string) => Promise<{ batch: import("../shared/schema.ts").ReminderBatch | null }>
+  ackReminder: (payload: import("../shared/schema.ts").AckReminderPayload) => Promise<unknown>
   debugStatus: () => Promise<any>
 }
 

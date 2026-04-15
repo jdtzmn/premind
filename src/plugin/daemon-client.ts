@@ -1,18 +1,18 @@
 import net from "node:net"
 import { randomUUID } from "node:crypto"
-import { PREMIND_PROTOCOL_VERSION, PREMIND_SOCKET_PATH } from "../shared/constants.js"
+import { PREMIND_PROTOCOL_VERSION, PREMIND_SOCKET_PATH } from "../shared/constants.ts"
 import {
   debugStatusResponseSchema,
   getPendingReminderResponseSchema,
   registerClientResponseSchema,
   responseSchema,
-} from "../shared/ipc.js"
+} from "../shared/ipc.ts"
 import type {
   AckReminderPayload,
   RegisterSessionPayload,
   UpdateSessionStatePayload,
-} from "../shared/schema.js"
-import { ensureDaemonRunning } from "./daemon-launcher.js"
+} from "../shared/schema.ts"
+import { ensureDaemonRunning } from "./daemon-launcher.ts"
 
 const MAX_RETRIES = 3
 const RETRY_DELAY_MS = 500

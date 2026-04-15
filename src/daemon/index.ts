@@ -1,11 +1,11 @@
-import { PREMIND_IDLE_SHUTDOWN_GRACE_MS } from "../shared/constants.js"
-import { createLogger } from "./logging/logger.js"
-import { IpcServer } from "./ipc/server.js"
-import { GitHubClient } from "./github/client.js"
-import { BranchDiscoveryWatcher } from "./watchers/branch-discovery.js"
-import { PullRequestWatcher } from "./watchers/pr-watcher.js"
-import { PollScheduler } from "./watchers/poll-scheduler.js"
-import { DetailFileWriter } from "./reminders/detail-files.js"
+import { PREMIND_IDLE_SHUTDOWN_GRACE_MS } from "../shared/constants.ts"
+import { createLogger } from "./logging/logger.ts"
+import { IpcServer } from "./ipc/server.ts"
+import { GitHubClient } from "./github/client.ts"
+import { BranchDiscoveryWatcher } from "./watchers/branch-discovery.ts"
+import { PullRequestWatcher } from "./watchers/pr-watcher.ts"
+import { PollScheduler } from "./watchers/poll-scheduler.ts"
+import { DetailFileWriter } from "./reminders/detail-files.ts"
 
 const logger = createLogger("daemon")
 

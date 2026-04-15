@@ -3,7 +3,7 @@ import net from "node:net"
 import { spawn } from "node:child_process"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
-import { PREMIND_SOCKET_PATH } from "../shared/constants.js"
+import { PREMIND_SOCKET_PATH } from "../shared/constants.ts"
 
 // Resolve the daemon entry relative to this file's location.
 // This works whether the package is:

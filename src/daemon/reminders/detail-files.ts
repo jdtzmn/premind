@@ -1,8 +1,8 @@
 import fs from "node:fs"
 import path from "node:path"
-import { PREMIND_EVENT_DETAIL_DIR } from "../../shared/constants.js"
-import { createLogger } from "../logging/logger.js"
-import type { NormalizedPrEvent } from "../github/types.js"
+import { PREMIND_EVENT_DETAIL_DIR } from "../../shared/constants.ts"
+import { createLogger } from "../logging/logger.ts"
+import type { NormalizedPrEvent } from "../github/types.ts"
 
 const sanitize = (value: string) => value.replace(/[^a-zA-Z0-9._-]+/g, "-")
 

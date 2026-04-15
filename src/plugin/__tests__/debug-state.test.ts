@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import fs from "node:fs"
 import { describe, test } from "node:test"
-import { getPluginRuntimeStatePath, readPluginRuntimeState, writePluginRuntimeState } from "../debug-state.js"
+import { getPluginRuntimeStatePath, readPluginRuntimeState, writePluginRuntimeState } from "../debug-state.ts"
 
 describe("plugin debug state", () => {
   test("writes and reads plugin runtime state", () => {

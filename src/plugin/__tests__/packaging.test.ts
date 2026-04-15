@@ -20,7 +20,7 @@ describe("plugin packaging", () => {
   })
 
   test("plugin entry exports PremindPlugin and createPremindPlugin", async () => {
-    const mod = await import("../../plugin/index.js")
+    const mod = await import("../../plugin/index.ts")
     assert.equal(typeof mod.PremindPlugin, "function", "PremindPlugin should be a function")
     assert.equal(typeof mod.createPremindPlugin, "function", "createPremindPlugin should be a function")
     assert.equal(typeof mod.default, "object", "default export should be an object")

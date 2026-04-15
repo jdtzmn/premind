@@ -1,7 +1,7 @@
-import { PREMIND_CLIENT_HEARTBEAT_MS, PREMIND_CLIENT_LEASE_TTL_MS, PREMIND_IDLE_SHUTDOWN_GRACE_MS } from "../../shared/constants.js"
-import { debugStatusResponseSchema, type AckReminderPayload, type RegisterClientPayload } from "../../shared/schema.js"
-import type { PremindRequest, PremindResponse } from "../../shared/ipc.js"
-import { StateStore } from "../persistence/store.js"
+import { PREMIND_CLIENT_HEARTBEAT_MS, PREMIND_CLIENT_LEASE_TTL_MS, PREMIND_IDLE_SHUTDOWN_GRACE_MS } from "../../shared/constants.ts"
+import { debugStatusResponseSchema, type AckReminderPayload, type RegisterClientPayload } from "../../shared/schema.ts"
+import type { PremindRequest, PremindResponse } from "../../shared/ipc.ts"
+import { StateStore } from "../persistence/store.ts"
 
 export class Router {
   constructor(private readonly store: StateStore) {}

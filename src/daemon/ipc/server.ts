@@ -1,11 +1,11 @@
 import net from "node:net"
 import fs from "node:fs"
-import { createLogger } from "../logging/logger.js"
-import { requestSchema } from "../../shared/ipc.js"
-import type { PremindResponse } from "../../shared/ipc.js"
-import { PREMIND_SOCKET_PATH } from "../../shared/constants.js"
-import { Router } from "./router.js"
-import { StateStore } from "../persistence/store.js"
+import { createLogger } from "../logging/logger.ts"
+import { requestSchema } from "../../shared/ipc.ts"
+import type { PremindResponse } from "../../shared/ipc.ts"
+import { PREMIND_SOCKET_PATH } from "../../shared/constants.ts"
+import { Router } from "./router.ts"
+import { StateStore } from "../persistence/store.ts"
 
 export class IpcServer {
   private readonly logger = createLogger("daemon.ipc")

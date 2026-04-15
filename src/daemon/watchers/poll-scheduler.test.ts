@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { describe, test } from "node:test"
-import { PollScheduler } from "./poll-scheduler.js"
+import { PollScheduler } from "./poll-scheduler.ts"
 
 describe("PollScheduler", () => {
   test("base interval with jitter stays within expected range", () => {

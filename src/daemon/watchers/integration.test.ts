@@ -3,11 +3,11 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { afterEach, describe, test } from "node:test"
-import { StateStore } from "../persistence/store.js"
-import { BranchDiscoveryWatcher } from "./branch-discovery.js"
-import { PullRequestWatcher } from "./pr-watcher.js"
-import type { GitHubClientLike, PullRequestSummary } from "../github/client.js"
-import type { PullRequestSnapshot } from "../github/types.js"
+import { StateStore } from "../persistence/store.ts"
+import { BranchDiscoveryWatcher } from "./branch-discovery.ts"
+import { PullRequestWatcher } from "./pr-watcher.ts"
+import type { GitHubClientLike, PullRequestSummary } from "../github/client.ts"
+import type { PullRequestSnapshot } from "../github/types.ts"
 
 const tempPaths: string[] = []
 

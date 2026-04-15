@@ -3,7 +3,7 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { afterEach, describe, test } from "node:test"
-import { DetailFileWriter } from "./detail-files.js"
+import { DetailFileWriter } from "./detail-files.ts"
 
 const tempPaths: string[] = []
 

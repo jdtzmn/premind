@@ -7,7 +7,7 @@ import type {
   PullRequestReview,
   PullRequestReviewComment,
   PullRequestSnapshot,
-} from "./types.js"
+} from "./types.ts"
 
 const execFileAsync = promisify(execFile)
 

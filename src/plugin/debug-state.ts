@@ -1,6 +1,6 @@
 import fs from "node:fs"
 import path from "node:path"
-import { PREMIND_STATE_DIR } from "../shared/constants.js"
+import { PREMIND_STATE_DIR } from "../shared/constants.ts"
 
 const PLUGIN_STATE_PATH = path.join(PREMIND_STATE_DIR, "plugin-runtime.json")
 

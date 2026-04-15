@@ -1,6 +1,6 @@
-import { createLogger } from "../logging/logger.js"
-import { StateStore } from "../persistence/store.js"
-import type { GitHubClientLike } from "../github/client.js"
+import { createLogger } from "../logging/logger.ts"
+import { StateStore } from "../persistence/store.ts"
+import type { GitHubClientLike } from "../github/client.ts"
 
 export class BranchDiscoveryWatcher {
   private readonly logger = createLogger("daemon.branch-discovery")

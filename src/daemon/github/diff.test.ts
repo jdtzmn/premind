@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { describe, test } from "node:test"
-import { diffSnapshot } from "./diff.js"
-import type { PullRequestSnapshot } from "./types.js"
+import { diffSnapshot } from "./diff.ts"
+import type { PullRequestSnapshot } from "./types.ts"
 
 const baseSnapshot = (): PullRequestSnapshot => ({
   core: {

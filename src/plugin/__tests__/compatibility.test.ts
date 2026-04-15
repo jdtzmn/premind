@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { describe, test } from "node:test"
-import { createPremindPlugin } from "../index.js"
+import { createPremindPlugin } from "../index.ts"
 
 describe("premind plugin compatibility harness", () => {
   test("matches expected OpenCode event, command, and tool flow", async () => {

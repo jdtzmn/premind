@@ -1,7 +1,7 @@
-import { diffSnapshot } from "../github/diff.js"
-import type { GitHubClientLike } from "../github/client.js"
-import { createLogger } from "../logging/logger.js"
-import { StateStore } from "../persistence/store.js"
+import { diffSnapshot } from "../github/diff.ts"
+import type { GitHubClientLike } from "../github/client.ts"
+import { createLogger } from "../logging/logger.ts"
+import { StateStore } from "../persistence/store.ts"
 
 export class PullRequestWatcher {
   private readonly logger = createLogger("daemon.pr-watcher")

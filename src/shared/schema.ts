@@ -4,7 +4,7 @@ import {
   PREMIND_CLIENT_LEASE_TTL_MS,
   PREMIND_IDLE_SHUTDOWN_GRACE_MS,
   PREMIND_PROTOCOL_VERSION,
-} from "./constants.js"
+} from "./constants.ts"
 
 export const clientMetadataSchema = z
   .object({

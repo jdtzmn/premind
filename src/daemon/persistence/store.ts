@@ -2,7 +2,7 @@ import fs from "node:fs"
 import path from "node:path"
 import Database from "better-sqlite3"
 import { randomUUID } from "node:crypto"
-import { PREMIND_CLIENT_LEASE_TTL_MS, PREMIND_DB_PATH, PREMIND_STATE_DIR } from "../../shared/constants.js"
+import { PREMIND_CLIENT_LEASE_TTL_MS, PREMIND_DB_PATH, PREMIND_STATE_DIR } from "../../shared/constants.ts"
 import type {
   AckReminderPayload,
   ClientMetadata,
@@ -10,9 +10,9 @@ import type {
   ReminderBatch,
   ReminderEvent,
   UpdateSessionStatePayload,
-} from "../../shared/schema.js"
-import type { NormalizedPrEvent, PullRequestSnapshot } from "../github/types.js"
-import { DetailFileWriter } from "../reminders/detail-files.js"
+} from "../../shared/schema.ts"
+import type { NormalizedPrEvent, PullRequestSnapshot } from "../github/types.ts"
+import { DetailFileWriter } from "../reminders/detail-files.ts"
 
 type SessionRow = {
   session_id: string

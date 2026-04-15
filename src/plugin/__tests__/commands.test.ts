@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { describe, test } from "node:test"
-import { renderPremindStatus } from "../commands.js"
+import { renderPremindStatus } from "../commands.ts"
 
 describe("plugin commands", () => {
   test("renders rich status output", () => {
