@@ -4,6 +4,7 @@ import { spawn } from "node:child_process"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { PREMIND_SOCKET_PATH } from "../shared/constants.ts"
+import { writePluginRuntimeState } from "./debug-state.ts"
 
 // Resolve the daemon entry relative to this file's location.
 // This works whether the package is:
@@ -14,6 +15,9 @@ const DAEMON_ENTRY = path.resolve(THIS_DIR, "..", "daemon", "index.ts")
 
 const CONNECT_RETRY_MS = 300
 const CONNECT_MAX_RETRIES = 20
+
+// Maximum bytes captured from daemon stdio during startup.
+const STDIO_BUFFER_LIMIT = 4096
 
 async function isDaemonRunning(socketPath = PREMIND_SOCKET_PATH) {
   return new Promise<boolean>((resolve) => {
@@ -41,19 +45,62 @@ export async function ensureDaemonRunning(socketPath = PREMIND_SOCKET_PATH) {
 
   const runner = findRunner()
   if (!runner) {
-    throw new Error("Cannot start premind daemon: neither bun nor tsx found")
+    const diag = { timedOut: false, spawnError: "no runner found: tsx and bun are unavailable" }
+    writePluginRuntimeState({ phase: "daemon-start-failed", daemonStarted: false, daemonDiagnostics: diag })
+    throw new Error("Cannot start premind daemon: tsx and bun are unavailable")
   }
+
+  // Capture stdout/stderr during startup so failures are diagnosable.
+  let stdoutBuf = ""
+  let stderrBuf = ""
+  let spawnError: string | undefined
+  let exitCode: number | null = null
+  let exitSignal: string | null = null
 
   const child = spawn(runner.command, [...runner.args, DAEMON_ENTRY], {
     detached: true,
-    stdio: "ignore",
+    stdio: ["ignore", "pipe", "pipe"],
     env: { ...process.env },
   })
-  child.unref()
+
+  child.stdout?.setEncoding("utf8")
+  child.stdout?.on("data", (chunk: string) => {
+    stdoutBuf = (stdoutBuf + chunk).slice(-STDIO_BUFFER_LIMIT)
+  })
+  child.stderr?.setEncoding("utf8")
+  child.stderr?.on("data", (chunk: string) => {
+    stderrBuf = (stderrBuf + chunk).slice(-STDIO_BUFFER_LIMIT)
+  })
+  child.on("error", (err) => {
+    spawnError = err.message
+  })
+  child.on("exit", (code, signal) => {
+    exitCode = code
+    exitSignal = signal
+  })
 
   const connected = await waitForSocket(socketPath)
+  child.unref()
+
+  const diag = {
+    runner: runner.command,
+    daemonEntry: DAEMON_ENTRY,
+    spawnPid: child.pid,
+    exitCode,
+    exitSignal,
+    ...(spawnError !== undefined ? { spawnError } : {}),
+    ...(stdoutBuf.length > 0 ? { stdout: stdoutBuf } : {}),
+    ...(stderrBuf.length > 0 ? { stderr: stderrBuf } : {}),
+  }
+
   if (!connected) {
-    throw new Error(`premind daemon failed to start after ${CONNECT_MAX_RETRIES * CONNECT_RETRY_MS}ms`)
+    const fullDiag = { ...diag, timedOut: true }
+    writePluginRuntimeState({ phase: "daemon-start-failed", daemonStarted: false, daemonDiagnostics: fullDiag })
+    throw new Error(
+      `premind daemon failed to start after ${CONNECT_MAX_RETRIES * CONNECT_RETRY_MS}ms` +
+      (stderrBuf ? `\nstderr: ${stderrBuf.trim()}` : "") +
+      (spawnError ? `\nspawn error: ${spawnError}` : ""),
+    )
   }
 }
 
@@ -68,9 +115,12 @@ function findRunner(): Runner | undefined {
   const tsxPath = findExecutable("tsx")
   if (tsxPath) return { command: tsxPath, args: [] }
 
-  // Fall back to node with tsx loader.
+  // Fall back to node with tsx as a loader.
+  // tsx may exist as a package without a direct executable in PATH but can
+  // still be used as --import tsx when node is available.
   const nodePath = findExecutable("node")
-  if (nodePath && tsxPath) return { command: nodePath, args: ["--import", "tsx"] }
+  const tsxModule = resolveTsxModule()
+  if (nodePath && tsxModule) return { command: nodePath, args: ["--import", tsxModule] }
 
   // Last resort: try bun anyway in case better-sqlite3 support lands.
   const bunPath = findExecutable("bun")
@@ -103,5 +153,19 @@ function findExecutable(name: string) {
     if (fs.existsSync(candidate)) return candidate
   }
 
+  return undefined
+}
+
+// Resolve tsx as a Node loader module path (for --import).
+// This finds tsx's dist/esm/index.js which can be used as an import specifier.
+function resolveTsxModule(): string | undefined {
+  let searchDir = path.resolve(THIS_DIR, "..", "..")
+  for (let i = 0; i < 5; i++) {
+    const candidate = path.join(searchDir, "node_modules", "tsx", "dist", "esm", "index.cjs")
+    if (fs.existsSync(candidate)) return candidate
+    const parent = path.dirname(searchDir)
+    if (parent === searchDir) break
+    searchDir = parent
+  }
   return undefined
 }

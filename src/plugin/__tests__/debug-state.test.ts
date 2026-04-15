@@ -26,4 +26,51 @@ describe("plugin debug state", () => {
     assert.equal(read.commandsRegistered, false)
     assert.equal(read.root, "/tmp/project")
   })
+
+  test("writes and reads daemon startup diagnostics", () => {
+    const statePath = getPluginRuntimeStatePath()
+    fs.rmSync(statePath, { force: true })
+
+    writePluginRuntimeState({
+      phase: "daemon-start-failed",
+      daemonStarted: false,
+      daemonDiagnostics: {
+        runner: "/usr/local/bin/tsx",
+        daemonEntry: "/some/path/daemon/index.ts",
+        spawnPid: 12345,
+        exitCode: 1,
+        exitSignal: null,
+        timedOut: true,
+        stderr: "Error: Cannot find module 'better_sqlite3.node'",
+        stdout: "",
+      },
+    })
+
+    const read = readPluginRuntimeState()
+    assert.equal(read.phase, "daemon-start-failed")
+    assert.equal(read.daemonStarted, false)
+    assert.ok(read.daemonDiagnostics, "daemonDiagnostics should be present")
+    assert.equal(read.daemonDiagnostics?.runner, "/usr/local/bin/tsx")
+    assert.equal(read.daemonDiagnostics?.exitCode, 1)
+    assert.equal(read.daemonDiagnostics?.timedOut, true)
+    assert.match(read.daemonDiagnostics?.stderr ?? "", /better_sqlite3/)
+  })
+
+  test("daemon diagnostics are merged with previous state fields", () => {
+    const statePath = getPluginRuntimeStatePath()
+    fs.rmSync(statePath, { force: true })
+
+    writePluginRuntimeState({ phase: "initializing", root: "/tmp/project" })
+    writePluginRuntimeState({
+      phase: "daemon-start-failed",
+      daemonStarted: false,
+      daemonDiagnostics: { timedOut: true, spawnError: "ENOENT" },
+    })
+
+    const read = readPluginRuntimeState()
+    // root from first write should still be present
+    assert.equal(read.root, "/tmp/project")
+    assert.equal(read.phase, "daemon-start-failed")
+    assert.equal(read.daemonDiagnostics?.spawnError, "ENOENT")
+  })
 })

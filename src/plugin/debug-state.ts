@@ -13,6 +13,18 @@ type PluginRuntimeState = {
   clientRegistered?: boolean
   commandsRegistered?: boolean
   lastSessionId?: string
+  // Daemon startup diagnostics — populated by daemon-launcher on failure
+  daemonDiagnostics?: {
+    runner?: string
+    daemonEntry?: string
+    spawnPid?: number
+    exitCode?: number | null
+    exitSignal?: string | null
+    spawnError?: string
+    timedOut?: boolean
+    stderr?: string
+    stdout?: string
+  }
 }
 
 export function writePluginRuntimeState(partial: Omit<PluginRuntimeState, "updatedAt">) {
