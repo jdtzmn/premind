@@ -1,6 +1,6 @@
 import fs from "node:fs"
 import path from "node:path"
-import Database from "better-sqlite3"
+import { DatabaseSync } from "node:sqlite"
 import { randomUUID } from "node:crypto"
 import { PREMIND_CLIENT_LEASE_TTL_MS, PREMIND_DB_PATH, PREMIND_STATE_DIR } from "../../shared/constants.ts"
 import type {
@@ -55,15 +55,15 @@ const priorityRank: Record<ReminderEvent["priority"], number> = {
 }
 
 export class StateStore {
-  private readonly db: Database.Database
+  private readonly db: DatabaseSync
   private readonly detailFiles = new DetailFileWriter()
 
   constructor(dbPath = PREMIND_DB_PATH) {
     fs.mkdirSync(path.dirname(dbPath), { recursive: true })
     fs.mkdirSync(PREMIND_STATE_DIR, { recursive: true })
-    this.db = new Database(dbPath)
-    this.db.pragma("journal_mode = WAL")
-    this.db.pragma("foreign_keys = ON")
+    this.db = new DatabaseSync(dbPath)
+    this.db.exec("PRAGMA journal_mode = WAL")
+    this.db.exec("PRAGMA foreign_keys = ON")
     this.migrate()
   }
 
@@ -77,7 +77,7 @@ export class StateStore {
       .prepare(
         `
           INSERT INTO client_leases (client_id, pid, project_root, session_source, expires_at, created_at, updated_at)
-          VALUES (@clientId, @pid, @projectRoot, @sessionSource, @expiresAt, @now, @now)
+          VALUES (:clientId, :pid, :projectRoot, :sessionSource, :expiresAt, :now, :now)
           ON CONFLICT(client_id) DO UPDATE SET
             pid = excluded.pid,
             project_root = excluded.project_root,
@@ -111,8 +111,8 @@ export class StateStore {
     const prWatchers = this.countActiveWatchers()
 
     return {
-      prunedClients: deletedClients.changes,
-      resetBatches: resetBatches.changes,
+      prunedClients: deletedClients.changes as number,
+      resetBatches: resetBatches.changes as number,
       recoveredSessions: sessions,
       recoveredBranchWatchers: branchWatchers,
       recoveredPrWatchers: prWatchers,
@@ -121,9 +121,9 @@ export class StateStore {
 
   heartbeatClient(clientId: string, now = Date.now()) {
     const result = this.db
-      .prepare(`UPDATE client_leases SET expires_at = @expiresAt, updated_at = @now WHERE client_id = @clientId`)
+      .prepare(`UPDATE client_leases SET expires_at = :expiresAt, updated_at = :now WHERE client_id = :clientId`)
       .run({ clientId, expiresAt: now + PREMIND_CLIENT_LEASE_TTL_MS, now })
-    return result.changes > 0
+    return (result.changes as number) > 0
   }
 
   releaseClient(clientId: string) {
@@ -139,7 +139,7 @@ export class StateStore {
       .prepare(
         `
           INSERT INTO sessions (session_id, client_id, repo, branch, pr_number, is_primary, status, busy_state, last_delivered_event_seq, created_at, updated_at)
-          VALUES (@sessionId, @clientId, @repo, @branch, NULL, @isPrimary, @status, @busyState, 0, @now, @now)
+          VALUES (:sessionId, :clientId, :repo, :branch, NULL, :isPrimary, :status, :busyState, 0, :now, :now)
           ON CONFLICT(session_id) DO UPDATE SET
             client_id = excluded.client_id,
             repo = excluded.repo,
@@ -172,12 +172,12 @@ export class StateStore {
       .prepare(
         `
           UPDATE sessions
-          SET repo = @repo,
-              branch = @branch,
-              status = @status,
-              busy_state = @busyState,
-              updated_at = @now
-          WHERE session_id = @sessionId
+          SET repo = :repo,
+              branch = :branch,
+              status = :status,
+              busy_state = :busyState,
+              updated_at = :now
+          WHERE session_id = :sessionId
         `,
       )
       .run({
@@ -217,7 +217,7 @@ export class StateStore {
         ? 0
         : (this.db
             .prepare(
-              `SELECT COUNT(*) AS count FROM pr_events WHERE repo = @repo AND pr_number = @prNumber AND seq > @lastDeliveredEventSeq`,
+              `SELECT COUNT(*) AS count FROM pr_events WHERE repo = :repo AND pr_number = :prNumber AND seq > :lastDeliveredEventSeq`,
             )
             .get({
               repo: session.repo,
@@ -240,9 +240,9 @@ export class StateStore {
   setSessionPaused(sessionId: string, paused: boolean, now = Date.now()) {
     const status = paused ? "paused" : "active"
     const result = this.db
-      .prepare(`UPDATE sessions SET status = @status, updated_at = @now WHERE session_id = @sessionId`)
+      .prepare(`UPDATE sessions SET status = :status, updated_at = :now WHERE session_id = :sessionId`)
       .run({ status, now, sessionId })
-    return result.changes > 0
+    return (result.changes as number) > 0
   }
 
   countActiveClients(now = Date.now()) {
@@ -289,7 +289,7 @@ export class StateStore {
       .prepare(
         `
           INSERT INTO branch_watchers (repo, branch, pr_number, last_checked_at, active_session_count, created_at, updated_at)
-          VALUES (@repo, @branch, @prNumber, @checkedAt, 0, @checkedAt, @checkedAt)
+          VALUES (:repo, :branch, :prNumber, :checkedAt, 0, :checkedAt, :checkedAt)
           ON CONFLICT(repo, branch) DO UPDATE SET
             pr_number = excluded.pr_number,
             last_checked_at = excluded.last_checked_at,
@@ -299,7 +299,7 @@ export class StateStore {
       .run({ repo, branch, prNumber, checkedAt })
 
     this.db
-      .prepare(`UPDATE sessions SET pr_number = @prNumber, updated_at = @checkedAt WHERE repo = @repo AND branch = @branch`)
+      .prepare(`UPDATE sessions SET pr_number = :prNumber, updated_at = :checkedAt WHERE repo = :repo AND branch = :branch`)
       .run({ repo, branch, prNumber, checkedAt })
 
     if (prNumber !== null) {
@@ -320,7 +320,7 @@ export class StateStore {
       .prepare(
         `
           INSERT INTO pr_snapshots (repo, pr_number, head_sha, snapshot_json, fetched_at, updated_at)
-          VALUES (@repo, @prNumber, @headSha, @snapshotJson, @fetchedAt, @fetchedAt)
+          VALUES (:repo, :prNumber, :headSha, :snapshotJson, :fetchedAt, :fetchedAt)
           ON CONFLICT(repo, pr_number) DO UPDATE SET
             head_sha = excluded.head_sha,
             snapshot_json = excluded.snapshot_json,
@@ -341,12 +341,13 @@ export class StateStore {
     const insert = this.db.prepare(
       `
         INSERT OR IGNORE INTO pr_events (repo, pr_number, dedupe_key, kind, priority, summary, detail_file_path, payload_json, created_at)
-        VALUES (@repo, @prNumber, @dedupeKey, @kind, @priority, @summary, @detailFilePath, @payloadJson, @now)
+        VALUES (:repo, :prNumber, :dedupeKey, :kind, :priority, :summary, :detailFilePath, :payloadJson, :now)
       `,
     )
 
-    const transaction = this.db.transaction((items: NormalizedPrEvent[]) => {
-      for (const event of items) {
+    this.db.exec("BEGIN")
+    try {
+      for (const event of events) {
         const detailFilePath = this.detailFiles.write(repo, prNumber, event)
         insert.run({
           repo,
@@ -360,9 +361,11 @@ export class StateStore {
           now,
         })
       }
-    })
-
-    transaction(events)
+      this.db.exec("COMMIT")
+    } catch (error) {
+      this.db.exec("ROLLBACK")
+      throw error
+    }
   }
 
   listPrWatchTargets(now = Date.now()) {
@@ -382,7 +385,7 @@ export class StateStore {
 
   markPrWatchChecked(repo: string, prNumber: number, checkedAt = Date.now()) {
     this.db
-      .prepare(`UPDATE pr_watchers SET last_checked_at = @checkedAt, updated_at = @checkedAt WHERE repo = @repo AND pr_number = @prNumber`)
+      .prepare(`UPDATE pr_watchers SET last_checked_at = :checkedAt, updated_at = :checkedAt WHERE repo = :repo AND pr_number = :prNumber`)
       .run({ repo, prNumber, checkedAt })
   }
 
@@ -392,7 +395,7 @@ export class StateStore {
         `
           SELECT *
           FROM sessions
-          WHERE repo = @repo AND pr_number = @prNumber AND status != 'closed'
+          WHERE repo = :repo AND pr_number = :prNumber AND status != 'closed'
         `,
       )
       .all({ repo, prNumber }) as SessionRow[]
@@ -406,11 +409,11 @@ export class StateStore {
         `
           SELECT seq, kind, priority, summary, detail_file_path
           FROM pr_events
-          WHERE repo = @repo
-            AND pr_number = @prNumber
-            AND seq > @lastDeliveredEventSeq
+          WHERE repo = :repo
+            AND pr_number = :prNumber
+            AND seq > :lastDeliveredEventSeq
           ORDER BY seq ASC
-          LIMIT @limit
+          LIMIT :limit
         `,
       )
       .all({
@@ -428,7 +431,7 @@ export class StateStore {
       .prepare(
         `
           INSERT INTO reminder_batches (batch_id, session_id, reminder_text, events_json, state, max_event_seq, created_at, updated_at)
-          VALUES (@batchId, @sessionId, @reminderText, @eventsJson, 'built', @maxEventSeq, @now, @now)
+          VALUES (:batchId, :sessionId, :reminderText, :eventsJson, 'built', :maxEventSeq, :now, :now)
           ON CONFLICT(session_id) DO UPDATE SET
             batch_id = excluded.batch_id,
             reminder_text = excluded.reminder_text,
@@ -475,7 +478,7 @@ export class StateStore {
         .get(payload.sessionId) as { max_event_seq: number | null } | undefined
       if (row?.max_event_seq !== null && row?.max_event_seq !== undefined) {
         this.db
-          .prepare(`UPDATE sessions SET last_delivered_event_seq = @seq, updated_at = @now WHERE session_id = @sessionId`)
+          .prepare(`UPDATE sessions SET last_delivered_event_seq = :seq, updated_at = :now WHERE session_id = :sessionId`)
           .run({ seq: row.max_event_seq, now, sessionId: payload.sessionId })
       }
       this.db.prepare(`DELETE FROM reminder_batches WHERE session_id = ?`).run(payload.sessionId)
@@ -483,7 +486,7 @@ export class StateStore {
     }
 
     this.db
-      .prepare(`UPDATE reminder_batches SET state = @state, updated_at = @now WHERE session_id = @sessionId`)
+      .prepare(`UPDATE reminder_batches SET state = :state, updated_at = :now WHERE session_id = :sessionId`)
       .run({ state: payload.state, now, sessionId: payload.sessionId })
     return true
   }
@@ -494,7 +497,7 @@ export class StateStore {
         `
           SELECT *
           FROM sessions
-          WHERE repo = @repo AND branch = @branch AND status != 'closed'
+          WHERE repo = :repo AND branch = :branch AND status != 'closed'
         `,
       )
       .all({ repo, branch }) as SessionRow[]
@@ -570,7 +573,7 @@ export class StateStore {
       .prepare(
         `
           INSERT INTO branch_watchers (repo, branch, pr_number, last_checked_at, active_session_count, created_at, updated_at)
-          VALUES (@repo, @branch, NULL, NULL, 0, @now, @now)
+          VALUES (:repo, :branch, NULL, NULL, 0, :now, :now)
           ON CONFLICT(repo, branch) DO UPDATE SET
             updated_at = excluded.updated_at
         `,
@@ -584,7 +587,7 @@ export class StateStore {
       .prepare(
         `
           INSERT INTO pr_watchers (repo, pr_number, last_checked_at, active_session_count, created_at, updated_at)
-          VALUES (@repo, @prNumber, NULL, 0, @now, @now)
+          VALUES (:repo, :prNumber, NULL, 0, :now, :now)
           ON CONFLICT(repo, pr_number) DO UPDATE SET
             updated_at = excluded.updated_at
         `,
@@ -594,7 +597,7 @@ export class StateStore {
   }
 
   private refreshWatcherCounts(now = Date.now()) {
-    this.db.prepare(`UPDATE branch_watchers SET active_session_count = 0, updated_at = @now`).run({ now })
+    this.db.prepare(`UPDATE branch_watchers SET active_session_count = 0, updated_at = :now`).run({ now })
     this.db
       .prepare(
         `
@@ -606,12 +609,12 @@ export class StateStore {
               AND sessions.branch = branch_watchers.branch
               AND sessions.status != 'closed'
           ),
-              updated_at = @now
+              updated_at = :now
         `,
       )
       .run({ now })
 
-    this.db.prepare(`UPDATE pr_watchers SET active_session_count = 0, updated_at = @now`).run({ now })
+    this.db.prepare(`UPDATE pr_watchers SET active_session_count = 0, updated_at = :now`).run({ now })
     this.db
       .prepare(
         `
@@ -623,7 +626,7 @@ export class StateStore {
               AND sessions.pr_number = pr_watchers.pr_number
               AND sessions.status != 'closed'
           ),
-              updated_at = @now
+              updated_at = :now
         `,
       )
       .run({ now })

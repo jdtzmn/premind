@@ -107,9 +107,9 @@ export async function ensureDaemonRunning(socketPath = PREMIND_SOCKET_PATH) {
 type Runner = { command: string; args: string[] }
 
 function findRunner(): Runner | undefined {
-  // The daemon uses better-sqlite3 which is a native Node addon.
-  // Bun does not support better-sqlite3 yet, so we must run the daemon
-  // under Node with tsx, not bun.
+  // The daemon uses node:sqlite (built-in, no native addon required).
+  // node:sqlite requires Node 22.5+. Bun does not yet implement node:sqlite,
+  // so we must run the daemon under Node with tsx, not bun.
 
   // Prefer tsx (Node + TypeScript).
   const tsxPath = findExecutable("tsx")
@@ -122,7 +122,7 @@ function findRunner(): Runner | undefined {
   const tsxModule = resolveTsxModule()
   if (nodePath && tsxModule) return { command: nodePath, args: ["--import", tsxModule] }
 
-  // Last resort: try bun anyway in case better-sqlite3 support lands.
+  // Last resort: try bun anyway in case node:sqlite support lands in Bun.
   const bunPath = findExecutable("bun")
   if (bunPath) return { command: bunPath, args: ["run"] }
 

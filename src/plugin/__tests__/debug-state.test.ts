@@ -41,7 +41,7 @@ describe("plugin debug state", () => {
         exitCode: 1,
         exitSignal: null,
         timedOut: true,
-        stderr: "Error: Cannot find module 'better_sqlite3.node'",
+        stderr: "Error: Cannot find module 'some_native.node'",
         stdout: "",
       },
     })
@@ -53,7 +53,7 @@ describe("plugin debug state", () => {
     assert.equal(read.daemonDiagnostics?.runner, "/usr/local/bin/tsx")
     assert.equal(read.daemonDiagnostics?.exitCode, 1)
     assert.equal(read.daemonDiagnostics?.timedOut, true)
-    assert.match(read.daemonDiagnostics?.stderr ?? "", /better_sqlite3/)
+    assert.match(read.daemonDiagnostics?.stderr ?? "", /some_native/)
   })
 
   test("daemon diagnostics are merged with previous state fields", () => {

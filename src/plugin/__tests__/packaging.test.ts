@@ -40,9 +40,9 @@ describe("plugin packaging", () => {
     const deps = pkg.dependencies ?? {}
 
     assert.ok("@opencode-ai/plugin" in deps, "missing @opencode-ai/plugin")
-    assert.ok("better-sqlite3" in deps, "missing better-sqlite3")
     assert.ok("zod" in deps, "missing zod")
     assert.ok("tsx" in deps, "missing tsx (needed for daemon launcher)")
+    assert.ok(!("better-sqlite3" in deps), "better-sqlite3 must not be a dependency (native addon, not usable in plugin installs)")
   })
 
   test("package is not marked private", () => {
