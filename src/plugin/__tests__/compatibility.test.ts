@@ -64,6 +64,7 @@ describe("premind plugin compatibility harness", () => {
       createDaemonClient: () => daemon,
       detectGit: async () => ({ repo: "acme/repo", branch: "feature/test" }),
       ensureDaemon: async () => {},
+      idleDeliveryThresholdMs: 0,
     })({
       directory: "/tmp/project",
       worktree: "/tmp/project",

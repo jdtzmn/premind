@@ -1,5 +1,5 @@
 import { tool, type Plugin } from "@opencode-ai/plugin"
-import { PREMIND_CLIENT_HEARTBEAT_MS } from "../shared/constants.ts"
+import { PREMIND_CLIENT_HEARTBEAT_MS, PREMIND_IDLE_DELIVERY_THRESHOLD_MS } from "../shared/constants.ts"
 import { PremindDaemonClient } from "./daemon-client.ts"
 import { renderPremindStatus } from "./commands.ts"
 import { getPluginRuntimeStatePath, readPluginRuntimeState, writePluginRuntimeState } from "./debug-state.ts"
@@ -56,6 +56,7 @@ export type PremindPluginDependencies = {
   createDaemonClient?: () => DaemonClientLike
   detectGit?: (cwd: string) => Promise<{ repo: string; branch: string }>
   ensureDaemon?: () => Promise<void>
+  idleDeliveryThresholdMs?: number
 }
 
 const getEventSessionId = (event: { properties?: unknown }) => {
@@ -86,6 +87,7 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
   const root = worktree || directory
   const gitDetector = dependencies.detectGit ?? detectGitContext
   const startDaemon = dependencies.ensureDaemon ?? ensureDaemonRunning
+  const idleDeliveryThreshold = dependencies.idleDeliveryThresholdMs ?? PREMIND_IDLE_DELIVERY_THRESHOLD_MS
 
   writePluginRuntimeState({ phase: "initializing", root })
 
@@ -107,6 +109,10 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
   writePluginRuntimeState({ phase: "client-registered", root, daemonStarted: true, clientRegistered: true })
   const inflightReminders = new Map<string, string>()
   let lastPrimarySessionId: string | undefined
+
+  // Per-session idle state for threshold-based delivery.
+  const idleSince = new Map<string, number>()
+  const deliveryTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
   const heartbeat = setInterval(() => {
     void daemon.heartbeat().catch(() => {})
@@ -134,15 +140,10 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
   const isSessionNotFound = (error: unknown) =>
     error instanceof Error && error.message.startsWith("SESSION_NOT_FOUND")
 
-  const handleSessionIdle = async (sessionID: string) => {
-    const git = await gitDetector(root)
-    try {
-      await daemon.updateSessionState({ sessionId: sessionID, busyState: "idle", repo: git.repo, branch: git.branch })
-    } catch (error) {
-      // Session may not be registered (e.g. child session, or created event missed). Skip silently.
-      if (isSessionNotFound(error)) return
-      throw error
-    }
+  // Attempt immediate delivery of a pending reminder for a session.
+  // Does nothing if no batch exists or if one is already in-flight.
+  const deliverPendingReminder = async (sessionID: string) => {
+    if (inflightReminders.has(sessionID)) return
     const pending = await daemon.getPendingReminder(sessionID)
     if (!pending.batch) return
 
@@ -169,6 +170,66 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
         error: error instanceof Error ? error.message : String(error),
       })
     }
+  }
+
+  // Schedule delivery for a session that is idle.
+  // If the session has already been idle past the threshold, deliver immediately.
+  // Otherwise set a timer to deliver once the threshold elapses.
+  const scheduleDelivery = (sessionID: string) => {
+    // Cancel any existing delivery timer for this session.
+    const existing = deliveryTimers.get(sessionID)
+    if (existing !== undefined) {
+      clearTimeout(existing)
+      deliveryTimers.delete(sessionID)
+    }
+
+    const since = idleSince.get(sessionID)
+    if (since === undefined) return
+
+    const elapsed = Date.now() - since
+    const remaining = idleDeliveryThreshold - elapsed
+
+    if (remaining <= 0) {
+      // Already idle long enough — deliver now.
+      void deliverPendingReminder(sessionID)
+      return
+    }
+
+    // Schedule delivery for when the threshold is reached.
+    const timer = setTimeout(() => {
+      deliveryTimers.delete(sessionID)
+      void deliverPendingReminder(sessionID)
+    }, remaining)
+    if (typeof timer === "object" && "unref" in timer) timer.unref()
+    deliveryTimers.set(sessionID, timer)
+  }
+
+  // Cancel a session's idle timer and reset its idle clock (on busy).
+  // The pending batch is preserved — delivery will retry on the next idle window.
+  const cancelDelivery = (sessionID: string) => {
+    const timer = deliveryTimers.get(sessionID)
+    if (timer !== undefined) {
+      clearTimeout(timer)
+      deliveryTimers.delete(sessionID)
+    }
+    idleSince.delete(sessionID)
+  }
+
+  const handleSessionIdle = async (sessionID: string) => {
+    const git = await gitDetector(root)
+    try {
+      await daemon.updateSessionState({ sessionId: sessionID, busyState: "idle", repo: git.repo, branch: git.branch })
+    } catch (error) {
+      // Session may not be registered (e.g. child session, or created event missed). Skip silently.
+      if (isSessionNotFound(error)) return
+      throw error
+    }
+
+    // Record idle start time if not already set, then schedule threshold-based delivery.
+    if (!idleSince.has(sessionID)) {
+      idleSince.set(sessionID, Date.now())
+    }
+    scheduleDelivery(sessionID)
   }
 
   const injectResponse = async (sessionID: string, text: string, inputRef?: { agent?: string; model?: { providerID: string; modelID: string } }) => {
@@ -294,6 +355,7 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
           await daemon.updateSessionState({ sessionId: sessionID, busyState: "busy" }).catch((error) => {
             if (!isSessionNotFound(error)) throw error
           })
+          cancelDelivery(sessionID)
         }
         if (statusType === "idle") {
           await handleSessionIdle(sessionID)
@@ -302,6 +364,7 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
 
       if (event.type === "session.deleted") {
         await daemon.unregisterSession(sessionID)
+        cancelDelivery(sessionID)
       }
     },
 
@@ -339,6 +402,7 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
       await daemon.updateSessionState({ sessionId: input.sessionID, busyState: "busy" }).catch((error) => {
         if (!isSessionNotFound(error)) throw error
       })
+      cancelDelivery(input.sessionID)
     },
   }
 }
