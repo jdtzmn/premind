@@ -282,7 +282,9 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
           startToastCountdown(sessionID, pending.batch.events.length)
         }
         scheduleDelivery(sessionID)
-      }).catch(() => {})
+      }).catch((err) => {
+        void writePluginRuntimeState({ phase: "idle-poll-error", error: err instanceof Error ? err.message : String(err) })
+      })
     }, PREMIND_CLIENT_HEARTBEAT_MS)
     if (typeof interval === "object" && "unref" in interval) interval.unref()
     idlePollIntervals.set(sessionID, interval)

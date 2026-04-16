@@ -95,7 +95,7 @@ export const reminderEventSchema = z
     summary: z.string().min(1),
     detailFilePath: z.string().min(1).optional(),
   })
-  .strict()
+  .passthrough()
 
 export const reminderBatchSchema = z
   .object({
