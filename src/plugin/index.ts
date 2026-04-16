@@ -257,6 +257,19 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
     }
   }
 
+  // Bootstrap: pick up sessions that were already idle before this plugin instance started.
+  // Use debugStatus to enumerate active sessions and start idle polls for any that are idle.
+  void daemon.debugStatus().then((status) => {
+    const sessions: Array<{ sessionId: string; busyState?: string }> = status?.sessions ?? []
+    for (const s of sessions) {
+      if (s.busyState === "idle" && !idleSince.has(s.sessionId)) {
+        // Use now as a conservative idle start — we don't know the real idle time.
+        idleSince.set(s.sessionId, Date.now())
+        startIdlePoll(s.sessionId)
+      }
+    }
+  }).catch(() => {})
+
   // Cancel a session's idle timer and reset its idle clock (on busy).
   // The pending batch is preserved — delivery will retry on the next idle window.
   const cancelDelivery = (sessionID: string) => {
