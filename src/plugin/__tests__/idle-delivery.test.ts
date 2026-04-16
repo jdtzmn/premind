@@ -61,6 +61,9 @@ const makePlugin = async (daemon: ReturnType<typeof makeDaemon>, thresholdMs = T
           asyncPrompts.push({ sessionId: path.id, text: body.parts[0].text })
         },
       },
+      tui: {
+        showToast: async () => undefined,
+      },
     },
   } as never)
 
@@ -173,6 +176,9 @@ describe("idle delivery threshold", () => {
           promptAsync: async ({ path, body }: any) => {
             asyncPrompts.push({ sessionId: path.id, text: body.parts[0].text })
           },
+        },
+        tui: {
+          showToast: async () => undefined,
         },
       },
     } as never)

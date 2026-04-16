@@ -78,6 +78,9 @@ describe("premind plugin compatibility harness", () => {
             asyncPrompts.push({ sessionId: path.id, text: body.parts[0].text })
           },
         },
+        tui: {
+          showToast: async () => undefined,
+        },
       },
     } as never)
 

@@ -2,7 +2,7 @@ import { tool, type Plugin } from "@opencode-ai/plugin"
 import { PREMIND_CLIENT_HEARTBEAT_MS, PREMIND_IDLE_DELIVERY_THRESHOLD_MS } from "../shared/constants.ts"
 import { PremindDaemonClient } from "./daemon-client.ts"
 import { renderPremindStatus } from "./commands.ts"
-import { getPluginRuntimeStatePath, readPluginRuntimeState, writePluginRuntimeState, writeSessionReminderState, clearSessionReminderState } from "./debug-state.ts"
+import { getPluginRuntimeStatePath, readPluginRuntimeState, writePluginRuntimeState } from "./debug-state.ts"
 import { detectGitContext } from "./git-context.ts"
 import { ensureDaemonRunning } from "./daemon-launcher.ts"
 
@@ -40,6 +40,15 @@ type PromptInput = {
   }
 }
 
+type ToastInput = {
+  body: {
+    title?: string
+    message: string
+    variant: "info" | "success" | "warning" | "error"
+    duration?: number
+  }
+}
+
 type PluginContext = {
   directory: string
   worktree?: string
@@ -48,6 +57,9 @@ type PluginContext = {
       get: (input: { path: { id: string } }) => Promise<{ data?: { parentID?: string | null } }>
       prompt: (input: PromptInput) => Promise<unknown>
       promptAsync: (input: PromptInput) => Promise<unknown>
+    }
+    tui: {
+      showToast: (input: ToastInput) => Promise<unknown>
     }
   }
 }
@@ -106,8 +118,7 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
 
   const daemon = dependencies.createDaemonClient?.() ?? new PremindDaemonClient()
   const lease = await daemon.registerClient(root, "opencode-plugin")
-  // Clear any stale per-session state from previous runs so the TUI starts clean.
-  writePluginRuntimeState({ phase: "client-registered", root, daemonStarted: true, clientRegistered: true, sessions: {} })
+  writePluginRuntimeState({ phase: "client-registered", root, daemonStarted: true, clientRegistered: true })
   const inflightReminders = new Map<string, string>()
   let lastPrimarySessionId: string | undefined
 
@@ -117,6 +128,8 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
   // Per-session background poll intervals that check for new batches while idle.
   // This ensures a batch that arrives after the session is already idle still gets delivered.
   const idlePollIntervals = new Map<string, ReturnType<typeof setInterval>>()
+  // Per-session 1-second toast countdown timers shown in the TUI while a batch is pending.
+  const toastTimers = new Map<string, ReturnType<typeof setInterval>>()
 
   const heartbeat = setInterval(() => {
     void daemon.heartbeat().catch(() => {})
@@ -158,12 +171,8 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
     })
 
     inflightReminders.set(sessionID, pending.batch.batchId)
-    // Mark delivering so TUI can show "sending..." state.
-    writeSessionReminderState(sessionID, {
-      pendingCount: pending.batch.events.length,
-      idleSince: idleSince.get(sessionID) ?? null,
-      delivering: true,
-    })
+    // Stop countdown toast — delivery is in progress.
+    stopToastCountdown(sessionID)
     try {
       await client.session.promptAsync({
         path: { id: sessionID },
@@ -173,11 +182,6 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
       })
     } catch (error) {
       inflightReminders.delete(sessionID)
-      writeSessionReminderState(sessionID, {
-        pendingCount: pending.batch.events.length,
-        idleSince: idleSince.get(sessionID) ?? null,
-        delivering: false,
-      })
       await daemon.ackReminder({
         batchId: pending.batch.batchId,
         sessionId: sessionID,
@@ -219,6 +223,46 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
     deliveryTimers.set(sessionID, timer)
   }
 
+  // Show a replacing TUI toast every second with the current countdown.
+  const startToastCountdown = (sessionID: string, pendingCount: number) => {
+    // Stop any existing toast timer for this session first.
+    const existing = toastTimers.get(sessionID)
+    if (existing !== undefined) {
+      clearInterval(existing)
+      toastTimers.delete(sessionID)
+    }
+
+    const showTick = () => {
+      const since = idleSince.get(sessionID)
+      const count = pendingCount
+      const label = `${count} PR update${count === 1 ? "" : "s"} queued`
+
+      let message: string
+      if (since === undefined) {
+        message = `${label} — waiting for ${Math.ceil(idleDeliveryThreshold / 1000)}s of inactivity`
+      } else {
+        const elapsed = Date.now() - since
+        const remainingSecs = Math.max(0, Math.ceil((idleDeliveryThreshold - elapsed) / 1000))
+        message = `${label} — sending in ${remainingSecs}s`
+      }
+
+      void client.tui.showToast({ body: { variant: "info", message, duration: 1200 } }).catch(() => {})
+    }
+
+    showTick()
+    const timer = setInterval(showTick, 1000)
+    if (typeof timer === "object" && "unref" in timer) timer.unref()
+    toastTimers.set(sessionID, timer)
+  }
+
+  const stopToastCountdown = (sessionID: string) => {
+    const timer = toastTimers.get(sessionID)
+    if (timer !== undefined) {
+      clearInterval(timer)
+      toastTimers.delete(sessionID)
+    }
+  }
+
   // Poll the daemon for new batches while a session is idle.
   // This catches batches that arrive after the session already went idle.
   const startIdlePoll = (sessionID: string) => {
@@ -230,17 +274,12 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
         idlePollIntervals.delete(sessionID)
         return
       }
-      // Check for a new batch and update TUI state + schedule delivery.
+      // Check for a new batch and start toast countdown + schedule delivery.
       void daemon.getPendingReminder(sessionID).then((pending) => {
         if (!pending.batch) return
-        const existing = readPluginRuntimeState().sessions?.[sessionID]
-        // Only write if count changed or not yet written, to avoid redundant writes.
-        if (!existing || existing.pendingCount !== pending.batch.events.length) {
-          writeSessionReminderState(sessionID, {
-            pendingCount: pending.batch.events.length,
-            idleSince: idleSince.get(sessionID) ?? null,
-            delivering: false,
-          })
+        // Only start countdown if not already running.
+        if (!toastTimers.has(sessionID)) {
+          startToastCountdown(sessionID, pending.batch.events.length)
         }
         scheduleDelivery(sessionID)
       }).catch(() => {})
@@ -279,13 +318,8 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
       deliveryTimers.delete(sessionID)
     }
     stopIdlePoll(sessionID)
+    stopToastCountdown(sessionID)
     idleSince.delete(sessionID)
-    // Update TUI state: session is no longer idle.
-    // Only write if there is already an entry (avoids creating noise for sessions with no pending batch).
-    const existing = readPluginRuntimeState().sessions?.[sessionID]
-    if (existing) {
-      writeSessionReminderState(sessionID, { ...existing, idleSince: null, delivering: false })
-    }
   }
 
   const handleSessionIdle = async (sessionID: string) => {
@@ -303,14 +337,10 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
       idleSince.set(sessionID, Date.now())
     }
 
-    // Write TUI-visible state: pending count + idle start time.
+    // Start toast countdown if there is already a pending batch.
     const pending = await daemon.getPendingReminder(sessionID).catch(() => ({ batch: null }))
-    if (pending.batch) {
-      writeSessionReminderState(sessionID, {
-        pendingCount: pending.batch.events.length,
-        idleSince: idleSince.get(sessionID) ?? null,
-        delivering: false,
-      })
+    if (pending.batch && !toastTimers.has(sessionID)) {
+      startToastCountdown(sessionID, pending.batch.events.length)
     }
 
     // Start background polling so batches that arrive while already idle are detected.
@@ -451,7 +481,6 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
       if (event.type === "session.deleted") {
         await daemon.unregisterSession(sessionID)
         cancelDelivery(sessionID)
-        clearSessionReminderState(sessionID)
       }
     },
 
@@ -483,8 +512,8 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
           state: "confirmed",
         })
         inflightReminders.delete(input.sessionID)
-        // Reminder confirmed — clear TUI panel state.
-        clearSessionReminderState(input.sessionID)
+        stopToastCountdown(input.sessionID)
+        void client.tui.showToast({ body: { variant: "success", message: "PR updates delivered to session", duration: 3_000 } }).catch(() => {})
         return
       }
 
