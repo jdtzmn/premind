@@ -130,6 +130,8 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
   const idlePollIntervals = new Map<string, ReturnType<typeof setInterval>>()
   // Per-session 1-second toast countdown timers shown in the TUI while a batch is pending.
   const toastTimers = new Map<string, ReturnType<typeof setInterval>>()
+  // Mutable count refs so the idle poll can update the displayed count without restarting the interval.
+  const pendingCountRefs = new Map<string, { value: number }>()
 
   const heartbeat = setInterval(() => {
     void daemon.heartbeat().catch(() => {})
@@ -224,13 +226,18 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
   }
 
   // Show a replacing TUI toast every second with the current countdown.
-  const startToastCountdown = (sessionID: string, pendingCount: number) => {
+  const startToastCountdown = (sessionID: string, initialPendingCount: number) => {
     // Stop any existing toast timer for this session first.
     const existing = toastTimers.get(sessionID)
     if (existing !== undefined) {
       clearInterval(existing)
       toastTimers.delete(sessionID)
     }
+
+    // Mutable count ref — the idle poll updates this in place so showTick always
+    // displays the latest count without restarting the interval.
+    const countRef = { value: initialPendingCount }
+    pendingCountRefs.set(sessionID, countRef)
 
     // Async check: verify session is still idle from daemon's perspective.
     // This handles cross-instance cases where session.status busy events may not
@@ -260,7 +267,7 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
       tickCount++
       if (tickCount % 10 === 0) verifyStillIdle()
 
-      const count = pendingCount
+      const count = countRef.value
       const label = `${count} PR update${count === 1 ? "" : "s"} queued`
       const elapsed = Date.now() - since
       const remainingSecs = Math.max(0, Math.ceil((idleDeliveryThreshold - elapsed) / 1000))
@@ -281,6 +288,7 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
       clearInterval(timer)
       toastTimers.delete(sessionID)
     }
+    pendingCountRefs.delete(sessionID)
   }
 
   // Poll the daemon for new batches while a session is idle.
@@ -297,9 +305,14 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
       // Check for a new batch and start toast countdown + schedule delivery.
       void daemon.getPendingReminder(sessionID).then((pending) => {
         if (!pending.batch) return
-        // Only start countdown if not already running.
         if (!toastTimers.has(sessionID)) {
+          // No countdown running yet — start one.
           startToastCountdown(sessionID, pending.batch.events.length)
+        } else {
+          // Countdown already running — update the count ref in place so the
+          // next showTick displays the latest count without restarting the interval.
+          const ref = pendingCountRefs.get(sessionID)
+          if (ref) ref.value = pending.batch.events.length
         }
         scheduleDelivery(sessionID)
       }).catch((err) => {
