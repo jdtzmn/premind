@@ -106,7 +106,8 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
 
   const daemon = dependencies.createDaemonClient?.() ?? new PremindDaemonClient()
   const lease = await daemon.registerClient(root, "opencode-plugin")
-  writePluginRuntimeState({ phase: "client-registered", root, daemonStarted: true, clientRegistered: true })
+  // Clear any stale per-session state from previous runs so the TUI starts clean.
+  writePluginRuntimeState({ phase: "client-registered", root, daemonStarted: true, clientRegistered: true, sessions: {} })
   const inflightReminders = new Map<string, string>()
   let lastPrimarySessionId: string | undefined
 
