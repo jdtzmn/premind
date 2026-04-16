@@ -232,19 +232,39 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
       toastTimers.delete(sessionID)
     }
 
+    // Async check: verify session is still idle from daemon's perspective.
+    // This handles cross-instance cases where session.status busy events may not
+    // reach this plugin instance (e.g. sessions in other worktrees).
+    const verifyStillIdle = () => {
+      void daemon.debugStatus().then((status) => {
+        const sessions: Array<{ sessionId: string; busyState?: string }> = status?.sessions ?? []
+        const session = sessions.find((s) => s.sessionId === sessionID)
+        if (!session || session.busyState !== "idle") {
+          cancelDelivery(sessionID)
+        }
+      }).catch(() => {})
+    }
+
+    let tickCount = 0
     const showTick = () => {
       const since = idleSince.get(sessionID)
+
+      // Session is no longer idle (cancelled locally) — stop the countdown.
+      if (since === undefined) {
+        stopToastCountdown(sessionID)
+        return
+      }
+
+      // Every 10 seconds verify the session is still idle from the daemon's perspective.
+      // This catches busy transitions that may not have reached this plugin instance.
+      tickCount++
+      if (tickCount % 10 === 0) verifyStillIdle()
+
       const count = pendingCount
       const label = `${count} PR update${count === 1 ? "" : "s"} queued`
-
-      let message: string
-      if (since === undefined) {
-        message = `${label} — waiting for ${Math.ceil(idleDeliveryThreshold / 1000)}s of inactivity`
-      } else {
-        const elapsed = Date.now() - since
-        const remainingSecs = Math.max(0, Math.ceil((idleDeliveryThreshold - elapsed) / 1000))
-        message = `${label} — sending in ${remainingSecs}s`
-      }
+      const elapsed = Date.now() - since
+      const remainingSecs = Math.max(0, Math.ceil((idleDeliveryThreshold - elapsed) / 1000))
+      const message = `${label} — sending in ${remainingSecs}s`
 
       void client.tui.showToast({ body: { variant: "info", message, duration: 1200 } }).catch(() => {})
     }
