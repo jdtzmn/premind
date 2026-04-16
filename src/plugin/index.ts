@@ -12,6 +12,7 @@ const COMMAND_MARKERS = {
   status: "[PREMIND_STATUS]",
   pause: "[PREMIND_PAUSE]",
   resume: "[PREMIND_RESUME]",
+  sendNow: "[PREMIND_SEND_NOW]",
 } as const
 
 const ABORT_SENTINEL = "__PREMIND_HANDLED__"
@@ -411,6 +412,19 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
     await injectResponse(sessionID, `premind resumed for session ${sessionID}`, inputRef)
   }
 
+  const handleSendNowCommand = async (sessionID: string, inputRef?: { agent?: string; model?: { providerID: string; modelID: string } }) => {
+    const pending = await daemon.getPendingReminder(sessionID)
+    if (!pending.batch) {
+      await injectResponse(sessionID, "premind: no pending PR updates to send", inputRef)
+      return
+    }
+    // Cancel the countdown timer and deliver immediately.
+    stopToastCountdown(sessionID)
+    cancelDelivery(sessionID)
+    await deliverPendingReminder(sessionID)
+    await injectResponse(sessionID, "premind: sending PR updates now", inputRef)
+  }
+
   return {
     // Register slash commands via config mutation.
     config: async (configInput: any) => {
@@ -426,6 +440,10 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
       configInput.command["premind-resume"] = {
         template: COMMAND_MARKERS.resume,
         description: "Resume premind reminders for this session",
+      }
+      configInput.command["premind-send-now"] = {
+        template: COMMAND_MARKERS.sendNow,
+        description: "Send pending PR updates to this session immediately without waiting for the idle countdown",
       }
 
       // Keep the heartbeat alive for the lifetime of the plugin instance.
@@ -465,6 +483,20 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
           if (!sessionId) return "premind resume failed: no active session"
           await daemon.resumeSession(sessionId)
           return `premind resumed for session ${sessionId}`
+        },
+      }),
+      premind_send_now: tool({
+        description: "Send pending PR updates to the current session immediately, without waiting for the idle countdown",
+        args: {},
+        async execute(_args, ctx) {
+          const sessionId = ctx.sessionID ?? lastPrimarySessionId
+          if (!sessionId) return "premind send-now failed: no active session"
+          const pending = await daemon.getPendingReminder(sessionId)
+          if (!pending.batch) return "premind: no pending PR updates to send"
+          stopToastCountdown(sessionId)
+          cancelDelivery(sessionId)
+          await deliverPendingReminder(sessionId)
+          return "premind: sending PR updates now"
         },
       }),
       premind_probe: tool({
@@ -535,6 +567,9 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
       }
       if (outputText.includes(COMMAND_MARKERS.resume)) {
         await handleResumeCommand(input.sessionID, inputRef)
+      }
+      if (outputText.includes(COMMAND_MARKERS.sendNow)) {
+        await handleSendNowCommand(input.sessionID, inputRef)
       }
 
       // Check for reminder confirmation marker.
