@@ -113,6 +113,9 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
   // Per-session idle state for threshold-based delivery.
   const idleSince = new Map<string, number>()
   const deliveryTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  // Per-session background poll intervals that check for new batches while idle.
+  // This ensures a batch that arrives after the session is already idle still gets delivered.
+  const idlePollIntervals = new Map<string, ReturnType<typeof setInterval>>()
 
   const heartbeat = setInterval(() => {
     void daemon.heartbeat().catch(() => {})
@@ -215,6 +218,44 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
     deliveryTimers.set(sessionID, timer)
   }
 
+  // Poll the daemon for new batches while a session is idle.
+  // This catches batches that arrive after the session already went idle.
+  const startIdlePoll = (sessionID: string) => {
+    if (idlePollIntervals.has(sessionID)) return
+    const interval = setInterval(() => {
+      // Only keep polling while the session is still idle.
+      if (!idleSince.has(sessionID)) {
+        clearInterval(interval)
+        idlePollIntervals.delete(sessionID)
+        return
+      }
+      // Check for a new batch and update TUI state + schedule delivery.
+      void daemon.getPendingReminder(sessionID).then((pending) => {
+        if (!pending.batch) return
+        const existing = readPluginRuntimeState().sessions?.[sessionID]
+        // Only write if count changed or not yet written, to avoid redundant writes.
+        if (!existing || existing.pendingCount !== pending.batch.events.length) {
+          writeSessionReminderState(sessionID, {
+            pendingCount: pending.batch.events.length,
+            idleSince: idleSince.get(sessionID) ?? null,
+            delivering: false,
+          })
+        }
+        scheduleDelivery(sessionID)
+      }).catch(() => {})
+    }, PREMIND_CLIENT_HEARTBEAT_MS)
+    if (typeof interval === "object" && "unref" in interval) interval.unref()
+    idlePollIntervals.set(sessionID, interval)
+  }
+
+  const stopIdlePoll = (sessionID: string) => {
+    const interval = idlePollIntervals.get(sessionID)
+    if (interval !== undefined) {
+      clearInterval(interval)
+      idlePollIntervals.delete(sessionID)
+    }
+  }
+
   // Cancel a session's idle timer and reset its idle clock (on busy).
   // The pending batch is preserved — delivery will retry on the next idle window.
   const cancelDelivery = (sessionID: string) => {
@@ -223,6 +264,7 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
       clearTimeout(timer)
       deliveryTimers.delete(sessionID)
     }
+    stopIdlePoll(sessionID)
     idleSince.delete(sessionID)
     // Update TUI state: session is no longer idle.
     // Only write if there is already an entry (avoids creating noise for sessions with no pending batch).
@@ -257,6 +299,8 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
       })
     }
 
+    // Start background polling so batches that arrive while already idle are detected.
+    startIdlePoll(sessionID)
     scheduleDelivery(sessionID)
   }
 
