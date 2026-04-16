@@ -8,7 +8,7 @@ const THIS_DIR = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.resolve(THIS_DIR, "..", "..", "..")
 
 describe("plugin packaging", () => {
-  test("package.json exports point at existing entry file", () => {
+  test("package.json exports point at existing entry files", () => {
     const pkgPath = path.join(ROOT, "package.json")
     const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"))
 
@@ -16,7 +16,10 @@ describe("plugin packaging", () => {
     assert.ok(fs.existsSync(mainEntry), `main entry ${pkg.main} does not exist at ${mainEntry}`)
 
     const exportsEntry = path.resolve(ROOT, pkg.exports["."])
-    assert.ok(fs.existsSync(exportsEntry), `exports entry ${pkg.exports["."]} does not exist at ${exportsEntry}`)
+    assert.ok(fs.existsSync(exportsEntry), `exports["."] ${pkg.exports["."]} does not exist`)
+
+    const tuiEntry = path.resolve(ROOT, pkg.exports["./tui"])
+    assert.ok(fs.existsSync(tuiEntry), `exports["./tui"] ${pkg.exports["./tui"]} does not exist`)
   })
 
   test("plugin entry exports PremindPlugin and createPremindPlugin", async () => {
@@ -26,6 +29,14 @@ describe("plugin packaging", () => {
     assert.equal(typeof mod.default, "object", "default export should be an object")
     assert.equal(mod.default?.id, "premind", "default export should declare plugin id")
     assert.equal(typeof mod.default?.server, "function", "default export should expose server plugin")
+  })
+
+  test("TUI entry exports PremindTuiPlugin", async () => {
+    const mod = await import("../../plugin/tui.ts")
+    assert.equal(typeof mod.PremindTuiPlugin, "function", "PremindTuiPlugin should be a function")
+    assert.equal(typeof mod.default, "object", "default export should be an object")
+    assert.equal(mod.default?.id, "premind", "default export should declare plugin id")
+    assert.equal(typeof mod.default?.tui, "function", "default export should expose tui plugin")
   })
 
   test("daemon entry file exists relative to plugin", () => {

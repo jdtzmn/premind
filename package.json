@@ -4,7 +4,8 @@
   "description": "OpenCode plugin that keeps sessions up to date with pull request changes",
   "type": "module",
   "exports": {
-    ".": "./src/plugin/index.ts"
+    ".": "./src/plugin/index.ts",
+    "./tui": "./src/plugin/tui.ts"
   },
   "main": "./src/plugin/index.ts",
   "files": [
