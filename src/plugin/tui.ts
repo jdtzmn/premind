@@ -25,9 +25,7 @@ const readSessions = (): Record<string, SessionReminderState> => {
 }
 
 export const PremindTuiPlugin: TuiPlugin = async (api) => {
-  let pollTimer: ReturnType<typeof setInterval> | undefined
-  // Track which sessions we have already shown a toast for, so we only show
-  // the first-arrival toast once (not on every poll tick before idle threshold).
+  // Track sessions we have shown a toast for so we can show the "delivered" toast.
   const knownSessions = new Set<string>()
 
   const tick = () => {
@@ -37,15 +35,10 @@ export const PremindTuiPlugin: TuiPlugin = async (api) => {
     )
 
     if (activeEntries.length === 0) {
-      // Nothing pending — stop polling and show a brief delivered toast if we
-      // were previously showing a countdown.
+      // Nothing pending — show a brief "delivered" toast if we were counting down.
       if (knownSessions.size > 0) {
         api.ui.toast({ variant: "success", message: "PR updates delivered to session", duration: 3_000 })
         knownSessions.clear()
-      }
-      if (pollTimer !== undefined) {
-        clearInterval(pollTimer)
-        pollTimer = undefined
       }
       return
     }
@@ -78,42 +71,17 @@ export const PremindTuiPlugin: TuiPlugin = async (api) => {
     })
   }
 
-  // Start polling when a new event arrives via the event bus, or on a timer.
-  // The event bus gives us a near-instant trigger when new PR events come in.
-  const startPolling = () => {
-    if (pollTimer !== undefined) return
-    pollTimer = setInterval(tick, POLL_INTERVAL_MS)
-    // Unref so this timer doesn't keep the process alive artificially.
-    if (typeof pollTimer === "object" && "unref" in pollTimer) pollTimer.unref()
-    // Run immediately.
-    tick()
-  }
+  // Persistent background poll — always running so we catch state file updates
+  // written by the server plugin's idle background poll, regardless of whether
+  // session events fire in the TUI.
+  const pollTimer = setInterval(tick, POLL_INTERVAL_MS)
+  if (typeof pollTimer === "object" && "unref" in pollTimer) pollTimer.unref()
 
-  // Watch for any session event that might indicate new PR activity.
-  // We start polling optimistically whenever any session event fires.
-  const unsubscribe = api.event.on("session.idle" as never, () => {
-    startPolling()
-  })
-
-  // Also poll on initial load in case there is already pending state.
-  const initialSessions = readSessions()
-  if (Object.values(initialSessions).some((s) => s.pendingCount > 0)) {
-    startPolling()
-  }
-
-  // Also watch for session status events (busy/idle transitions).
-  const unsubscribeBusy = api.event.on("session.status" as never, () => {
-    if (pollTimer !== undefined) tick()
-    else startPolling()
-  })
+  // Run once immediately on startup.
+  tick()
 
   api.lifecycle.onDispose(() => {
-    if (pollTimer !== undefined) {
-      clearInterval(pollTimer)
-      pollTimer = undefined
-    }
-    unsubscribe()
-    unsubscribeBusy()
+    clearInterval(pollTimer)
   })
 }
 
