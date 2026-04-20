@@ -24,6 +24,7 @@ type SessionRow = {
   status: "active" | "paused" | "closed"
   busy_state: "busy" | "idle"
   last_delivered_event_seq: number
+  last_activity_at: number
 }
 
 type ReminderRow = {
@@ -138,8 +139,8 @@ export class StateStore {
     this.db
       .prepare(
         `
-          INSERT INTO sessions (session_id, client_id, repo, branch, pr_number, is_primary, status, busy_state, last_delivered_event_seq, created_at, updated_at)
-          VALUES (:sessionId, :clientId, :repo, :branch, NULL, :isPrimary, :status, :busyState, 0, :now, :now)
+          INSERT INTO sessions (session_id, client_id, repo, branch, pr_number, is_primary, status, busy_state, last_delivered_event_seq, last_activity_at, created_at, updated_at)
+          VALUES (:sessionId, :clientId, :repo, :branch, NULL, :isPrimary, :status, :busyState, 0, :now, :now, :now)
           ON CONFLICT(session_id) DO UPDATE SET
             client_id = excluded.client_id,
             repo = excluded.repo,
@@ -147,6 +148,7 @@ export class StateStore {
             is_primary = excluded.is_primary,
             status = excluded.status,
             busy_state = excluded.busy_state,
+            last_activity_at = excluded.last_activity_at,
             updated_at = excluded.updated_at
         `,
       )
@@ -176,6 +178,7 @@ export class StateStore {
               branch = :branch,
               status = :status,
               busy_state = :busyState,
+              last_activity_at = :now,
               updated_at = :now
           WHERE session_id = :sessionId
         `,
@@ -705,6 +708,7 @@ export class StateStore {
         status TEXT NOT NULL,
         busy_state TEXT NOT NULL,
         last_delivered_event_seq INTEGER NOT NULL DEFAULT 0,
+        last_activity_at INTEGER NOT NULL,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       );

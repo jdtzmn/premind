@@ -280,4 +280,148 @@ describe("StateStore", () => {
 
     store.close()
   })
+
+  test("last_activity_at: registerSession sets it to now", () => {
+    const store = createStore()
+    const now = 1_000_000
+    store.registerClient("client-a", { pid: 1, projectRoot: "/tmp/p" })
+    store.registerSession(
+      {
+        clientId: "client-a",
+        sessionId: "session-a",
+        repo: "acme/repo",
+        branch: "feature/a",
+        isPrimary: true,
+        status: "active",
+        busyState: "idle",
+      },
+      now,
+    )
+    const session = store.getSession("session-a")
+    assert.ok(session)
+    assert.equal(session.last_activity_at, now)
+    store.close()
+  })
+
+  test("last_activity_at: updateSessionState bumps it", () => {
+    const store = createStore()
+    const createdAt = 1_000_000
+    const updateAt = 2_000_000
+    store.registerClient("client-b", { pid: 1, projectRoot: "/tmp/p" })
+    store.registerSession(
+      {
+        clientId: "client-b",
+        sessionId: "session-b",
+        repo: "acme/repo",
+        branch: "feature/b",
+        isPrimary: true,
+        status: "active",
+        busyState: "idle",
+      },
+      createdAt,
+    )
+
+    store.updateSessionState({ sessionId: "session-b", busyState: "busy" }, updateAt)
+
+    const session = store.getSession("session-b")
+    assert.ok(session)
+    assert.equal(session.last_activity_at, updateAt)
+    store.close()
+  })
+
+  test("last_activity_at: recordBranchAssociation does NOT bump it", () => {
+    const store = createStore()
+    const createdAt = 1_000_000
+    const branchAssocAt = 5_000_000
+    store.registerClient("client-c", { pid: 1, projectRoot: "/tmp/p" })
+    store.registerSession(
+      {
+        clientId: "client-c",
+        sessionId: "session-c",
+        repo: "acme/repo",
+        branch: "feature/c",
+        isPrimary: true,
+        status: "active",
+        busyState: "idle",
+      },
+      createdAt,
+    )
+
+    store.recordBranchAssociation("acme/repo", "feature/c", 42, branchAssocAt)
+
+    const session = store.getSession("session-c")
+    assert.ok(session)
+    // last_activity_at must NOT have been touched by branch discovery.
+    assert.equal(session.last_activity_at, createdAt)
+    store.close()
+  })
+
+  test("last_activity_at: updateDeliveredEventSeq (via ack) does NOT bump it", () => {
+    const store = createStore()
+    const createdAt = 1_000_000
+    store.registerClient("client-d", { pid: 1, projectRoot: "/tmp/p" })
+    store.registerSession(
+      {
+        clientId: "client-d",
+        sessionId: "session-d",
+        repo: "acme/repo",
+        branch: "feature/d",
+        isPrimary: true,
+        status: "active",
+        busyState: "idle",
+      },
+      createdAt,
+    )
+    store.recordBranchAssociation("acme/repo", "feature/d", 55, createdAt)
+    store.insertEvents("acme/repo", 55, [
+      {
+        dedupeKey: "issue_comment.created:1",
+        kind: "issue_comment.created",
+        priority: "high",
+        summary: "hello",
+        payload: {},
+      },
+    ])
+    const batch = store.buildReminderBatch("session-d")
+    assert.ok(batch)
+
+    // Confirmed ack runs updateDeliveredEventSeq internally.
+    store.ackReminder({
+      batchId: batch.batchId,
+      sessionId: "session-d",
+      state: "confirmed",
+    })
+
+    const session = store.getSession("session-d")
+    assert.ok(session)
+    // last_activity_at must NOT have been touched by ack / delivery cursor.
+    assert.equal(session.last_activity_at, createdAt)
+    store.close()
+  })
+
+  test("last_activity_at: setSessionPaused does NOT bump it", () => {
+    const store = createStore()
+    const createdAt = 1_000_000
+    store.registerClient("client-e", { pid: 1, projectRoot: "/tmp/p" })
+    store.registerSession(
+      {
+        clientId: "client-e",
+        sessionId: "session-e",
+        repo: "acme/repo",
+        branch: "feature/e",
+        isPrimary: true,
+        status: "active",
+        busyState: "idle",
+      },
+      createdAt,
+    )
+
+    store.setSessionPaused("session-e", true)
+
+    const session = store.getSession("session-e")
+    assert.ok(session)
+    // Pausing is not "user activity" — it must not refresh the staleness clock.
+    assert.equal(session.last_activity_at, createdAt)
+    store.close()
+  })
 })
