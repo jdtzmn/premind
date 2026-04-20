@@ -77,6 +77,9 @@ export type PremindPluginDependencies = {
   // Overrides the staleness TTL for inflight reminders. Intended for tests;
   // production always uses the computed default (see inflightStaleTtlMs).
   inflightStaleTtlMs?: number
+  // Overrides the countdown toast tick interval. Intended for tests so the
+  // stall self-correction path can be exercised without multi-second waits.
+  toastTickIntervalMs?: number
 }
 
 const getEventSessionId = (event: { properties?: unknown }) => {
@@ -108,6 +111,7 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
   const gitDetector = dependencies.detectGit ?? detectGitContext
   const startDaemon = dependencies.ensureDaemon ?? ensureDaemonRunning
   const idleDeliveryThreshold = dependencies.idleDeliveryThresholdMs ?? PREMIND_IDLE_DELIVERY_THRESHOLD_MS
+  const toastTickIntervalMs = dependencies.toastTickIntervalMs ?? 1000
 
   writePluginRuntimeState({ phase: "initializing", root })
 
@@ -359,6 +363,12 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
     }
 
     let tickCount = 0
+    // Consecutive ticks the toast has spent at remainingSecs === 0. If this
+    // crosses the threshold below without a delivery happening, we force a
+    // fresh scheduleDelivery call to recover from any corrupted scheduler
+    // state (e.g. a delivery path that silently no-oped).
+    let zeroTickCount = 0
+    const ZERO_STALL_TICKS = 5
     const showTick = () => {
       const since = idleSince.get(sessionID)
 
@@ -380,10 +390,31 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
       const message = `${label} — sending in ${remainingSecs}s`
 
       void client.tui.showToast({ body: { variant: "info", message, duration: 1200 } }).catch(() => {})
+
+      // Self-correction: if the countdown has been stuck at 0s for several
+      // consecutive ticks, force a reschedule. This is a safety net for any
+      // code path that leaves the toast running without an active delivery
+      // cycle. If inflight is fresh, deliverPendingReminder will gate on it
+      // as usual; if inflight is stale, the TTL check will clear it and
+      // allow a fresh hand-off. Either way we accelerate recovery compared
+      // to waiting for the idle poll's heartbeat interval.
+      if (remainingSecs === 0) {
+        zeroTickCount++
+        if (zeroTickCount >= ZERO_STALL_TICKS) {
+          zeroTickCount = 0
+          writePluginRuntimeState({
+            phase: "toast-countdown-stalled",
+            lastSessionId: sessionID,
+          })
+          scheduleDelivery(sessionID)
+        }
+      } else {
+        zeroTickCount = 0
+      }
     }
 
     showTick()
-    const timer = setInterval(showTick, 1000)
+    const timer = setInterval(showTick, toastTickIntervalMs)
     if (typeof timer === "object" && "unref" in timer) timer.unref()
     toastTimers.set(sessionID, timer)
   }

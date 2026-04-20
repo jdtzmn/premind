@@ -210,8 +210,8 @@ describe("reactive session re-attach", () => {
       events: [{} as never],
     }
     let pendingBatchRef: typeof pendingBatch | null = pendingBatch
-    daemon.getPendingReminder = async () => ({ batch: pendingBatchRef })
-    daemon.ackReminder = async ({ state }: { state: string; batchId: string; sessionId: string }) => {
+    ;(daemon as unknown as { getPendingReminder: () => Promise<unknown> }).getPendingReminder = async () => ({ batch: pendingBatchRef })
+    ;(daemon as unknown as { ackReminder: (p: { state: string }) => Promise<unknown> }).ackReminder = async ({ state }: { state: string }) => {
       if (state === "handed_off" || state === "confirmed") pendingBatchRef = null
     }
 

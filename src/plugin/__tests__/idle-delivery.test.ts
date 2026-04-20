@@ -227,7 +227,7 @@ describe("idle delivery threshold", () => {
       events: [{} as never], // non-empty so the toast reflects a real count
     })
     // Inject the session into debugStatus so bootstrap notices it.
-    daemon.debugStatus = async () => ({
+    ;(daemon as unknown as { debugStatus: () => Promise<unknown> }).debugStatus = async () => ({
       daemon: {},
       activeClients: 1,
       activeSessions: 1,
