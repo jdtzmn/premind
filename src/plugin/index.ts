@@ -143,11 +143,13 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
   }, lease.heartbeatMs ?? PREMIND_CLIENT_HEARTBEAT_MS)
   if (typeof heartbeat.unref === "function") heartbeat.unref()
 
-  const attachSession = async (sessionID: string) => {
+  const attachSession = async (sessionID: string, trigger: "created" | "reattach" = "created"): Promise<boolean> => {
     const session = await client.session.get({ path: { id: sessionID } })
     const sessionData = session.data
     const git = await gitDetector(root)
-    if (sessionData?.parentID) return
+    // Premind only tracks primary (non-child) sessions. Child sessions (subagent,
+    // task, etc.) inherit their parent's reminder stream via the parent session.
+    if (sessionData?.parentID) return false
 
     await daemon.registerSession({
       sessionId: sessionID,
@@ -158,11 +160,57 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
       busyState: "idle",
     })
     lastPrimarySessionId = sessionID
-    writePluginRuntimeState({ phase: "session-attached", lastSessionId: sessionID })
+    writePluginRuntimeState({
+      phase: trigger === "reattach" ? "session-reattached" : "session-attached",
+      lastSessionId: sessionID,
+    })
+    return true
   }
 
   const isSessionNotFound = (error: unknown) =>
     error instanceof Error && error.message.startsWith("SESSION_NOT_FOUND")
+
+  // Reactive re-attach: when a daemon call reports SESSION_NOT_FOUND for a session
+  // the plugin DID observe an opencode event for, the session almost certainly
+  // exists in opencode but not in premind's DB (e.g. opencode resumed a past
+  // session, or the daemon's DB was wiped). Re-attach and retry once.
+  //
+  // Returns true if the initial call or retry succeeded. Returns false if the
+  // session is a child session (attachSession deliberately skips parented sessions)
+  // or if re-attach itself failed. Callers can use the boolean to decide whether
+  // to continue with session-scoped bookkeeping.
+  const withReattach = async (sessionID: string, fn: () => Promise<unknown>): Promise<boolean> => {
+    try {
+      await fn()
+      return true
+    } catch (error) {
+      if (!isSessionNotFound(error)) throw error
+      let attached: boolean
+      try {
+        attached = await attachSession(sessionID, "reattach")
+      } catch (attachError) {
+        writePluginRuntimeState({
+          phase: "session-reattach-failed",
+          lastSessionId: sessionID,
+          error: attachError instanceof Error ? attachError.message : String(attachError),
+        })
+        return false
+      }
+      // attachSession returns false when the session is a child (parentID set) —
+      // don't retry; premind intentionally ignores child sessions.
+      if (!attached) return false
+      try {
+        await fn()
+        return true
+      } catch (retryError) {
+        // If the retry still hits SESSION_NOT_FOUND, something raced (e.g. the
+        // session was unregistered between our registerSession and the retry).
+        // Swallow quietly.
+        if (isSessionNotFound(retryError)) return false
+        throw retryError
+      }
+    }
+  }
 
   // Attempt immediate delivery of a pending reminder for a session.
   // Does nothing if no batch exists or if one is already in-flight.
@@ -364,13 +412,12 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
 
   const handleSessionIdle = async (sessionID: string) => {
     const git = await gitDetector(root)
-    try {
-      await daemon.updateSessionState({ sessionId: sessionID, busyState: "idle", repo: git.repo, branch: git.branch })
-    } catch (error) {
-      // Session may not be registered (e.g. child session, or created event missed). Skip silently.
-      if (isSessionNotFound(error)) return
-      throw error
-    }
+    const ok = await withReattach(sessionID, () =>
+      daemon.updateSessionState({ sessionId: sessionID, busyState: "idle", repo: git.repo, branch: git.branch }),
+    )
+    // withReattach returns false if the session is a child (attachSession bailed)
+    // or if re-attach itself failed; in either case there is no idle state to manage.
+    if (!ok) return
 
     // Record idle start time if not already set, then schedule threshold-based delivery.
     if (!idleSince.has(sessionID)) {
@@ -407,12 +454,12 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
   }
 
   const handlePauseCommand = async (sessionID: string, inputRef?: { agent?: string; model?: { providerID: string; modelID: string } }) => {
-    await daemon.pauseSession(sessionID)
+    await withReattach(sessionID, () => daemon.pauseSession(sessionID))
     await injectResponse(sessionID, `premind paused for session ${sessionID}`, inputRef)
   }
 
   const handleResumeCommand = async (sessionID: string, inputRef?: { agent?: string; model?: { providerID: string; modelID: string } }) => {
-    await daemon.resumeSession(sessionID)
+    await withReattach(sessionID, () => daemon.resumeSession(sessionID))
     await injectResponse(sessionID, `premind resumed for session ${sessionID}`, inputRef)
   }
 
@@ -501,7 +548,7 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
         async execute(_args, ctx) {
           const sessionId = ctx.sessionID ?? lastPrimarySessionId
           if (!sessionId) return "premind pause failed: no active session"
-          await daemon.pauseSession(sessionId)
+          await withReattach(sessionId, () => daemon.pauseSession(sessionId))
           return `premind paused for session ${sessionId}`
         },
       }),
@@ -511,7 +558,7 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
         async execute(_args, ctx) {
           const sessionId = ctx.sessionID ?? lastPrimarySessionId
           if (!sessionId) return "premind resume failed: no active session"
-          await daemon.resumeSession(sessionId)
+          await withReattach(sessionId, () => daemon.resumeSession(sessionId))
           return `premind resumed for session ${sessionId}`
         },
       }),
@@ -581,9 +628,9 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
       if (event.type === "session.status") {
         const statusType = (event.properties as Record<string, any>)?.status?.type
         if (statusType === "busy" || statusType === "retry") {
-          await daemon.updateSessionState({ sessionId: sessionID, busyState: "busy" }).catch((error) => {
-            if (!isSessionNotFound(error)) throw error
-          })
+          await withReattach(sessionID, () =>
+            daemon.updateSessionState({ sessionId: sessionID, busyState: "busy" }),
+          )
           cancelDelivery(sessionID)
         }
         if (statusType === "idle") {
@@ -639,9 +686,11 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
         return
       }
 
-      await daemon.updateSessionState({ sessionId: input.sessionID, busyState: "busy" }).catch((error) => {
-        if (!isSessionNotFound(error)) throw error
-      })
+      // Mark the session busy. If the session isn't registered yet (e.g. opencode
+      // resumed a past session, or the daemon DB was wiped), re-attach and retry.
+      await withReattach(input.sessionID, () =>
+        daemon.updateSessionState({ sessionId: input.sessionID, busyState: "busy" }),
+      )
       cancelDelivery(input.sessionID)
     },
   }
