@@ -15,7 +15,7 @@
     "build": "tsc -p tsconfig.json",
     "check": "tsc -p tsconfig.json --noEmit",
     "daemon": "tsx src/daemon/index.ts",
-    "test": "node --import tsx --test src/daemon/github/diff.test.ts src/daemon/github/graphql.test.ts src/daemon/github/http.test.ts src/daemon/github/ratelimit.test.ts src/daemon/persistence/store.test.ts src/daemon/watchers/adaptive-schedule.test.ts src/daemon/watchers/integration.test.ts src/daemon/watchers/poll-scheduler.test.ts src/daemon/reminders/detail-files.test.ts src/plugin/__tests__/commands.test.ts src/plugin/__tests__/compatibility.test.ts src/plugin/__tests__/debug-state.test.ts src/plugin/__tests__/idle-delivery.test.ts src/plugin/__tests__/packaging.test.ts",
+    "test": "node --import tsx --test src/daemon/github/diff.test.ts src/daemon/github/graphql.test.ts src/daemon/github/http.test.ts src/daemon/github/ratelimit.test.ts src/daemon/persistence/store.test.ts src/daemon/watchers/adaptive-schedule.test.ts src/daemon/watchers/disable-gate.test.ts src/daemon/watchers/integration.test.ts src/daemon/watchers/poll-scheduler.test.ts src/daemon/reminders/detail-files.test.ts src/plugin/__tests__/commands.test.ts src/plugin/__tests__/compatibility.test.ts src/plugin/__tests__/debug-state.test.ts src/plugin/__tests__/idle-delivery.test.ts src/plugin/__tests__/packaging.test.ts",
     "test:compat": "node --import tsx --test src/plugin/__tests__/compatibility.test.ts",
     "test:live": "node --import tsx src/test/live-validation.ts",
     "test:live:contract": "node --import tsx src/test/live-validation.ts --contract-only"

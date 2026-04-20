@@ -6,6 +6,7 @@ import { BranchDiscoveryWatcher } from "./watchers/branch-discovery.ts"
 import { PullRequestWatcher } from "./watchers/pr-watcher.ts"
 import { AdaptiveSchedule } from "./watchers/adaptive-schedule.ts"
 import { PollScheduler } from "./watchers/poll-scheduler.ts"
+import { createDisableGatedTick } from "./watchers/disable-gate.ts"
 import { DetailFileWriter } from "./reminders/detail-files.ts"
 
 const logger = createLogger("daemon")
@@ -39,13 +40,13 @@ async function main() {
 
   const discoveryScheduler = new PollScheduler(
     "branch-discovery",
-    () => discoveryWatcher.tick(),
+    createDisableGatedTick("branch-discovery", server.store, () => discoveryWatcher.tick(), logger),
     { baseIntervalMs: 60_000, maxIntervalMs: 180_000, jitterFactor: 0.25 },
   )
 
   const prScheduler = new PollScheduler(
     "pr-watcher",
-    () => pullRequestWatcher.tick(),
+    createDisableGatedTick("pr-watcher", server.store, () => pullRequestWatcher.tick(), logger),
     { baseIntervalMs: 20_000, maxIntervalMs: 120_000, jitterFactor: 0.2 },
   )
 
