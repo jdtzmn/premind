@@ -8,6 +8,7 @@ import { BranchDiscoveryWatcher } from "./branch-discovery.ts"
 import { PullRequestWatcher } from "./pr-watcher.ts"
 import type { FindOpenPullRequestResult, GitHubClientLike, PullRequestSnapshotResult, PullRequestSummary } from "../github/client.ts"
 import type { PullRequestSnapshot } from "../github/types.ts"
+import { AdaptiveSchedule } from "./adaptive-schedule.ts"
 
 const tempPaths: string[] = []
 
@@ -281,6 +282,69 @@ describe("watcher integration", () => {
     github.pushBranchNotModified('W/"branch-2"')
     await watcher.tick()
     assert.equal(store.getEtag("branch.pulls", "acme/repo#feature/etag"), 'W/"branch-2"')
+
+    store.close()
+  })
+
+  test("PR watcher skips fetches for quiet PRs until the active tier elapses", async () => {
+    const store = createStore()
+    const github = new FixtureGitHubClient()
+    // Tight tiers so the test runs fast.
+    const schedule = new AdaptiveSchedule({
+      tiers: [
+        { sinceMs: 1_000, intervalMs: 100 },
+        { sinceMs: 5_000, intervalMs: 500 },
+      ],
+      idleIntervalMs: 2_000,
+    })
+    const prWatcher = new PullRequestWatcher(store, github, { schedule })
+
+    store.registerClient("client-adap", { pid: 77, projectRoot: "/tmp" })
+    store.registerSession({
+      clientId: "client-adap",
+      sessionId: "session-adap",
+      repo: "acme/repo",
+      branch: "feature/test",
+      isPrimary: true,
+      status: "active",
+      busyState: "idle",
+    })
+    store.recordBranchAssociation("acme/repo", "feature/test", 42)
+
+    // t=0: first poll — always runs, gets initial snapshot.
+    github.pushSnapshot(makeSnapshot(), 'W/"v1"')
+    await prWatcher.tick(0)
+    assert.equal(github.results.length - 1 /* results[0] consumed */, 0)
+
+    // t=50ms: active tier says 100ms; should be skipped (no fetch issued).
+    await prWatcher.tick(50)
+    // If a fetch had been issued, the fixture would throw "No more fixture results".
+
+    // t=150ms: 100ms elapsed → due. Fixture returns 304.
+    github.pushNotModified('W/"v1"')
+    await prWatcher.tick(150)
+
+    // t=200ms: still too soon.
+    await prWatcher.tick(200)
+
+    // t=260ms: due again (100ms past 150). Fixture returns a real change — activity!
+    github.pushSnapshot(
+      makeSnapshot({
+        issueComments: [{ id: 9001, body: "new!", user: { login: "reviewer" } }],
+      }),
+      'W/"v2"',
+    )
+    await prWatcher.tick(260)
+
+    // Because activity just landed, we re-enter the active tier: 100ms from now.
+    await prWatcher.tick(300) // skipped
+    github.pushNotModified('W/"v2"')
+    await prWatcher.tick(370) // due again (110ms after last check at 260)
+
+    // Confirm we emitted the comment event.
+    const events = store.listUndeliveredEvents("session-adap")
+    const kinds = events.map((event) => event.kind)
+    assert.ok(kinds.includes("issue_comment.created"), `expected issue_comment.created in ${JSON.stringify(kinds)}`)
 
     store.close()
   })

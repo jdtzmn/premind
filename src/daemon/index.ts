@@ -4,6 +4,7 @@ import { IpcServer } from "./ipc/server.ts"
 import { GitHubClient } from "./github/client.ts"
 import { BranchDiscoveryWatcher } from "./watchers/branch-discovery.ts"
 import { PullRequestWatcher } from "./watchers/pr-watcher.ts"
+import { AdaptiveSchedule } from "./watchers/adaptive-schedule.ts"
 import { PollScheduler } from "./watchers/poll-scheduler.ts"
 import { DetailFileWriter } from "./reminders/detail-files.ts"
 
@@ -13,7 +14,10 @@ async function main() {
   const server = new IpcServer()
   const github = new GitHubClient()
   const discoveryWatcher = new BranchDiscoveryWatcher(server.store, github)
-  const pullRequestWatcher = new PullRequestWatcher(server.store, github)
+  // Adaptive per-PR scheduling: active PRs poll every 20s; quiet PRs stretch to
+  // 5 minutes. Default tiers in AdaptiveSchedule match the documented cadence.
+  const prSchedule = new AdaptiveSchedule()
+  const pullRequestWatcher = new PullRequestWatcher(server.store, github, { schedule: prSchedule })
 
   const recovery = server.store.recoverFromRestart()
   logger.info("startup recovery", {
