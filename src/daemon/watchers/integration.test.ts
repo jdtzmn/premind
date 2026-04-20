@@ -6,7 +6,7 @@ import { afterEach, describe, test } from "node:test"
 import { StateStore } from "../persistence/store.ts"
 import { BranchDiscoveryWatcher } from "./branch-discovery.ts"
 import { PullRequestWatcher } from "./pr-watcher.ts"
-import type { GitHubClientLike, PullRequestSnapshotResult, PullRequestSummary } from "../github/client.ts"
+import type { FindOpenPullRequestResult, GitHubClientLike, PullRequestSnapshotResult, PullRequestSummary } from "../github/client.ts"
 import type { PullRequestSnapshot } from "../github/types.ts"
 
 const tempPaths: string[] = []
@@ -27,13 +27,31 @@ afterEach(() => {
 
 type FixtureResult = { kind: "ok"; snapshot: PullRequestSnapshot; etag?: string | null } | { kind: "not_modified"; etag: string | null } | { kind: "not_found" }
 
+type BranchFixture = { kind: "ok"; pr: PullRequestSummary | null; etag?: string | null } | { kind: "not_modified"; etag: string | null }
+
 class FixtureGitHubClient implements GitHubClientLike {
   prForBranch: PullRequestSummary | null = null
+  branchResults: BranchFixture[] = []
   results: FixtureResult[] = []
+  lastBranchEtag: string | null | undefined = undefined
   private resultIndex = 0
+  private branchIndex = 0
 
-  async findOpenPullRequestForBranch() {
-    return this.prForBranch
+  async findOpenPullRequestForBranch(
+    _repo: string,
+    _branch: string,
+    context?: { etag?: string | null },
+  ): Promise<FindOpenPullRequestResult> {
+    this.lastBranchEtag = context?.etag ?? null
+    if (this.branchIndex < this.branchResults.length) {
+      const next = this.branchResults[this.branchIndex++]
+      if (next.kind === "ok") {
+        return { kind: "ok", pr: next.pr, etag: next.etag ?? null }
+      }
+      return next
+    }
+    // Fallback to the legacy `prForBranch` field for older tests that set it.
+    return { kind: "ok", pr: this.prForBranch, etag: null }
   }
 
   async fetchPullRequestSnapshot(): Promise<PullRequestSnapshotResult> {
@@ -52,6 +70,14 @@ class FixtureGitHubClient implements GitHubClientLike {
 
   pushNotModified(etag: string | null = null) {
     this.results.push({ kind: "not_modified", etag })
+  }
+
+  pushBranchResult(pr: PullRequestSummary | null, etag: string | null = null) {
+    this.branchResults.push({ kind: "ok", pr, etag })
+  }
+
+  pushBranchNotModified(etag: string | null = null) {
+    this.branchResults.push({ kind: "not_modified", etag })
   }
 }
 
@@ -219,6 +245,42 @@ describe("watcher integration", () => {
     assert.equal(store.buildReminderBatch("session-a"), null)
     const stillPendingB = store.buildReminderBatch("session-b")
     assert.ok(stillPendingB)
+
+    store.close()
+  })
+
+  test("branch discovery stores ETag, sends If-None-Match, and short-circuits on 304", async () => {
+    const store = createStore()
+    const github = new FixtureGitHubClient()
+    const watcher = new BranchDiscoveryWatcher(store, github)
+
+    store.registerClient("client-be", { pid: 11, projectRoot: "/tmp" })
+    store.registerSession({
+      clientId: "client-be",
+      sessionId: "session-be",
+      repo: "acme/repo",
+      branch: "feature/etag",
+      isPrimary: true,
+      status: "active",
+      busyState: "idle",
+    })
+
+    // Tick 1: first real response, returns etag.
+    github.pushBranchResult(null, 'W/"branch-1"')
+    await watcher.tick()
+    assert.equal(github.lastBranchEtag, null, "first poll should send no If-None-Match")
+    assert.equal(store.getEtag("branch.pulls", "acme/repo#feature/etag"), 'W/"branch-1"')
+
+    // Tick 2: server returns 304, etag preserved.
+    github.pushBranchNotModified('W/"branch-1"')
+    await watcher.tick()
+    assert.equal(github.lastBranchEtag, 'W/"branch-1"', "subsequent poll should send If-None-Match")
+    assert.equal(store.getEtag("branch.pulls", "acme/repo#feature/etag"), 'W/"branch-1"')
+
+    // Tick 3: server rotates etag on 304 — we persist the new one.
+    github.pushBranchNotModified('W/"branch-2"')
+    await watcher.tick()
+    assert.equal(store.getEtag("branch.pulls", "acme/repo#feature/etag"), 'W/"branch-2"')
 
     store.close()
   })

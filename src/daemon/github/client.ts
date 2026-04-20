@@ -12,7 +12,11 @@ export type PullRequestSummary = {
 }
 
 export type GitHubClientLike = {
-  findOpenPullRequestForBranch(repo: string, branch: string): Promise<PullRequestSummary | null>
+  findOpenPullRequestForBranch(
+    repo: string,
+    branch: string,
+    context?: FindOpenPullRequestContext,
+  ): Promise<FindOpenPullRequestResult>
   fetchPullRequestSnapshot(
     repo: string,
     prNumber: number,
@@ -32,6 +36,15 @@ export type PullRequestSnapshotResult =
   | { kind: "ok"; snapshot: PullRequestSnapshot; etag: string | null }
   | { kind: "not_modified"; etag: string | null }
   | { kind: "not_found" }
+
+/** Caller-supplied ETag for conditional branch-discovery polls. */
+export type FindOpenPullRequestContext = {
+  etag?: string | null
+}
+
+export type FindOpenPullRequestResult =
+  | { kind: "ok"; pr: PullRequestSummary | null; etag: string | null }
+  | { kind: "not_modified"; etag: string | null }
 
 export type GitHubClientOptions = {
   http?: GitHubHttpClient
@@ -62,22 +75,38 @@ export class GitHubClient implements GitHubClientLike {
     this.rateLimit = this.http.rateLimit
   }
 
-  async findOpenPullRequestForBranch(repo: string, branch: string): Promise<PullRequestSummary | null> {
+  async findOpenPullRequestForBranch(
+    repo: string,
+    branch: string,
+    context: FindOpenPullRequestContext = {},
+  ): Promise<FindOpenPullRequestResult> {
     const [owner] = repo.split("/")
-    if (!owner || !branch || branch === "HEAD" || branch === "unknown") return null
+    if (!owner || !branch || branch === "HEAD" || branch === "unknown") {
+      return { kind: "ok", pr: null, etag: null }
+    }
 
     const path = `repos/${repo}/pulls?head=${encodeURIComponent(`${owner}:${branch}`)}&state=open&per_page=1`
-    const response = await this.http.get<PullsListResponse>(path)
-    if (response.kind !== "ok") return null
+    const response = await this.http.get<PullsListResponse>(path, {
+      etag: context.etag ?? undefined,
+    })
+
+    if (response.kind === "not_modified") {
+      return { kind: "not_modified", etag: response.etag }
+    }
 
     const first = response.data[0]
-    if (!first) return null
+    if (!first) return { kind: "ok", pr: null, etag: response.etag }
+
     return {
-      number: first.number,
-      title: first.title,
-      url: first.html_url,
-      draft: first.draft,
-      state: first.state,
+      kind: "ok",
+      pr: {
+        number: first.number,
+        title: first.title,
+        url: first.html_url,
+        draft: first.draft,
+        state: first.state,
+      },
+      etag: response.etag,
     }
   }
 

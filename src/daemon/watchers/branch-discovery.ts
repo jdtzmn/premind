@@ -2,6 +2,10 @@ import { createLogger } from "../logging/logger.ts"
 import { StateStore } from "../persistence/store.ts"
 import type { GitHubClientLike } from "../github/client.ts"
 
+const BRANCH_PULLS_ETAG_SCOPE = "branch.pulls"
+
+const etagKey = (repo: string, branch: string) => `${repo}#${branch}`
+
 export class BranchDiscoveryWatcher {
   private readonly logger = createLogger("daemon.branch-discovery")
 
@@ -14,7 +18,25 @@ export class BranchDiscoveryWatcher {
     const targets = this.store.listBranchWatchTargets(now)
     for (const target of targets) {
       try {
-        const pr = await this.github.findOpenPullRequestForBranch(target.repo, target.branch)
+        const cachedEtag = this.store.getEtag(BRANCH_PULLS_ETAG_SCOPE, etagKey(target.repo, target.branch))
+        const result = await this.github.findOpenPullRequestForBranch(target.repo, target.branch, {
+          etag: cachedEtag,
+        })
+
+        if (result.kind === "not_modified") {
+          // Nothing changed on GitHub's side. If the server rotated the etag we still persist it.
+          if (result.etag && result.etag !== cachedEtag) {
+            this.store.saveEtag(BRANCH_PULLS_ETAG_SCOPE, etagKey(target.repo, target.branch), result.etag, now)
+          }
+          continue
+        }
+
+        // result.kind === "ok"
+        if (result.etag !== null) {
+          this.store.saveEtag(BRANCH_PULLS_ETAG_SCOPE, etagKey(target.repo, target.branch), result.etag, now)
+        }
+
+        const pr = result.pr
         this.store.recordBranchAssociation(target.repo, target.branch, pr?.number ?? null, now)
 
         if (!pr) continue
