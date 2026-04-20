@@ -392,4 +392,43 @@ describe("watcher integration", () => {
 
     store.close()
   })
+
+  test("reapStaleSessions drops watcher targets so PR watcher stops polling closed sessions", async () => {
+    const store = createStore()
+    const github = new FixtureGitHubClient()
+    const prWatcher = new PullRequestWatcher(store, github)
+    const threshold = 6 * 60 * 60 * 1000
+    const now = 10_000_000_000
+
+    store.registerClient("client-reap", { pid: 99, projectRoot: "/tmp" })
+    // A stale session (last activity older than threshold) attached to a PR.
+    store.registerSession(
+      {
+        clientId: "client-reap",
+        sessionId: "session-stale",
+        repo: "acme/repo",
+        branch: "feature/stale",
+        isPrimary: true,
+        status: "active",
+        busyState: "idle",
+      },
+      now - threshold - 10_000,
+    )
+    store.recordBranchAssociation("acme/repo", "feature/stale", 42, now - threshold - 10_000)
+
+    // Before reap: PR watcher sees one target.
+    const beforeTargets = store.listPrWatchTargets(now - threshold - 5_000)
+    assert.equal(beforeTargets.length, 1)
+
+    // Reap the stale session.
+    const result = store.reapStaleSessions(threshold, now)
+    assert.equal(result.reaped, 1)
+
+    // After reap: no targets to poll, so the PR watcher's tick makes no fetches.
+    await prWatcher.tick(now)
+    // FixtureGitHubClient would throw "No more fixture results" if any fetch were issued.
+    assert.equal(store.listPrWatchTargets(now).length, 0)
+
+    store.close()
+  })
 })

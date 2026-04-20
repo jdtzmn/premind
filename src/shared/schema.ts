@@ -147,6 +147,8 @@ export const debugStatusResponseSchema = z
     activeClients: z.number().int().nonnegative(),
     activeSessions: z.number().int().nonnegative(),
     activeWatchers: z.number().int().nonnegative(),
+    lastReapAt: z.number().int().nullable(),
+    lastReapCount: z.number().int().nonnegative(),
     sessions: z.array(
       z
         .object({

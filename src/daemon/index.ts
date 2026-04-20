@@ -1,4 +1,4 @@
-import { PREMIND_IDLE_SHUTDOWN_GRACE_MS } from "../shared/constants.ts"
+import { PREMIND_IDLE_SHUTDOWN_GRACE_MS, PREMIND_SESSION_STALE_MS } from "../shared/constants.ts"
 import { createLogger } from "./logging/logger.ts"
 import { IpcServer } from "./ipc/server.ts"
 import { GitHubClient } from "./github/client.ts"
@@ -10,6 +10,8 @@ import { createDisableGatedTick } from "./watchers/disable-gate.ts"
 import { DetailFileWriter } from "./reminders/detail-files.ts"
 
 const logger = createLogger("daemon")
+
+const STALENESS_SWEEP_INTERVAL_MS = 5 * 60 * 1000
 
 async function main() {
   const server = new IpcServer()
@@ -28,6 +30,18 @@ async function main() {
     recoveredBranchWatchers: recovery.recoveredBranchWatchers,
     recoveredPrWatchers: recovery.recoveredPrWatchers,
   })
+
+  // Reap sessions whose last_activity_at is older than the staleness threshold.
+  // Runs once at startup to clean up any backlog carried across daemon restarts,
+  // and periodically while the daemon is up.
+  const startupReap = server.store.reapStaleSessions(PREMIND_SESSION_STALE_MS)
+  if (startupReap.reaped > 0 || startupReap.oldestAgeMs !== null) {
+    logger.info("startup reap", {
+      reaped: startupReap.reaped,
+      oldestAgeMs: startupReap.oldestAgeMs,
+      thresholdMs: PREMIND_SESSION_STALE_MS,
+    })
+  }
 
   // Run cache cleanup on startup.
   const detailFiles = new DetailFileWriter()
@@ -77,9 +91,22 @@ async function main() {
   discoveryScheduler.start()
   prScheduler.start()
 
+  const reapInterval = setInterval(() => {
+    const result = server.store.reapStaleSessions(PREMIND_SESSION_STALE_MS)
+    if (result.reaped > 0) {
+      logger.info("reaped stale sessions", {
+        reaped: result.reaped,
+        oldestAgeMs: result.oldestAgeMs,
+        thresholdMs: PREMIND_SESSION_STALE_MS,
+      })
+    }
+  }, STALENESS_SWEEP_INTERVAL_MS)
+  if (typeof reapInterval.unref === "function") reapInterval.unref()
+
   const shutdownCheck = setInterval(async () => {
     if (!server.shouldShutdown()) return
     clearInterval(shutdownCheck)
+    clearInterval(reapInterval)
     discoveryScheduler.stop()
     prScheduler.stop()
     logger.info("graceful shutdown", { reason: "no_active_clients_or_sessions" })
@@ -89,6 +116,7 @@ async function main() {
 
   const cleanup = async () => {
     clearInterval(shutdownCheck)
+    clearInterval(reapInterval)
     discoveryScheduler.stop()
     prScheduler.stop()
     await server.close()

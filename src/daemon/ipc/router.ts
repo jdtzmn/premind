@@ -61,6 +61,8 @@ export class Router {
             activeClients: this.store.countActiveClients(),
             activeSessions: this.store.countActiveSessions(),
             activeWatchers: this.store.countActiveWatchers(),
+            lastReapAt: this.store.getLastReapAt(),
+            lastReapCount: this.store.getLastReapCount(),
             sessions: this.store.listSessionSummaries(),
           }),
         )

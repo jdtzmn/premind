@@ -35,7 +35,7 @@ const makeDaemon = (initialBatch: PendingBatch = {
       acknowledgements.push({ batchId, state })
       if (state === "handed_off" || state === "confirmed") pendingBatch = null
     },
-    debugStatus: async () => ({ daemon: {}, activeClients: 0, activeSessions: 0, activeWatchers: 0, sessions: [] }),
+    debugStatus: async () => ({ daemon: {}, activeClients: 0, activeSessions: 0, activeWatchers: 0, lastReapAt: null, lastReapCount: 0, sessions: [] }),
     // Test helpers
     _acknowledgements: acknowledgements,
     _setPendingBatch: (b: PendingBatch) => { pendingBatch = b },

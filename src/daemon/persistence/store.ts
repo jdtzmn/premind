@@ -24,6 +24,7 @@ type SessionRow = {
   status: "active" | "paused" | "closed"
   busy_state: "busy" | "idle"
   last_delivered_event_seq: number
+  last_activity_at: number
 }
 
 type ReminderRow = {
@@ -57,6 +58,8 @@ const priorityRank: Record<ReminderEvent["priority"], number> = {
 export class StateStore {
   private readonly db: DatabaseSync
   private readonly detailFiles = new DetailFileWriter()
+  private lastReapAt: number | null = null
+  private lastReapCount = 0
 
   constructor(dbPath = PREMIND_DB_PATH) {
     fs.mkdirSync(path.dirname(dbPath), { recursive: true })
@@ -138,8 +141,8 @@ export class StateStore {
     this.db
       .prepare(
         `
-          INSERT INTO sessions (session_id, client_id, repo, branch, pr_number, is_primary, status, busy_state, last_delivered_event_seq, created_at, updated_at)
-          VALUES (:sessionId, :clientId, :repo, :branch, NULL, :isPrimary, :status, :busyState, 0, :now, :now)
+          INSERT INTO sessions (session_id, client_id, repo, branch, pr_number, is_primary, status, busy_state, last_delivered_event_seq, last_activity_at, created_at, updated_at)
+          VALUES (:sessionId, :clientId, :repo, :branch, NULL, :isPrimary, :status, :busyState, 0, :now, :now, :now)
           ON CONFLICT(session_id) DO UPDATE SET
             client_id = excluded.client_id,
             repo = excluded.repo,
@@ -147,6 +150,7 @@ export class StateStore {
             is_primary = excluded.is_primary,
             status = excluded.status,
             busy_state = excluded.busy_state,
+            last_activity_at = excluded.last_activity_at,
             updated_at = excluded.updated_at
         `,
       )
@@ -176,6 +180,7 @@ export class StateStore {
               branch = :branch,
               status = :status,
               busy_state = :busyState,
+              last_activity_at = :now,
               updated_at = :now
           WHERE session_id = :sessionId
         `,
@@ -193,6 +198,44 @@ export class StateStore {
   unregisterSession(sessionId: string) {
     this.db.prepare(`DELETE FROM sessions WHERE session_id = ?`).run(sessionId)
     this.db.prepare(`DELETE FROM reminder_batches WHERE session_id = ?`).run(sessionId)
+  }
+
+  /**
+   * Marks any non-closed session whose last_activity_at is older than the
+   * threshold as "closed". Also refreshes watcher counts when any rows were
+   * reaped so the next poll tick reflects reality.
+   *
+   * Records lastReapAt/lastReapCount on every call (including no-op sweeps)
+   * so operators can verify the sweep is actually running.
+   */
+  reapStaleSessions(thresholdMs: number, now = Date.now()): { reaped: number; oldestAgeMs: number | null } {
+    const cutoff = now - thresholdMs
+    const result = this.db
+      .prepare(
+        `UPDATE sessions SET status = 'closed', updated_at = :now WHERE status != 'closed' AND last_activity_at < :cutoff`,
+      )
+      .run({ now, cutoff })
+
+    const reaped = result.changes as number
+    if (reaped > 0) this.refreshWatcherCounts(now)
+
+    const oldestRow = this.db
+      .prepare(`SELECT MIN(last_activity_at) AS oldest FROM sessions WHERE status != 'closed'`)
+      .get() as { oldest: number | null }
+    const oldestAgeMs = oldestRow.oldest === null ? null : now - oldestRow.oldest
+
+    this.lastReapAt = now
+    this.lastReapCount = reaped
+
+    return { reaped, oldestAgeMs }
+  }
+
+  getLastReapAt(): number | null {
+    return this.lastReapAt
+  }
+
+  getLastReapCount(): number {
+    return this.lastReapCount
   }
 
   getSession(sessionId: string) {
@@ -705,6 +748,7 @@ export class StateStore {
         status TEXT NOT NULL,
         busy_state TEXT NOT NULL,
         last_delivered_event_seq INTEGER NOT NULL DEFAULT 0,
+        last_activity_at INTEGER NOT NULL,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       );
