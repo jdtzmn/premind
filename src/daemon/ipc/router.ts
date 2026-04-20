@@ -1,9 +1,12 @@
 import { PREMIND_CLIENT_HEARTBEAT_MS, PREMIND_CLIENT_LEASE_TTL_MS, PREMIND_IDLE_SHUTDOWN_GRACE_MS } from "../../shared/constants.ts"
 import { debugStatusResponseSchema, type AckReminderPayload, type RegisterClientPayload } from "../../shared/schema.ts"
 import type { PremindRequest, PremindResponse } from "../../shared/ipc.ts"
+import { createLogger } from "../logging/logger.ts"
 import { StateStore } from "../persistence/store.ts"
 
 export class Router {
+  private readonly logger = createLogger("daemon.ipc")
+
   constructor(private readonly store: StateStore) {}
 
   handle(request: PremindRequest): PremindResponse {
@@ -18,9 +21,16 @@ export class Router {
       case "releaseClient":
         this.store.releaseClient(request.payload.clientId)
         return this.ok({ released: true })
-      case "registerSession":
-        this.store.registerSession(request.payload)
-        return this.ok({ registered: true })
+      case "registerSession": {
+        const { created } = this.store.registerSession(request.payload)
+        this.logger.info(created ? "session registered" : "session re-registered", {
+          sessionId: request.payload.sessionId,
+          repo: request.payload.repo,
+          branch: request.payload.branch,
+          reattach: !created,
+        })
+        return this.ok({ registered: true, created })
+      }
       case "updateSessionState": {
         const updated = this.store.updateSessionState(request.payload)
         if (!updated) return this.fail("SESSION_NOT_FOUND", `Unknown session: ${request.payload.sessionId}`)

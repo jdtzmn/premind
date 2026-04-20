@@ -137,7 +137,8 @@ export class StateStore {
     this.db.prepare(`DELETE FROM client_leases WHERE expires_at <= ?`).run(now)
   }
 
-  registerSession(payload: RegisterSessionPayload, now = Date.now()) {
+  registerSession(payload: RegisterSessionPayload, now = Date.now()): { created: boolean } {
+    const existing = this.getSession(payload.sessionId)
     this.db
       .prepare(
         `
@@ -160,6 +161,7 @@ export class StateStore {
         now,
       })
     this.touchBranchWatcher(payload.repo, payload.branch, now)
+    return { created: !existing }
   }
 
   updateSessionState(payload: UpdateSessionStatePayload, now = Date.now()) {
@@ -362,9 +364,39 @@ export class StateStore {
       )
       .run({ repo, branch, prNumber, checkedAt })
 
+    // Find sessions whose pr_number is about to change. For any session that is newly
+    // associated with a PR (or switched to a different PR), fast-forward its delivery
+    // cursor past any pre-existing events for that PR. This prevents replaying history
+    // the user has either already seen (re-attach case) or never saw but wouldn't want
+    // dumped at once (stale event log).
+    const sessionsToUpdate = this.db
+      .prepare(
+        `SELECT session_id, pr_number FROM sessions WHERE repo = :repo AND branch = :branch`,
+      )
+      .all({ repo, branch }) as Array<{ session_id: string; pr_number: number | null }>
+
+    let freshCursor = 0
+    if (prNumber !== null) {
+      const row = this.db
+        .prepare(`SELECT MAX(seq) AS maxSeq FROM pr_events WHERE repo = :repo AND pr_number = :prNumber`)
+        .get({ repo, prNumber }) as { maxSeq: number | null } | undefined
+      freshCursor = row?.maxSeq ?? 0
+    }
+
     this.db
       .prepare(`UPDATE sessions SET pr_number = :prNumber, updated_at = :checkedAt WHERE repo = :repo AND branch = :branch`)
       .run({ repo, branch, prNumber, checkedAt })
+
+    if (prNumber !== null && freshCursor > 0) {
+      const advance = this.db.prepare(
+        `UPDATE sessions SET last_delivered_event_seq = :cursor WHERE session_id = :sessionId`,
+      )
+      for (const session of sessionsToUpdate) {
+        if (session.pr_number !== prNumber) {
+          advance.run({ cursor: freshCursor, sessionId: session.session_id })
+        }
+      }
+    }
 
     if (prNumber !== null) {
       this.touchPrWatcher(repo, prNumber, checkedAt)

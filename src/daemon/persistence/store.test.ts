@@ -667,4 +667,163 @@ describe("StateStore", () => {
     assert.equal(store.getLastReapCount(), 1)
     store.close()
   })
+
+  test("registerSession returns {created: true} for a fresh row", () => {
+    const store = createStore()
+    store.registerClient("client-re-1", { pid: 1, projectRoot: "/tmp/project" })
+
+    const result = store.registerSession({
+      clientId: "client-re-1",
+      sessionId: "session-fresh",
+      repo: "acme/repo",
+      branch: "feature/fresh",
+      isPrimary: true,
+      status: "active",
+      busyState: "idle",
+    })
+    assert.deepEqual(result, { created: true })
+
+    store.close()
+  })
+
+  test("registerSession returns {created: false} when re-registering the same session", () => {
+    const store = createStore()
+    store.registerClient("client-re-2", { pid: 2, projectRoot: "/tmp/project" })
+
+    const first = store.registerSession({
+      clientId: "client-re-2",
+      sessionId: "session-reattach",
+      repo: "acme/repo",
+      branch: "feature/reattach",
+      isPrimary: true,
+      status: "active",
+      busyState: "idle",
+    })
+    assert.deepEqual(first, { created: true })
+
+    const second = store.registerSession({
+      clientId: "client-re-2",
+      sessionId: "session-reattach",
+      repo: "acme/repo",
+      branch: "feature/reattach",
+      isPrimary: true,
+      status: "active",
+      busyState: "idle",
+    })
+    assert.deepEqual(second, { created: false })
+
+    store.close()
+  })
+
+  test("recordBranchAssociation on fresh PR with existing events skips replay by advancing cursor", () => {
+    const store = createStore()
+    store.registerClient("client-re-3", { pid: 3, projectRoot: "/tmp/project" })
+
+    // Simulate a prior daemon run having recorded events for PR #42. The session does
+    // not yet exist — these events are historical from the perspective of the session
+    // we're about to attach.
+    store.recordBranchAssociation("acme/repo", "feature/skip-replay", 42)
+    store.insertEvents("acme/repo", 42, [
+      {
+        dedupeKey: "event-1",
+        kind: "issue_comment.created",
+        priority: "high",
+        summary: "Historical event 1",
+        payload: {},
+      },
+      {
+        dedupeKey: "event-2",
+        kind: "issue_comment.created",
+        priority: "high",
+        summary: "Historical event 2",
+        payload: {},
+      },
+    ])
+
+    // Now attach a fresh session to the same branch; recordBranchAssociation runs again
+    // as part of the discovery path.
+    store.registerSession({
+      clientId: "client-re-3",
+      sessionId: "session-skip-replay",
+      repo: "acme/repo",
+      branch: "feature/skip-replay",
+      isPrimary: true,
+      status: "active",
+      busyState: "idle",
+    })
+    store.recordBranchAssociation("acme/repo", "feature/skip-replay", 42)
+
+    // Build a reminder batch — historical events should have been skipped.
+    assert.equal(store.buildReminderBatch("session-skip-replay"), null)
+
+    // New events after association should deliver normally.
+    store.insertEvents("acme/repo", 42, [
+      {
+        dedupeKey: "event-3",
+        kind: "issue_comment.created",
+        priority: "high",
+        summary: "Fresh event after attach",
+        payload: {},
+      },
+    ])
+    const batch = store.buildReminderBatch("session-skip-replay")
+    assert.ok(batch)
+    assert.equal(batch.events.length, 1)
+    assert.equal(batch.events[0].summary, "Fresh event after attach")
+
+    store.close()
+  })
+
+  test("recordBranchAssociation does NOT reset cursor on idempotent re-association", () => {
+    const store = createStore()
+    store.registerClient("client-re-4", { pid: 4, projectRoot: "/tmp/project" })
+
+    store.registerSession({
+      clientId: "client-re-4",
+      sessionId: "session-idempotent",
+      repo: "acme/repo",
+      branch: "feature/idempotent",
+      isPrimary: true,
+      status: "active",
+      busyState: "idle",
+    })
+    store.recordBranchAssociation("acme/repo", "feature/idempotent", 7)
+
+    // Deliver and confirm an event; cursor should advance via ack.
+    store.insertEvents("acme/repo", 7, [
+      {
+        dedupeKey: "evt-a",
+        kind: "issue_comment.created",
+        priority: "high",
+        summary: "Real delivered event",
+        payload: {},
+      },
+    ])
+    const batch = store.buildReminderBatch("session-idempotent")
+    assert.ok(batch)
+    store.ackReminder({
+      batchId: batch!.batchId,
+      sessionId: "session-idempotent",
+      state: "confirmed",
+    })
+
+    // Re-running association with the same PR must NOT roll the cursor backwards or
+    // forwards; subsequent new events must still be delivered.
+    store.recordBranchAssociation("acme/repo", "feature/idempotent", 7)
+    store.insertEvents("acme/repo", 7, [
+      {
+        dedupeKey: "evt-b",
+        kind: "issue_comment.created",
+        priority: "high",
+        summary: "Next event after re-association",
+        payload: {},
+      },
+    ])
+    const nextBatch = store.buildReminderBatch("session-idempotent")
+    assert.ok(nextBatch)
+    assert.equal(nextBatch.events.length, 1)
+    assert.equal(nextBatch.events[0].summary, "Next event after re-association")
+
+    store.close()
+  })
 })
