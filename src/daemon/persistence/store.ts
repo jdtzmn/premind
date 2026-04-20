@@ -315,6 +315,36 @@ export class StateStore {
     return JSON.parse(row.snapshot_json) as PullRequestSnapshot
   }
 
+  /**
+   * ETag cache for conditional GitHub requests. `scope` is a short tag
+   * (e.g. "pr.snapshot", "branch.pulls"); `key` uniquely identifies the
+   * resource within that scope (e.g. `${repo}#${prNumber}`).
+   */
+  getEtag(scope: string, key: string): string | null {
+    const row = this.db
+      .prepare(`SELECT etag FROM etags WHERE scope = ? AND key = ?`)
+      .get(scope, key) as { etag: string } | undefined
+    return row?.etag ?? null
+  }
+
+  saveEtag(scope: string, key: string, etag: string | null, now = Date.now()) {
+    if (etag === null) {
+      this.db.prepare(`DELETE FROM etags WHERE scope = ? AND key = ?`).run(scope, key)
+      return
+    }
+    this.db
+      .prepare(
+        `
+          INSERT INTO etags (scope, key, etag, updated_at)
+          VALUES (:scope, :key, :etag, :now)
+          ON CONFLICT(scope, key) DO UPDATE SET
+            etag = excluded.etag,
+            updated_at = excluded.updated_at
+        `,
+      )
+      .run({ scope, key, etag, now })
+  }
+
   saveSnapshot(repo: string, prNumber: number, snapshot: PullRequestSnapshot) {
     this.db
       .prepare(
@@ -712,6 +742,14 @@ export class StateStore {
         detail_file_path TEXT,
         payload_json TEXT NOT NULL,
         created_at INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS etags (
+        scope TEXT NOT NULL,
+        key TEXT NOT NULL,
+        etag TEXT NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY(scope, key)
       );
     `)
 

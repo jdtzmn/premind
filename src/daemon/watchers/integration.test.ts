@@ -6,7 +6,7 @@ import { afterEach, describe, test } from "node:test"
 import { StateStore } from "../persistence/store.ts"
 import { BranchDiscoveryWatcher } from "./branch-discovery.ts"
 import { PullRequestWatcher } from "./pr-watcher.ts"
-import type { GitHubClientLike, PullRequestSummary } from "../github/client.ts"
+import type { GitHubClientLike, PullRequestSnapshotResult, PullRequestSummary } from "../github/client.ts"
 import type { PullRequestSnapshot } from "../github/types.ts"
 
 const tempPaths: string[] = []
@@ -25,20 +25,33 @@ afterEach(() => {
   }
 })
 
+type FixtureResult = { kind: "ok"; snapshot: PullRequestSnapshot; etag?: string | null } | { kind: "not_modified"; etag: string | null } | { kind: "not_found" }
+
 class FixtureGitHubClient implements GitHubClientLike {
   prForBranch: PullRequestSummary | null = null
-  snapshots: PullRequestSnapshot[] = []
-  private snapshotIndex = 0
+  results: FixtureResult[] = []
+  private resultIndex = 0
 
   async findOpenPullRequestForBranch() {
     return this.prForBranch
   }
 
-  async fetchPullRequestSnapshot() {
-    const snapshot = this.snapshots[this.snapshotIndex]
-    if (!snapshot) throw new Error("No more fixture snapshots")
-    this.snapshotIndex++
-    return snapshot
+  async fetchPullRequestSnapshot(): Promise<PullRequestSnapshotResult> {
+    const next = this.results[this.resultIndex]
+    if (!next) throw new Error("No more fixture results")
+    this.resultIndex++
+    if (next.kind === "ok") {
+      return { kind: "ok", snapshot: next.snapshot, etag: next.etag ?? null }
+    }
+    return next
+  }
+
+  pushSnapshot(snapshot: PullRequestSnapshot, etag: string | null = null) {
+    this.results.push({ kind: "ok", snapshot, etag })
+  }
+
+  pushNotModified(etag: string | null = null) {
+    this.results.push({ kind: "not_modified", etag })
   }
 }
 
@@ -120,7 +133,7 @@ describe("watcher integration", () => {
 
     // Tick 1: initial snapshot.
     const snap1 = makeSnapshot()
-    github.snapshots.push(snap1)
+    github.pushSnapshot(snap1)
     await prWatcher.tick()
 
     // Tick 2: new comment + failing check.
@@ -132,7 +145,7 @@ describe("watcher integration", () => {
         { name: "build", state: "fail", link: "https://ci.example/build" },
       ],
     })
-    github.snapshots.push(snap2)
+    github.pushSnapshot(snap2)
     await prWatcher.tick()
 
     const events = store.listUndeliveredEvents("session-2")
@@ -176,7 +189,7 @@ describe("watcher integration", () => {
     store.recordBranchAssociation("acme/repo", "feature/test", 42)
 
     // Tick 1: initial snapshot — produces pr.snapshot.initialized event.
-    github.snapshots.push(makeSnapshot())
+    github.pushSnapshot(makeSnapshot())
     await prWatcher.tick()
 
     // Drain the initial batch for both sessions so cursors advance past the init event.
@@ -188,7 +201,7 @@ describe("watcher integration", () => {
     store.ackReminder({ batchId: initBatchB.batchId, sessionId: "session-b", state: "confirmed" })
 
     // Tick 2: new review.
-    github.snapshots.push(makeSnapshot({
+    github.pushSnapshot(makeSnapshot({
       reviews: [{ id: 200, state: "APPROVED", body: "LGTM", user: { login: "lead" } }],
     }))
     await prWatcher.tick()
@@ -206,6 +219,50 @@ describe("watcher integration", () => {
     assert.equal(store.buildReminderBatch("session-a"), null)
     const stillPendingB = store.buildReminderBatch("session-b")
     assert.ok(stillPendingB)
+
+    store.close()
+  })
+
+  test("PR watcher stores ETag and short-circuits on 304 not_modified", async () => {
+    const store = createStore()
+    const github = new FixtureGitHubClient()
+    const prWatcher = new PullRequestWatcher(store, github)
+
+    store.registerClient("client-4", { pid: 4, projectRoot: "/tmp" })
+    store.registerSession({
+      clientId: "client-4",
+      sessionId: "session-etag",
+      repo: "acme/repo",
+      branch: "feature/test",
+      isPrimary: true,
+      status: "active",
+      busyState: "idle",
+    })
+    store.recordBranchAssociation("acme/repo", "feature/test", 42)
+
+    // Tick 1: real snapshot with ETag.
+    github.pushSnapshot(makeSnapshot(), 'W/"etag-1"')
+    await prWatcher.tick()
+
+    assert.equal(store.getEtag("pr.snapshot", "acme/repo#42"), 'W/"etag-1"')
+    const eventsAfterFirst = store.listUndeliveredEvents("session-etag")
+    assert.ok(eventsAfterFirst.length > 0, "initial tick should produce init event")
+
+    // Tick 2: 304 not modified. No new events expected.
+    github.pushNotModified('W/"etag-1"')
+    await prWatcher.tick()
+
+    const eventsAfterSecond = store.listUndeliveredEvents("session-etag")
+    assert.equal(
+      eventsAfterSecond.length,
+      eventsAfterFirst.length,
+      "304 should not produce new events",
+    )
+
+    // Tick 3: 304 with a rotated ETag — should be persisted.
+    github.pushNotModified('W/"etag-2"')
+    await prWatcher.tick()
+    assert.equal(store.getEtag("pr.snapshot", "acme/repo#42"), 'W/"etag-2"')
 
     store.close()
   })
