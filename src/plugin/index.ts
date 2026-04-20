@@ -74,6 +74,9 @@ export type PremindPluginDependencies = {
   detectGit?: (cwd: string) => Promise<{ repo: string; branch: string }>
   ensureDaemon?: () => Promise<void>
   idleDeliveryThresholdMs?: number
+  // Overrides the staleness TTL for inflight reminders. Intended for tests;
+  // production always uses the computed default (see inflightStaleTtlMs).
+  inflightStaleTtlMs?: number
 }
 
 const getEventSessionId = (event: { properties?: unknown }) => {
@@ -124,8 +127,17 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
   const daemon = dependencies.createDaemonClient?.() ?? new PremindDaemonClient()
   const lease = await daemon.registerClient(root, "opencode-plugin")
   writePluginRuntimeState({ phase: "client-registered", root, daemonStarted: true, clientRegistered: true })
-  const inflightReminders = new Map<string, string>()
+  // Tracks reminders that have been handed off to opencode but have not yet
+  // had their chat.message confirmation observed. Entries are keyed by session
+  // and carry the hand-off timestamp so stale entries (e.g. prompts whose ack
+  // never arrived because opencode reattached mid-flight) can be cleared.
+  const inflightReminders = new Map<string, { batchId: string; startedAt: number }>()
   let lastPrimarySessionId: string | undefined
+
+  // How long a hand-off may sit without a confirmation before we consider the
+  // inflight entry stale and allow a fresh delivery attempt. Generous relative
+  // to idleDeliveryThreshold so normal ack latency does not trigger it.
+  const inflightStaleTtlMs = dependencies.inflightStaleTtlMs ?? Math.max(60_000, (dependencies.idleDeliveryThresholdMs ?? PREMIND_IDLE_DELIVERY_THRESHOLD_MS) * 2)
 
   // Per-session idle state for threshold-based delivery.
   const idleSince = new Map<string, number>()
@@ -241,9 +253,22 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
   }
 
   // Attempt immediate delivery of a pending reminder for a session.
-  // Does nothing if no batch exists or if one is already in-flight.
+  // Does nothing if no batch exists or if one is already in-flight (unless the
+  // inflight entry is stale, in which case we discard it and retry).
   const deliverPendingReminder = async (sessionID: string) => {
-    if (inflightReminders.has(sessionID)) return
+    const existingInflight = inflightReminders.get(sessionID)
+    if (existingInflight !== undefined) {
+      const age = Date.now() - existingInflight.startedAt
+      if (age < inflightStaleTtlMs) return
+      // Stale hand-off — the chat.message ack never arrived. Clear it and let
+      // the normal delivery path attempt again with a fresh hand-off.
+      inflightReminders.delete(sessionID)
+      writePluginRuntimeState({
+        phase: "inflight-reminder-stale",
+        lastSessionId: sessionID,
+      })
+    }
+
     const pending = await daemon.getPendingReminder(sessionID)
     if (!pending.batch) return
 
@@ -253,7 +278,7 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
       state: "handed_off",
     })
 
-    inflightReminders.set(sessionID, pending.batch.batchId)
+    inflightReminders.set(sessionID, { batchId: pending.batch.batchId, startedAt: Date.now() })
     // Stop countdown toast — delivery is in progress.
     stopToastCountdown(sessionID)
     try {
@@ -719,10 +744,10 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
 
       // Check for reminder confirmation marker.
       const fullText = `${extractText(input)}\n${outputText}`
-      const expectedBatchId = inflightReminders.get(input.sessionID)
-      if (expectedBatchId && fullText.includes(`${REMINDER_MARKER_PREFIX}${expectedBatchId}`)) {
+      const expectedInflight = inflightReminders.get(input.sessionID)
+      if (expectedInflight && fullText.includes(`${REMINDER_MARKER_PREFIX}${expectedInflight.batchId}`)) {
         await daemon.ackReminder({
-          batchId: expectedBatchId,
+          batchId: expectedInflight.batchId,
           sessionId: input.sessionID,
           state: "confirmed",
         })
