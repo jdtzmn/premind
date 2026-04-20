@@ -43,6 +43,11 @@ export class Router {
         return this.ok({ batch: this.store.buildReminderBatch(request.payload.sessionId) })
       case "ackReminder":
         return this.ok(this.handleAckReminder(request.payload))
+      case "setGlobalDisabled":
+        this.store.setGloballyDisabled(request.payload.disabled)
+        return this.ok({ disabled: request.payload.disabled })
+      case "getGlobalDisabled":
+        return this.ok({ disabled: this.store.isGloballyDisabled() })
       case "debugStatus":
         return this.ok(
           debugStatusResponseSchema.parse({
@@ -52,6 +57,7 @@ export class Router {
               leaseTtlMs: PREMIND_CLIENT_LEASE_TTL_MS,
               idleShutdownGraceMs: PREMIND_IDLE_SHUTDOWN_GRACE_MS,
             },
+            globallyDisabled: this.store.isGloballyDisabled(),
             activeClients: this.store.countActiveClients(),
             activeSessions: this.store.countActiveSessions(),
             activeWatchers: this.store.countActiveWatchers(),

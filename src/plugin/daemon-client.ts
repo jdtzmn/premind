@@ -4,6 +4,7 @@ import { PREMIND_PROTOCOL_VERSION, PREMIND_SOCKET_PATH } from "../shared/constan
 import {
   debugStatusResponseSchema,
   getPendingReminderResponseSchema,
+  globalDisabledResponseSchema,
   registerClientResponseSchema,
   responseSchema,
 } from "../shared/ipc.ts"
@@ -114,6 +115,24 @@ export class PremindDaemonClient {
       protocolVersion: PREMIND_PROTOCOL_VERSION,
       payload,
     })
+  }
+
+  async setGlobalDisabled(disabled: boolean) {
+    const response = await this.requestWithRetry({
+      type: "setGlobalDisabled",
+      protocolVersion: PREMIND_PROTOCOL_VERSION,
+      payload: { disabled },
+    })
+    return globalDisabledResponseSchema.parse(response)
+  }
+
+  async getGlobalDisabled() {
+    const response = await this.requestWithRetry({
+      type: "getGlobalDisabled",
+      protocolVersion: PREMIND_PROTOCOL_VERSION,
+      payload: {},
+    })
+    return globalDisabledResponseSchema.parse(response)
   }
 
   async debugStatus() {
