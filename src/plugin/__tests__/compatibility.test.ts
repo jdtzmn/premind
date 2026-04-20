@@ -49,6 +49,8 @@ describe("premind plugin compatibility harness", () => {
         activeClients: 1,
         activeSessions: 1,
         activeWatchers: 1,
+        lastReapAt: null,
+        lastReapCount: 0,
         sessions: [
           {
             sessionId: "session-1",
