@@ -13,6 +13,8 @@ const COMMAND_MARKERS = {
   pause: "[PREMIND_PAUSE]",
   resume: "[PREMIND_RESUME]",
   sendNow: "[PREMIND_SEND_NOW]",
+  disable: "[PREMIND_DISABLE]",
+  enable: "[PREMIND_ENABLE]",
 } as const
 
 const ABORT_SENTINEL = "__PREMIND_HANDLED__"
@@ -28,6 +30,8 @@ type DaemonClientLike = {
   resumeSession: (sessionId: string) => Promise<unknown>
   getPendingReminder: (sessionId: string) => Promise<{ batch: import("../shared/schema.ts").ReminderBatch | null }>
   ackReminder: (payload: import("../shared/schema.ts").AckReminderPayload) => Promise<unknown>
+  setGlobalDisabled: (disabled: boolean) => Promise<{ disabled: boolean }>
+  getGlobalDisabled: () => Promise<{ disabled: boolean }>
   debugStatus: () => Promise<any>
 }
 
@@ -425,6 +429,24 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
     await injectResponse(sessionID, "premind: sending PR updates now", inputRef)
   }
 
+  const handleDisableCommand = async (sessionID: string, inputRef?: { agent?: string; model?: { providerID: string; modelID: string } }) => {
+    await daemon.setGlobalDisabled(true)
+    await injectResponse(
+      sessionID,
+      "premind disabled globally. GitHub polling is stopped across all sessions and projects. Use /premind-enable to resume.",
+      inputRef,
+    )
+  }
+
+  const handleEnableCommand = async (sessionID: string, inputRef?: { agent?: string; model?: { providerID: string; modelID: string } }) => {
+    await daemon.setGlobalDisabled(false)
+    await injectResponse(
+      sessionID,
+      "premind re-enabled globally. GitHub polling will resume on the next scheduler tick.",
+      inputRef,
+    )
+  }
+
   return {
     // Register slash commands via config mutation.
     config: async (configInput: any) => {
@@ -444,6 +466,14 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
       configInput.command["premind-send-now"] = {
         template: COMMAND_MARKERS.sendNow,
         description: "Send pending PR updates to this session immediately without waiting for the idle countdown",
+      }
+      configInput.command["premind-disable"] = {
+        template: COMMAND_MARKERS.disable,
+        description: "Disable premind globally (stops GitHub polling across all sessions and projects)",
+      }
+      configInput.command["premind-enable"] = {
+        template: COMMAND_MARKERS.enable,
+        description: "Re-enable premind globally (resumes GitHub polling)",
       }
 
       // Keep the heartbeat alive for the lifetime of the plugin instance.
@@ -497,6 +527,22 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
           cancelDelivery(sessionId)
           await deliverPendingReminder(sessionId)
           return "premind: sending PR updates now"
+        },
+      }),
+      premind_disable: tool({
+        description: "Disable premind globally. Stops GitHub polling across all sessions and projects; the daemon stays up so sessions keep registering. Useful for avoiding GitHub API rate limits.",
+        args: {},
+        async execute() {
+          await daemon.setGlobalDisabled(true)
+          return "premind disabled globally. GitHub polling is stopped across all sessions and projects."
+        },
+      }),
+      premind_enable: tool({
+        description: "Re-enable premind globally after premind_disable. GitHub polling resumes on the next scheduler tick.",
+        args: {},
+        async execute() {
+          await daemon.setGlobalDisabled(false)
+          return "premind re-enabled globally. GitHub polling will resume on the next scheduler tick."
         },
       }),
       premind_probe: tool({
@@ -570,6 +616,12 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
       }
       if (outputText.includes(COMMAND_MARKERS.sendNow)) {
         await handleSendNowCommand(input.sessionID, inputRef)
+      }
+      if (outputText.includes(COMMAND_MARKERS.disable)) {
+        await handleDisableCommand(input.sessionID, inputRef)
+      }
+      if (outputText.includes(COMMAND_MARKERS.enable)) {
+        await handleEnableCommand(input.sessionID, inputRef)
       }
 
       // Check for reminder confirmation marker.
