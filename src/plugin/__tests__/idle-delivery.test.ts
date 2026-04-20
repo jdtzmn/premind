@@ -217,16 +217,17 @@ describe("idle delivery threshold", () => {
     assert.equal(asyncPrompts.length, 0, "no reminder when no pending batch")
   })
 
-  test("bootstrap: daemon reports an idle session with a pending batch — delivery is scheduled without waiting for idle poll", async () => {
-    // Simulate the opencode-restart scenario: plugin starts fresh, daemon still has
-    // the session registered as idle, and a batch is waiting.
+  test("bootstrap: foreign sessions in daemon.debugStatus are ignored (no toast, no delivery)", async () => {
+    // The daemon's debugStatus.sessions is the GLOBAL session list across all
+    // opencode instances and worktrees. A fresh plugin instance must not act
+    // on any session it has not itself observed, otherwise it would render
+    // toasts for batches belonging to other worktrees.
     const daemon = makeDaemon({
       batchId: "batch-bootstrap",
-      sessionId: "pre-existing-session",
-      reminderText: "<system-reminder>pending at startup</system-reminder>",
-      events: [{} as never], // non-empty so the toast reflects a real count
+      sessionId: "foreign-session",
+      reminderText: "<system-reminder>not ours</system-reminder>",
+      events: [{} as never],
     })
-    // Inject the session into debugStatus so bootstrap notices it.
     ;(daemon as unknown as { debugStatus: () => Promise<unknown> }).debugStatus = async () => ({
       daemon: {},
       activeClients: 1,
@@ -235,17 +236,50 @@ describe("idle delivery threshold", () => {
       lastReapAt: null,
       lastReapCount: 0,
       sessions: [
-        { sessionId: "pre-existing-session", repo: "acme/repo", branch: "feature/test", busyState: "idle" },
+        { sessionId: "foreign-session", repo: "acme/repo", branch: "feature/other", busyState: "idle" },
       ],
     })
 
     const { asyncPrompts } = await makePlugin(daemon)
 
-    // Let the bootstrap microtask + the zero-threshold scheduleDelivery run.
-    // idleDeliveryThresholdMs defaults to TEST_THRESHOLD_MS (200), so wait just past it.
     await sleep(TEST_THRESHOLD_MS + 100)
 
-    assert.equal(asyncPrompts.length, 1, "bootstrap should have delivered the pending batch after threshold")
-    assert.match(asyncPrompts[0].text, /pending at startup/)
+    assert.equal(asyncPrompts.length, 0, "bootstrap must NOT deliver for a session the plugin never observed")
+  })
+
+  test("bootstrap: picks up a pending batch for a session the plugin has already adopted via session.created", async () => {
+    const daemon = makeDaemon({
+      batchId: "batch-adopted",
+      sessionId: "session-1",
+      reminderText: "<system-reminder>adopted"
+        + " and bootstrapped</system-reminder>",
+      events: [{} as never],
+    })
+    // Inject into debugStatus so bootstrap CAN discover it, but the session
+    // also must be adopted via a session.created event for bootstrap to act.
+    ;(daemon as unknown as { debugStatus: () => Promise<unknown> }).debugStatus = async () => ({
+      daemon: {},
+      activeClients: 1,
+      activeSessions: 1,
+      activeWatchers: 0,
+      lastReapAt: null,
+      lastReapCount: 0,
+      sessions: [
+        { sessionId: "session-1", repo: "acme/repo", branch: "feature/test", busyState: "idle" },
+      ],
+    })
+
+    const { runtime, asyncPrompts } = await makePlugin(daemon)
+
+    // Adopt the session via the opencode event stream BEFORE the async
+    // bootstrap microtask resolves. In real use session.created fires while
+    // the plugin is still initializing; we simulate that here.
+    await fireCreated(runtime, "session-1")
+    await fireIdle(runtime, "session-1")
+
+    await sleep(TEST_THRESHOLD_MS + 100)
+
+    assert.equal(asyncPrompts.length, 1, "adopted session with pending batch should receive delivery")
+    assert.match(asyncPrompts[0].text, /bootstrapped/)
   })
 })

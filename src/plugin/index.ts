@@ -136,6 +136,14 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
   // and carry the hand-off timestamp so stale entries (e.g. prompts whose ack
   // never arrived because opencode reattached mid-flight) can be cleared.
   const inflightReminders = new Map<string, { batchId: string; startedAt: number }>()
+  // Sessions this plugin instance has observed through its own lifecycle
+  // (opencode event stream, successful attach, or direct interaction). The
+  // daemon's debugStatus.sessions returns the global session list across all
+  // opencode instances and worktrees — without this gate the plugin would
+  // show countdown toasts for sessions it doesn't own. Entries are added by
+  // attachSession, chat.message, and tool invocations; removed by
+  // session.deleted.
+  const ownedSessions = new Set<string>()
   let lastPrimarySessionId: string | undefined
 
   // How long a hand-off may sit without a confirmation before we consider the
@@ -176,6 +184,7 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
       busyState: "idle",
     })
     lastPrimarySessionId = sessionID
+    ownedSessions.add(sessionID)
     writePluginRuntimeState({
       phase: trigger === "reattach" ? "session-reattached" : "session-attached",
       lastSessionId: sessionID,
@@ -260,6 +269,12 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
   // Does nothing if no batch exists or if one is already in-flight (unless the
   // inflight entry is stale, in which case we discard it and retry).
   const deliverPendingReminder = async (sessionID: string) => {
+    // Never deliver to a session this plugin instance doesn't own. The
+    // promptAsync call would fail SESSION_NOT_FOUND anyway, but we'd
+    // already have acked "handed_off" to the daemon, leaving the batch in
+    // a wrong state for the session's real owner.
+    if (!ownedSessions.has(sessionID)) return
+
     const existingInflight = inflightReminders.get(sessionID)
     if (existingInflight !== undefined) {
       const age = Date.now() - existingInflight.startedAt
@@ -337,6 +352,10 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
 
   // Show a replacing TUI toast every second with the current countdown.
   const startToastCountdown = (sessionID: string, initialPendingCount: number) => {
+    // Never render a toast for a session this plugin instance doesn't own.
+    // Defense in depth against any caller that might forget to check.
+    if (!ownedSessions.has(sessionID)) return
+
     // Stop any existing toast timer for this session first.
     const existing = toastTimers.get(sessionID)
     if (existing !== undefined) {
@@ -432,9 +451,12 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
   // This catches batches that arrive after the session already went idle.
   const startIdlePoll = (sessionID: string) => {
     if (idlePollIntervals.has(sessionID)) return
+    // Never poll for sessions this plugin instance doesn't own. Prevents the
+    // idle poll from eagerly fetching + toasting another worktree's batch.
+    if (!ownedSessions.has(sessionID)) return
     const interval = setInterval(() => {
-      // Only keep polling while the session is still idle.
-      if (!idleSince.has(sessionID)) {
+      // Stop polling if the session is no longer idle OR no longer owned.
+      if (!idleSince.has(sessionID) || !ownedSessions.has(sessionID)) {
         clearInterval(interval)
         idlePollIntervals.delete(sessionID)
         return
@@ -469,21 +491,27 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
   }
 
   // Bootstrap: pick up sessions that were already idle before this plugin instance started.
-  // Use debugStatus to enumerate active sessions and start idle polls for any that are idle.
-  // Also proactively check for pending reminders so the toast + delivery timer engage
-  // immediately (rather than waiting up to one heartbeat for the idle poll's first tick).
+  // Only act on sessions THIS plugin instance owns (tracked via ownedSessions).
+  // The daemon's debugStatus.sessions is the GLOBAL session list across all
+  // opencode instances and worktrees; iterating it without a gate caused
+  // countdown toasts to appear in TUIs that didn't own the session.
+  //
+  // On fresh plugin startup, ownedSessions is empty — so no sessions will be
+  // bootstrapped. That is correct: sessions this instance owns will arrive
+  // via session.created / session.idle events (or via chat.message adoption
+  // for resumed sessions), and flow through handleSessionIdle / attachSession
+  // which handle the pending-batch probe.
   void daemon.debugStatus().then(async (status) => {
     const sessions: Array<{ sessionId: string; busyState?: string }> = status?.sessions ?? []
     for (const s of sessions) {
+      if (!ownedSessions.has(s.sessionId)) continue
       if (s.busyState === "idle" && !idleSince.has(s.sessionId)) {
         // Use now as a conservative idle start — we don't know the real idle time.
         idleSince.set(s.sessionId, Date.now())
         startIdlePoll(s.sessionId)
 
         // If a batch is already queued for this session, start the countdown toast
-        // and arm the delivery timer right away. Without this, users who restart
-        // opencode with a pending batch see no toast for up to one heartbeat and
-        // may miss the countdown entirely if delivery fires on the first tick.
+        // and arm the delivery timer right away.
         try {
           const pending = await daemon.getPendingReminder(s.sessionId)
           if (pending.batch && !toastTimers.has(s.sessionId)) {
@@ -513,6 +541,13 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
   }
 
   const handleSessionIdle = async (sessionID: string) => {
+    // Any event we receive scoped to sessionID comes from the opencode client
+    // this plugin is attached to — adopt ownership. withReattach's attachSession
+    // path already does this in the SESSION_NOT_FOUND branch, but an idle event
+    // for an already-registered session would bypass that. Adopting here keeps
+    // the ownership set consistent regardless of event arrival order.
+    ownedSessions.add(sessionID)
+
     const git = await gitDetector(root)
     const ok = await withReattach(sessionID, () =>
       daemon.updateSessionState({ sessionId: sessionID, busyState: "idle", repo: git.repo, branch: git.branch }),
@@ -650,6 +685,7 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
         async execute(_args, ctx) {
           const sessionId = ctx.sessionID ?? lastPrimarySessionId
           if (!sessionId) return "premind pause failed: no active session"
+          ownedSessions.add(sessionId)
           await withReattach(sessionId, () => daemon.pauseSession(sessionId))
           return `premind paused for session ${sessionId}`
         },
@@ -660,6 +696,7 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
         async execute(_args, ctx) {
           const sessionId = ctx.sessionID ?? lastPrimarySessionId
           if (!sessionId) return "premind resume failed: no active session"
+          ownedSessions.add(sessionId)
           await withReattach(sessionId, () => daemon.resumeSession(sessionId))
           return `premind resumed for session ${sessionId}`
         },
@@ -670,6 +707,7 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
         async execute(_args, ctx) {
           const sessionId = ctx.sessionID ?? lastPrimarySessionId
           if (!sessionId) return "premind send-now failed: no active session"
+          ownedSessions.add(sessionId)
           const pending = await daemon.getPendingReminder(sessionId)
           if (!pending.batch) return "premind: no pending PR updates to send"
           stopToastCountdown(sessionId)
@@ -730,6 +768,9 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
       if (event.type === "session.status") {
         const statusType = (event.properties as Record<string, any>)?.status?.type
         if (statusType === "busy" || statusType === "retry") {
+          // Any event we receive scoped to sessionID comes from the opencode
+          // client this plugin is attached to — adopt ownership.
+          ownedSessions.add(sessionID)
           await withReattach(sessionID, () =>
             daemon.updateSessionState({ sessionId: sessionID, busyState: "busy" }),
           )
@@ -743,12 +784,17 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
       if (event.type === "session.deleted") {
         await daemon.unregisterSession(sessionID)
         cancelDelivery(sessionID)
+        ownedSessions.delete(sessionID)
       }
     },
 
     // Handle both slash command markers and reminder confirmation.
     "chat.message": async (input, output) => {
       if (!input.sessionID) return
+
+      // Any chat activity is conclusive proof this plugin instance owns
+      // the session — the TUI rendering this message belongs to our client.
+      ownedSessions.add(input.sessionID)
 
       const outputText = extractText(output)
       const inputRef = { agent: input.agent, model: input.model }
