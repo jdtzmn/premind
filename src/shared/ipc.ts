@@ -9,6 +9,7 @@ import {
   ackReminderPayloadSchema,
   debugStatusPayloadSchema,
   debugStatusResponseSchema,
+  getGlobalDisabledPayloadSchema,
   getPendingReminderPayloadSchema,
   heartbeatClientPayloadSchema,
   registerClientPayloadSchema,
@@ -16,6 +17,7 @@ import {
   releaseClientPayloadSchema,
   reminderBatchSchema,
   sessionControlPayloadSchema,
+  setGlobalDisabledPayloadSchema,
   unregisterSessionPayloadSchema,
   updateSessionStatePayloadSchema,
 } from "./schema.ts"
@@ -31,6 +33,8 @@ export const requestSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("resumeSession"), protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION), payload: sessionControlPayloadSchema }),
   z.object({ type: z.literal("getPendingReminder"), protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION), payload: getPendingReminderPayloadSchema }),
   z.object({ type: z.literal("ackReminder"), protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION), payload: ackReminderPayloadSchema }),
+  z.object({ type: z.literal("setGlobalDisabled"), protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION), payload: setGlobalDisabledPayloadSchema }),
+  z.object({ type: z.literal("getGlobalDisabled"), protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION), payload: getGlobalDisabledPayloadSchema }),
   z.object({ type: z.literal("debugStatus"), protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION), payload: debugStatusPayloadSchema }),
 ])
 
@@ -59,6 +63,10 @@ export const registerClientResponseSchema = z.object({
 
 export const getPendingReminderResponseSchema = z.object({
   batch: reminderBatchSchema.nullable(),
+})
+
+export const globalDisabledResponseSchema = z.object({
+  disabled: z.boolean(),
 })
 
 export { debugStatusResponseSchema }

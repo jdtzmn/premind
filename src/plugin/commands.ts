@@ -1,5 +1,6 @@
 export const renderPremindStatus = (status: {
   daemon: { protocolVersion: number }
+  globallyDisabled?: boolean
   activeClients: number
   activeSessions: number
   activeWatchers: number
@@ -13,8 +14,11 @@ export const renderPremindStatus = (status: {
     pendingReminderCount: number
   }>
 }) => {
-  return [
-    "premind status",
+  const lines = ["premind status"]
+  if (status.globallyDisabled) {
+    lines.push("- globally disabled: yes (no GitHub polling — run /premind-enable to resume)")
+  }
+  lines.push(
     `- protocol: ${status.daemon.protocolVersion}`,
     `- active clients: ${status.activeClients}`,
     `- active sessions: ${status.activeSessions}`,
@@ -23,5 +27,6 @@ export const renderPremindStatus = (status: {
       (session) =>
         `- session ${session.sessionId}: ${session.repo} @ ${session.branch}${session.prNumber ? ` (PR #${session.prNumber})` : ""} | ${session.status}/${session.busyState} | pending ${session.pendingReminderCount}`,
     ),
-  ].join("\n")
+  )
+  return lines.join("\n")
 }

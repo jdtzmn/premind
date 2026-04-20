@@ -39,6 +39,11 @@ describe("premind plugin compatibility harness", () => {
       ackReminder: async ({ batchId, state }: { batchId: string; state: string }) => {
         acknowledgements.push({ batchId, state })
       },
+      setGlobalDisabled: async (disabled: boolean) => {
+        operations.push(`setGlobalDisabled:${disabled}`)
+        return { disabled }
+      },
+      getGlobalDisabled: async () => ({ disabled: false }),
       debugStatus: async () => ({
         daemon: { protocolVersion: 1, heartbeatMs: 10_000, leaseTtlMs: 30_000, idleShutdownGraceMs: 15_000 },
         activeClients: 1,
@@ -98,6 +103,8 @@ describe("premind plugin compatibility harness", () => {
     assert.ok(commands["premind-status"], "should register premind-status command")
     assert.ok(commands["premind-pause"], "should register premind-pause command")
     assert.ok(commands["premind-resume"], "should register premind-resume command")
+    assert.ok(commands["premind-disable"], "should register premind-disable command")
+    assert.ok(commands["premind-enable"], "should register premind-enable command")
 
     // 2. Session creation triggers registration.
     await runtime.event({ event: { type: "session.created", properties: { sessionID: "session-1" } } })
@@ -164,10 +171,38 @@ describe("premind plugin compatibility harness", () => {
     }
     assert.ok(operations.includes("resume:session-1"))
 
+    // 7a. Slash command via chat.message: premind-disable.
+    const disableMarker = commands["premind-disable"].template
+    try {
+      await runtime["chat.message"](
+        { sessionID: "session-1" },
+        { message: { parts: [{ type: "text", text: disableMarker }] }, parts: [{ type: "text", text: disableMarker }] },
+      )
+      assert.fail("expected throw for handled command")
+    } catch (error) {
+      assert.match((error as Error).message, /PREMIND_HANDLED/)
+    }
+    assert.ok(operations.includes("setGlobalDisabled:true"))
+
+    // 7b. Slash command via chat.message: premind-enable.
+    const enableMarker = commands["premind-enable"].template
+    try {
+      await runtime["chat.message"](
+        { sessionID: "session-1" },
+        { message: { parts: [{ type: "text", text: enableMarker }] }, parts: [{ type: "text", text: enableMarker }] },
+      )
+      assert.fail("expected throw for handled command")
+    } catch (error) {
+      assert.match((error as Error).message, /PREMIND_HANDLED/)
+    }
+    assert.ok(operations.includes("setGlobalDisabled:false"))
+
     // 8. Tools are registered and callable.
     assert.ok(runtime.tool.premind_status, "premind_status tool should exist")
     assert.ok(runtime.tool.premind_pause, "premind_pause tool should exist")
     assert.ok(runtime.tool.premind_resume, "premind_resume tool should exist")
+    assert.ok(runtime.tool.premind_disable, "premind_disable tool should exist")
+    assert.ok(runtime.tool.premind_enable, "premind_enable tool should exist")
     assert.ok(runtime.tool.premind_probe, "premind_probe tool should exist")
 
     const toolStatusResult = await runtime.tool.premind_status.execute({}, { sessionID: "session-1" })
@@ -178,6 +213,12 @@ describe("premind plugin compatibility harness", () => {
 
     const toolResumeResult = await runtime.tool.premind_resume.execute({}, { sessionID: "session-1" })
     assert.match(toolResumeResult, /premind resumed/)
+
+    const toolDisableResult = await runtime.tool.premind_disable.execute({}, { sessionID: "session-1" })
+    assert.match(toolDisableResult, /premind disabled globally/)
+
+    const toolEnableResult = await runtime.tool.premind_enable.execute({}, { sessionID: "session-1" })
+    assert.match(toolEnableResult, /premind re-enabled globally/)
 
     const toolProbeResult = await runtime.tool.premind_probe.execute({}, { sessionID: "session-1" })
     assert.match(toolProbeResult, /premind probe/)

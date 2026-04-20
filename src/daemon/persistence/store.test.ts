@@ -184,6 +184,42 @@ describe("StateStore", () => {
     store.close()
   })
 
+  test("global disable flag defaults to false and persists when toggled", () => {
+    const store = createStore()
+
+    // Default is false.
+    assert.equal(store.isGloballyDisabled(), false)
+
+    // Setting to true persists.
+    store.setGloballyDisabled(true)
+    assert.equal(store.isGloballyDisabled(), true)
+
+    // Setting to false clears.
+    store.setGloballyDisabled(false)
+    assert.equal(store.isGloballyDisabled(), false)
+
+    // Idempotent: setting the same value twice is fine.
+    store.setGloballyDisabled(true)
+    store.setGloballyDisabled(true)
+    assert.equal(store.isGloballyDisabled(), true)
+
+    store.close()
+  })
+
+  test("global disable flag survives across store instances (same db file)", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "premind-store-test-"))
+    const dbPath = path.join(dir, "premind.db")
+    tempPaths.push(dir)
+
+    const first = new StateStore(dbPath)
+    first.setGloballyDisabled(true)
+    first.close()
+
+    const second = new StateStore(dbPath)
+    assert.equal(second.isGloballyDisabled(), true)
+    second.close()
+  })
+
   test("restart recovery prunes stale leases and resets handed-off batches", () => {
     const store = createStore()
 

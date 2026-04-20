@@ -121,6 +121,14 @@ export const ackReminderPayloadSchema = z
   })
   .strict()
 
+export const setGlobalDisabledPayloadSchema = z
+  .object({
+    disabled: z.boolean(),
+  })
+  .strict()
+
+export const getGlobalDisabledPayloadSchema = z.object({}).strict()
+
 export const debugStatusPayloadSchema = z.object({}).strict()
 
 export const daemonInfoSchema = z
@@ -135,6 +143,7 @@ export const daemonInfoSchema = z
 export const debugStatusResponseSchema = z
   .object({
     daemon: daemonInfoSchema,
+    globallyDisabled: z.boolean().default(false),
     activeClients: z.number().int().nonnegative(),
     activeSessions: z.number().int().nonnegative(),
     activeWatchers: z.number().int().nonnegative(),
@@ -166,4 +175,6 @@ export type SessionControlPayload = z.infer<typeof sessionControlPayloadSchema>
 export type ReminderEvent = z.infer<typeof reminderEventSchema>
 export type ReminderBatch = z.infer<typeof reminderBatchSchema>
 export type AckReminderPayload = z.infer<typeof ackReminderPayloadSchema>
+export type SetGlobalDisabledPayload = z.infer<typeof setGlobalDisabledPayloadSchema>
+export type GetGlobalDisabledPayload = z.infer<typeof getGlobalDisabledPayloadSchema>
 export type DebugStatusResponse = z.infer<typeof debugStatusResponseSchema>

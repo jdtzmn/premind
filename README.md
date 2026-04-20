@@ -56,13 +56,18 @@ ln -s "$(pwd)/src/plugin/index.ts" .opencode/plugins/premind.ts
 
 ## Commands
 
-premind registers three slash commands automatically:
+premind registers these slash commands automatically:
 
 - `/premind-status` — show current daemon state, attached sessions, and pending reminder counts
 - `/premind-pause` — pause reminders for the current session (events still accumulate)
 - `/premind-resume` — resume reminders for the current session
+- `/premind-send-now` — send pending PR updates to the current session immediately, skipping the idle countdown
+- `/premind-disable` — disable premind globally (stops GitHub polling across all sessions and projects — useful if you hit API rate limits)
+- `/premind-enable` — re-enable premind globally; polling resumes on the next scheduler tick
 
-These also work as tools that the model can call directly (e.g., if you ask "show premind status").
+These also work as tools that the model can call directly (e.g., if you ask "show premind status" or "disable premind — I'm hitting rate limits").
+
+`/premind-disable` is a daemon-wide kill switch: the daemon stays up and sessions keep registering, but no GitHub API calls are made until you re-enable. The flag is persisted in SQLite, so it survives daemon restarts. Queued events are preserved and delivered as normal once you re-enable.
 
 premind also exposes a `premind_probe` tool that returns runtime diagnostics. This is useful if you want to verify that the plugin actually initialized even when slash commands are not showing up yet.
 
