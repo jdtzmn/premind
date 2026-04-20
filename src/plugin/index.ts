@@ -164,6 +164,34 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
       phase: trigger === "reattach" ? "session-reattached" : "session-attached",
       lastSessionId: sessionID,
     })
+
+    // On reattach, any prior idleSince timestamp in this plugin process is stale
+    // (the session was lost and re-registered — its effective idle window resets).
+    // Without this, the toast renders "sending in 0s" forever against an ancient
+    // timestamp while the already-fired delivery timer never retries.
+    //
+    // We give the session a fresh idle window and re-arm the delivery + poll.
+    // Idle-poll will pick up any queued batch on its next tick, and we also
+    // proactively probe for one so the countdown toast starts immediately.
+    if (trigger === "reattach") {
+      idleSince.set(sessionID, Date.now())
+      startIdlePoll(sessionID)
+      try {
+        const pending = await daemon.getPendingReminder(sessionID)
+        if (pending.batch) {
+          if (!toastTimers.has(sessionID)) {
+            startToastCountdown(sessionID, pending.batch.events.length)
+          } else {
+            const ref = pendingCountRefs.get(sessionID)
+            if (ref) ref.value = pending.batch.events.length
+          }
+          scheduleDelivery(sessionID)
+        }
+      } catch {
+        // Swallow — the idle poll will retry on its next tick.
+      }
+    }
+
     return true
   }
 

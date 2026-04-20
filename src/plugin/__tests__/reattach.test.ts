@@ -197,4 +197,60 @@ describe("reactive session re-attach", () => {
       "pause:resumed-session",
     ])
   })
+
+  test("re-attach with a pending batch re-arms delivery (no stuck 0s toast)", async () => {
+    // The reattach path should reset the idle clock and trigger a fresh delivery
+    // cycle. Simulate opencode resuming a session that the daemon already has a
+    // batch queued for.
+    const daemon = makeReattachingDaemon(new Set())
+    const pendingBatch = {
+      batchId: "batch-reattach",
+      sessionId: "resumed-session",
+      reminderText: "<system-reminder>queued while absent</system-reminder>",
+      events: [{} as never],
+    }
+    let pendingBatchRef: typeof pendingBatch | null = pendingBatch
+    daemon.getPendingReminder = async () => ({ batch: pendingBatchRef })
+    daemon.ackReminder = async ({ state }: { state: string; batchId: string; sessionId: string }) => {
+      if (state === "handed_off" || state === "confirmed") pendingBatchRef = null
+    }
+
+    const asyncPrompts: Array<{ sessionId: string; text: string }> = []
+    const plugin = await createPremindPlugin({
+      createDaemonClient: () => daemon as never,
+      detectGit: async () => ({ repo: "acme/repo", branch: "feature/reattach" }),
+      ensureDaemon: async () => {},
+      idleDeliveryThresholdMs: 0, // deliver immediately when re-armed
+    })({
+      directory: "/tmp/project",
+      worktree: "/tmp/project",
+      client: {
+        session: {
+          get: async () => ({ data: {} }),
+          prompt: async () => {},
+          promptAsync: async ({ path, body }: any) => {
+            asyncPrompts.push({ sessionId: path.id, text: body.parts[0].text })
+          },
+        },
+        tui: {
+          showToast: async () => undefined,
+        },
+      },
+    } as never)
+
+    const runtime = plugin as unknown as {
+      config: (input: Record<string, unknown>) => Promise<void>
+      event: (input: { event: unknown }) => Promise<void>
+    }
+    await runtime.config({})
+
+    // Fire session.idle for an unknown session — triggers withReattach -> attachSession(reattach).
+    await runtime.event({ event: { type: "session.idle", properties: { sessionID: "resumed-session" } } })
+
+    // Give microtasks a moment to flush.
+    await new Promise((resolve) => setTimeout(resolve, 50))
+
+    assert.equal(asyncPrompts.length, 1, "reattach should have re-armed delivery and fired the pending batch")
+    assert.match(asyncPrompts[0].text, /queued while absent/)
+  })
 })
