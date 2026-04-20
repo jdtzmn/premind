@@ -49,6 +49,30 @@ async function main() {
     { baseIntervalMs: 20_000, maxIntervalMs: 120_000, jitterFactor: 0.2 },
   )
 
+  // Wire rate-limit observations from the HTTP client back into the poll
+  // schedulers. When either the core (REST) or graphql bucket enters the
+  // throttle zone, defer the next tick until the reset time. This both keeps
+  // us from tripping GitHub's secondary rate limits and respects Retry-After.
+  github.rateLimit.onUpdate((snapshot) => {
+    if (!github.rateLimit.isThrottled(snapshot.resource)) return
+    // Branch discovery hits REST (core); the PR watcher hits GraphQL.
+    if (snapshot.resource === "core") {
+      discoveryScheduler.setRateLimitReset(snapshot.resetAtMs)
+      logger.warn("rate limit throttled; deferring branch discovery", {
+        resource: snapshot.resource,
+        remaining: snapshot.remaining,
+        resetAtMs: snapshot.resetAtMs,
+      })
+    } else if (snapshot.resource === "graphql") {
+      prScheduler.setRateLimitReset(snapshot.resetAtMs)
+      logger.warn("rate limit throttled; deferring pr poll", {
+        resource: snapshot.resource,
+        remaining: snapshot.remaining,
+        resetAtMs: snapshot.resetAtMs,
+      })
+    }
+  })
+
   discoveryScheduler.start()
   prScheduler.start()
 

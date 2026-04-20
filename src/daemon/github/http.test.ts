@@ -112,6 +112,27 @@ describe("GitHubHttpClient.get", () => {
     assert.equal(rateLimit.isThrottled("core"), true)
   })
 
+  test("429 with Retry-After triggers onUpdate listener with throttled snapshot", async () => {
+    const { stub } = makeFetchStub([
+      {
+        status: 429,
+        body: "slow down",
+        headers: { "retry-after": "120", "x-ratelimit-resource": "graphql" },
+      },
+    ])
+    const rateLimit = new RateLimitTracker()
+    const seen: Array<{ resource: string; remaining: number }> = []
+    rateLimit.onUpdate((snapshot) => {
+      seen.push({ resource: snapshot.resource, remaining: snapshot.remaining })
+    })
+    const client = new GitHubHttpClient({ fetchImpl: stub, tokenProvider: authHeader, rateLimit })
+    await assert.rejects(() => client.get("anything"))
+    assert.equal(seen.length, 1)
+    assert.equal(seen[0].resource, "graphql")
+    assert.equal(seen[0].remaining, 0)
+    assert.equal(rateLimit.isThrottled("graphql"), true)
+  })
+
   test("on 401 the cached token is invalidated so next request fetches fresh", async () => {
     const { stub } = makeFetchStub([
       { status: 401, body: "bad creds" },
