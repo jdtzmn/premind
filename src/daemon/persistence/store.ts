@@ -245,6 +245,27 @@ export class StateStore {
     return (result.changes as number) > 0
   }
 
+  isGloballyDisabled(): boolean {
+    const row = this.db
+      .prepare(`SELECT value FROM settings WHERE key = 'globally_disabled'`)
+      .get() as { value: string } | undefined
+    return row?.value === "true"
+  }
+
+  setGloballyDisabled(disabled: boolean, now = Date.now()) {
+    this.db
+      .prepare(
+        `
+          INSERT INTO settings (key, value, updated_at)
+          VALUES ('globally_disabled', :value, :now)
+          ON CONFLICT(key) DO UPDATE SET
+            value = excluded.value,
+            updated_at = excluded.updated_at
+        `,
+      )
+      .run({ value: disabled ? "true" : "false", now })
+  }
+
   countActiveClients(now = Date.now()) {
     this.pruneExpiredClients(now)
     const row = this.db.prepare(`SELECT COUNT(*) AS count FROM client_leases`).get() as { count: number }
@@ -750,6 +771,12 @@ export class StateStore {
         etag TEXT NOT NULL,
         updated_at INTEGER NOT NULL,
         PRIMARY KEY(scope, key)
+      );
+
+      CREATE TABLE IF NOT EXISTS settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
       );
     `)
 
