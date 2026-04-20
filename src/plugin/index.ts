@@ -386,13 +386,31 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
 
   // Bootstrap: pick up sessions that were already idle before this plugin instance started.
   // Use debugStatus to enumerate active sessions and start idle polls for any that are idle.
-  void daemon.debugStatus().then((status) => {
+  // Also proactively check for pending reminders so the toast + delivery timer engage
+  // immediately (rather than waiting up to one heartbeat for the idle poll's first tick).
+  void daemon.debugStatus().then(async (status) => {
     const sessions: Array<{ sessionId: string; busyState?: string }> = status?.sessions ?? []
     for (const s of sessions) {
       if (s.busyState === "idle" && !idleSince.has(s.sessionId)) {
         // Use now as a conservative idle start — we don't know the real idle time.
         idleSince.set(s.sessionId, Date.now())
         startIdlePoll(s.sessionId)
+
+        // If a batch is already queued for this session, start the countdown toast
+        // and arm the delivery timer right away. Without this, users who restart
+        // opencode with a pending batch see no toast for up to one heartbeat and
+        // may miss the countdown entirely if delivery fires on the first tick.
+        try {
+          const pending = await daemon.getPendingReminder(s.sessionId)
+          if (pending.batch && !toastTimers.has(s.sessionId)) {
+            startToastCountdown(s.sessionId, pending.batch.events.length)
+          }
+          if (pending.batch) {
+            scheduleDelivery(s.sessionId)
+          }
+        } catch {
+          // Swallow — the idle poll will retry on its next tick.
+        }
       }
     }
   }).catch(() => {})

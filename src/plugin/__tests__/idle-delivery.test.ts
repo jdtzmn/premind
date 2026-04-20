@@ -216,4 +216,36 @@ describe("idle delivery threshold", () => {
 
     assert.equal(asyncPrompts.length, 0, "no reminder when no pending batch")
   })
+
+  test("bootstrap: daemon reports an idle session with a pending batch — delivery is scheduled without waiting for idle poll", async () => {
+    // Simulate the opencode-restart scenario: plugin starts fresh, daemon still has
+    // the session registered as idle, and a batch is waiting.
+    const daemon = makeDaemon({
+      batchId: "batch-bootstrap",
+      sessionId: "pre-existing-session",
+      reminderText: "<system-reminder>pending at startup</system-reminder>",
+      events: [{} as never], // non-empty so the toast reflects a real count
+    })
+    // Inject the session into debugStatus so bootstrap notices it.
+    daemon.debugStatus = async () => ({
+      daemon: {},
+      activeClients: 1,
+      activeSessions: 1,
+      activeWatchers: 0,
+      lastReapAt: null,
+      lastReapCount: 0,
+      sessions: [
+        { sessionId: "pre-existing-session", repo: "acme/repo", branch: "feature/test", busyState: "idle" },
+      ],
+    })
+
+    const { asyncPrompts } = await makePlugin(daemon)
+
+    // Let the bootstrap microtask + the zero-threshold scheduleDelivery run.
+    // idleDeliveryThresholdMs defaults to TEST_THRESHOLD_MS (200), so wait just past it.
+    await sleep(TEST_THRESHOLD_MS + 100)
+
+    assert.equal(asyncPrompts.length, 1, "bootstrap should have delivered the pending batch after threshold")
+    assert.match(asyncPrompts[0].text, /pending at startup/)
+  })
 })
