@@ -424,4 +424,247 @@ describe("StateStore", () => {
     assert.equal(session.last_activity_at, createdAt)
     store.close()
   })
+
+  test("reapStaleSessions: fresh session not reaped, stale active session reaped", () => {
+    const store = createStore()
+    const threshold = 6 * 60 * 60 * 1000
+    const now = 10_000_000_000
+    store.registerClient("client-r1", { pid: 1, projectRoot: "/tmp/p" })
+
+    // Fresh session registered "now".
+    store.registerSession(
+      {
+        clientId: "client-r1",
+        sessionId: "session-fresh",
+        repo: "acme/repo",
+        branch: "feature/fresh",
+        isPrimary: true,
+        status: "active",
+        busyState: "idle",
+      },
+      now,
+    )
+
+    // Stale session registered "threshold + 1ms" ago.
+    store.registerSession(
+      {
+        clientId: "client-r1",
+        sessionId: "session-stale",
+        repo: "acme/repo",
+        branch: "feature/stale",
+        isPrimary: true,
+        status: "active",
+        busyState: "idle",
+      },
+      now - threshold - 1,
+    )
+
+    const result = store.reapStaleSessions(threshold, now)
+    assert.equal(result.reaped, 1)
+
+    assert.equal(store.getSession("session-fresh")?.status, "active")
+    assert.equal(store.getSession("session-stale")?.status, "closed")
+    store.close()
+  })
+
+  test("reapStaleSessions: stale paused session is also reaped", () => {
+    const store = createStore()
+    const threshold = 6 * 60 * 60 * 1000
+    const now = 10_000_000_000
+    store.registerClient("client-r2", { pid: 1, projectRoot: "/tmp/p" })
+    store.registerSession(
+      {
+        clientId: "client-r2",
+        sessionId: "session-paused-stale",
+        repo: "acme/repo",
+        branch: "feature/ps",
+        isPrimary: true,
+        status: "active",
+        busyState: "idle",
+      },
+      now - threshold - 10_000,
+    )
+    store.setSessionPaused("session-paused-stale", true)
+
+    const result = store.reapStaleSessions(threshold, now)
+    assert.equal(result.reaped, 1)
+    assert.equal(store.getSession("session-paused-stale")?.status, "closed")
+    store.close()
+  })
+
+  test("reapStaleSessions: already-closed session is not re-updated", () => {
+    const store = createStore()
+    const threshold = 6 * 60 * 60 * 1000
+    const now = 10_000_000_000
+    store.registerClient("client-r3", { pid: 1, projectRoot: "/tmp/p" })
+    store.registerSession(
+      {
+        clientId: "client-r3",
+        sessionId: "session-already-closed",
+        repo: "acme/repo",
+        branch: "feature/ac",
+        isPrimary: true,
+        status: "closed",
+        busyState: "idle",
+      },
+      now - threshold - 10_000,
+    )
+
+    const result = store.reapStaleSessions(threshold, now)
+    assert.equal(result.reaped, 0)
+    store.close()
+  })
+
+  test("reapStaleSessions: boundary (strict <) — session exactly at cutoff is NOT reaped", () => {
+    const store = createStore()
+    const threshold = 6 * 60 * 60 * 1000
+    const now = 10_000_000_000
+    store.registerClient("client-r4", { pid: 1, projectRoot: "/tmp/p" })
+    store.registerSession(
+      {
+        clientId: "client-r4",
+        sessionId: "session-boundary",
+        repo: "acme/repo",
+        branch: "feature/b",
+        isPrimary: true,
+        status: "active",
+        busyState: "idle",
+      },
+      now - threshold, // last_activity_at === cutoff
+    )
+
+    const result = store.reapStaleSessions(threshold, now)
+    assert.equal(result.reaped, 0)
+    assert.equal(store.getSession("session-boundary")?.status, "active")
+    store.close()
+  })
+
+  test("reapStaleSessions: oldestAgeMs returns null when no non-closed sessions remain", () => {
+    const store = createStore()
+    const threshold = 6 * 60 * 60 * 1000
+    const now = 10_000_000_000
+    store.registerClient("client-r5", { pid: 1, projectRoot: "/tmp/p" })
+    store.registerSession(
+      {
+        clientId: "client-r5",
+        sessionId: "session-only",
+        repo: "acme/repo",
+        branch: "feature/only",
+        isPrimary: true,
+        status: "active",
+        busyState: "idle",
+      },
+      now - threshold - 1,
+    )
+
+    const result = store.reapStaleSessions(threshold, now)
+    assert.equal(result.reaped, 1)
+    assert.equal(result.oldestAgeMs, null)
+    store.close()
+  })
+
+  test("reapStaleSessions: oldestAgeMs reflects age of oldest surviving session", () => {
+    const store = createStore()
+    const threshold = 6 * 60 * 60 * 1000
+    const now = 10_000_000_000
+    store.registerClient("client-r6", { pid: 1, projectRoot: "/tmp/p" })
+    // Two fresh sessions, one "older" but still fresh.
+    store.registerSession(
+      {
+        clientId: "client-r6",
+        sessionId: "session-youngest",
+        repo: "acme/repo",
+        branch: "feature/y",
+        isPrimary: true,
+        status: "active",
+        busyState: "idle",
+      },
+      now - 1_000,
+    )
+    store.registerSession(
+      {
+        clientId: "client-r6",
+        sessionId: "session-oldest-fresh",
+        repo: "acme/repo",
+        branch: "feature/of",
+        isPrimary: true,
+        status: "active",
+        busyState: "idle",
+      },
+      now - 60_000,
+    )
+
+    const result = store.reapStaleSessions(threshold, now)
+    assert.equal(result.reaped, 0)
+    assert.equal(result.oldestAgeMs, 60_000)
+    store.close()
+  })
+
+  test("reapStaleSessions: reaping drops watcher active_session_count via refreshWatcherCounts", () => {
+    const store = createStore()
+    const threshold = 6 * 60 * 60 * 1000
+    const now = 10_000_000_000
+    store.registerClient("client-r7", { pid: 1, projectRoot: "/tmp/p" })
+    store.registerSession(
+      {
+        clientId: "client-r7",
+        sessionId: "session-watched",
+        repo: "acme/repo",
+        branch: "feature/w",
+        isPrimary: true,
+        status: "active",
+        busyState: "idle",
+      },
+      now - threshold - 10_000,
+    )
+    store.recordBranchAssociation("acme/repo", "feature/w", 42, now - threshold - 10_000)
+
+    // Before reap: the PR watcher should count our one session.
+    const beforeTargets = store.listPrWatchTargets(now - threshold - 5_000)
+    assert.equal(beforeTargets.length, 1)
+    assert.equal(beforeTargets[0]?.active_session_count, 1)
+
+    store.reapStaleSessions(threshold, now)
+
+    // After reap: the session is closed, so the watcher has no active sessions.
+    const afterTargets = store.listPrWatchTargets(now)
+    assert.equal(afterTargets.length, 0)
+    store.close()
+  })
+
+  test("reapStaleSessions: lastReapAt/lastReapCount recorded even when nothing reaped", () => {
+    const store = createStore()
+    const threshold = 6 * 60 * 60 * 1000
+    const now = 10_000_000_000
+
+    assert.equal(store.getLastReapAt(), null)
+    assert.equal(store.getLastReapCount(), 0)
+
+    const result = store.reapStaleSessions(threshold, now)
+    assert.equal(result.reaped, 0)
+    assert.equal(store.getLastReapAt(), now)
+    assert.equal(store.getLastReapCount(), 0)
+
+    // Second sweep with a session that needs reaping.
+    const later = now + 1_000
+    store.registerClient("client-r8", { pid: 1, projectRoot: "/tmp/p" })
+    store.registerSession(
+      {
+        clientId: "client-r8",
+        sessionId: "session-gone",
+        repo: "acme/repo",
+        branch: "feature/g",
+        isPrimary: true,
+        status: "active",
+        busyState: "idle",
+      },
+      later - threshold - 1,
+    )
+
+    const result2 = store.reapStaleSessions(threshold, later)
+    assert.equal(result2.reaped, 1)
+    assert.equal(store.getLastReapAt(), later)
+    assert.equal(store.getLastReapCount(), 1)
+    store.close()
+  })
 })
