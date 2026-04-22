@@ -284,6 +284,49 @@ describe("StateStore", () => {
     store.close()
   })
 
+  test("updateSessionState revives a closed session when busyState is provided", () => {
+    const store = createStore()
+    store.registerClient("client-revival", { pid: 1, projectRoot: "/tmp/project" })
+    store.registerSession({
+      clientId: "client-revival", sessionId: "revive-ses", repo: "acme/repo",
+      branch: "feature/x", isPrimary: true, status: "active", busyState: "idle",
+    })
+
+    // Simulate supersession closing the session.
+    ;(store as any).db.prepare(`UPDATE sessions SET status = 'closed' WHERE session_id = 'revive-ses'`).run()
+    assert.equal(store.getSession("revive-ses")?.status, "closed")
+
+    // A busyState update should revive it.
+    const result = store.updateSessionState({ sessionId: "revive-ses", busyState: "busy" })
+    assert.deepEqual(result, { updated: true, revived: true })
+    assert.equal(store.getSession("revive-ses")?.status, "active")
+    assert.equal(store.getSession("revive-ses")?.busy_state, "busy")
+
+    store.close()
+  })
+
+  test("updateSessionState on active session does not set revived", () => {
+    const store = createStore()
+    store.registerClient("client-no-revival", { pid: 1, projectRoot: "/tmp/project" })
+    store.registerSession({
+      clientId: "client-no-revival", sessionId: "active-ses", repo: "acme/repo",
+      branch: "feature/y", isPrimary: true, status: "active", busyState: "idle",
+    })
+
+    const result = store.updateSessionState({ sessionId: "active-ses", busyState: "busy" })
+    assert.deepEqual(result, { updated: true, revived: false })
+    assert.equal(store.getSession("active-ses")?.status, "active")
+
+    store.close()
+  })
+
+  test("updateSessionState on unknown session returns updated:false", () => {
+    const store = createStore()
+    const result = store.updateSessionState({ sessionId: "does-not-exist", busyState: "busy" })
+    assert.deepEqual(result, { updated: false, revived: false })
+    store.close()
+  })
+
   test("last_activity_at: registerSession sets it to now", () => {
     const store = createStore()
     const now = 1_000_000

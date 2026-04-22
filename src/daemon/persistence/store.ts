@@ -208,12 +208,17 @@ export class StateStore {
 
   updateSessionState(payload: UpdateSessionStatePayload, now = Date.now()) {
     const current = this.getSession(payload.sessionId)
-    if (!current) return false
+    if (!current) return { updated: false, revived: false }
+    const revived = current.status === "closed" && !!payload.busyState
     const next = {
       repo: payload.repo ?? current.repo,
       branch: payload.branch ?? current.branch,
-      status: payload.status ?? current.status,
       busyState: payload.busyState ?? current.busy_state,
+      // If the session was closed by supersession but activity is now arriving
+      // (e.g. user resumed via `opencode --continue`), revive it to active so
+      // delivery can resume. A subsequent registerSession from the same or a
+      // newer session will re-apply supersession if needed.
+      status: revived ? "active" : (payload.status ?? current.status),
     }
 
     this.db
@@ -235,8 +240,9 @@ export class StateStore {
         now,
       })
 
+    if (revived) this.refreshWatcherCounts(now)
     this.touchBranchWatcher(next.repo, next.branch, now)
-    return true
+    return { updated: true, revived }
   }
 
   unregisterSession(sessionId: string) {

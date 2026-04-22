@@ -33,15 +33,20 @@ export class Router {
         return this.ok({ registered: true, created })
       }
       case "updateSessionState": {
-        const updated = this.store.updateSessionState(request.payload)
-        if (!updated) return this.fail("SESSION_NOT_FOUND", `Unknown session: ${request.payload.sessionId}`)
-        if (request.payload.busyState) {
+        const result = this.store.updateSessionState(request.payload)
+        if (!result.updated) return this.fail("SESSION_NOT_FOUND", `Unknown session: ${request.payload.sessionId}`)
+        if (result.revived) {
+          this.logger.info("session revived from closed to active", {
+            sessionId: request.payload.sessionId,
+            trigger: request.payload.busyState,
+          })
+        } else if (request.payload.busyState) {
           this.logger.info("session state updated", {
             sessionId: request.payload.sessionId,
             busyState: request.payload.busyState,
           })
         }
-        return this.ok({ updated: true })
+        return this.ok({ updated: true, revived: result.revived })
       }
       case "unregisterSession":
         this.store.unregisterSession(request.payload.sessionId)
