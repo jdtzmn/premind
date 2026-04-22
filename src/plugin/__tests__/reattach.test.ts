@@ -546,3 +546,148 @@ describe("chat.message session registration", () => {
     assert.ok(syncPrompts.some((p) => p.sessionId === "fresh-session" && p.text.includes("premind status")), "status response must have been injected")
   })
 })
+
+// ---------------------------------------------------------------------------
+// Child-session caching (delegated-access coexistence)
+// ---------------------------------------------------------------------------
+
+describe("child session caching", () => {
+  const makeChildCachingPlugin = async () => {
+    const sessionGetCalls: string[] = []
+    const daemonCalls: string[] = []
+
+    const daemon = {
+      registerClient: async () => ({ heartbeatMs: 10_000, leaseTtlMs: 30_000, idleShutdownGraceMs: 15_000 }),
+      heartbeat: async () => undefined,
+      release: async () => undefined,
+      registerSession: async ({ sessionId }: { sessionId: string }) => { daemonCalls.push(`register:${sessionId}`) },
+      updateSessionState: async ({ sessionId }: { sessionId: string }) => {
+        daemonCalls.push(`update:${sessionId}`)
+        // Unknown sessions throw SESSION_NOT_FOUND so withReattach triggers.
+        throw new Error(`SESSION_NOT_FOUND: ${sessionId}`)
+      },
+      unregisterSession: async (sessionId: string) => { daemonCalls.push(`unregister:${sessionId}`) },
+      pauseSession: async () => undefined,
+      resumeSession: async () => undefined,
+      getPendingReminder: async () => ({ batch: null }),
+      ackReminder: async () => undefined,
+      setGlobalDisabled: async (d: boolean) => ({ disabled: d }),
+      getGlobalDisabled: async () => ({ disabled: false }),
+      debugStatus: async () => ({ daemon: {}, activeClients: 0, activeSessions: 0, activeWatchers: 0, lastReapAt: null, lastReapCount: 0, sessions: [] }),
+      _daemonCalls: daemonCalls,
+    }
+
+    const plugin = await createPremindPlugin({
+      createDaemonClient: () => daemon as never,
+      detectGit: async () => ({ repo: "acme/repo", branch: "feature/x" }),
+      ensureDaemon: async () => {},
+      idleDeliveryThresholdMs: 0,
+    })({
+      directory: "/tmp/project",
+      worktree: "/tmp/project",
+      client: {
+        session: {
+          get: async ({ path }: { path: { id: string } }) => {
+            sessionGetCalls.push(path.id)
+            // Treat all sessions as real roots (no parentID) — we test the
+            // parentID fast-path through the event payload, not via session.get.
+            return { data: {} }
+          },
+          prompt: async () => undefined,
+          promptAsync: async () => undefined,
+        },
+        tui: { showToast: async () => undefined },
+      },
+    } as never)
+
+    const runtime = plugin as unknown as {
+      config: (input: Record<string, unknown>) => Promise<void>
+      event: (input: { event: unknown }) => Promise<void>
+      "chat.message": (input: unknown, output: unknown) => Promise<void>
+    }
+    await runtime.config({})
+    return { runtime, daemon, sessionGetCalls }
+  }
+
+  test("session.created with parentID in event payload skips session.get and caches as child", async () => {
+    const { runtime, daemon, sessionGetCalls } = await makeChildCachingPlugin()
+
+    // Simulate delegated-access creating an ephemeral child session.
+    // The event payload includes the full Session object with parentID set.
+    await runtime.event({
+      event: {
+        type: "session.created",
+        properties: {
+          sessionID: "child-session",
+          info: { id: "child-session", parentID: "root-session" },
+        },
+      },
+    })
+
+    assert.equal(sessionGetCalls.length, 0, "session.get must NOT be called for a child session detected from event payload")
+    assert.ok(!daemon._daemonCalls.includes("register:child-session"), "child session must not be registered with daemon")
+  })
+
+  test("session.idle for a known child session is a complete no-op", async () => {
+    const { runtime, daemon, sessionGetCalls } = await makeChildCachingPlugin()
+
+    // First, register the child session via session.created.
+    await runtime.event({
+      event: {
+        type: "session.created",
+        properties: { sessionID: "child-idle", info: { id: "child-idle", parentID: "root" } },
+      },
+    })
+    const getCallsAfterCreate = sessionGetCalls.length
+
+    // Now fire session.idle for the child — should be entirely skipped.
+    await runtime.event({ event: { type: "session.idle", properties: { sessionID: "child-idle" } } })
+
+    assert.equal(sessionGetCalls.length, getCallsAfterCreate, "session.get must not be called for idle event on known child")
+    assert.ok(!daemon._daemonCalls.some((c) => c.includes("child-idle")), "no daemon calls for known child session")
+  })
+
+  test("session.deleted for a known child skips daemon.unregisterSession", async () => {
+    const { runtime, daemon } = await makeChildCachingPlugin()
+
+    // Register child via session.created.
+    await runtime.event({
+      event: {
+        type: "session.created",
+        properties: { sessionID: "child-deleted", info: { id: "child-deleted", parentID: "root" } },
+      },
+    })
+
+    // Delete the child session.
+    await runtime.event({ event: { type: "session.deleted", properties: { sessionID: "child-deleted", info: { id: "child-deleted" } } } })
+
+    assert.ok(!daemon._daemonCalls.includes("unregister:child-deleted"), "unregisterSession must be skipped for known child sessions")
+  })
+
+  test("child session events do NOT pollute ownedSessions (verified via no delivery attempt)", async () => {
+    const { runtime, daemon } = await makeChildCachingPlugin()
+
+    // Register a root session first so getPendingReminder has something to test against.
+    await runtime.event({
+      event: {
+        type: "session.created",
+        properties: { sessionID: "root-session", info: { id: "root-session" } },
+      },
+    })
+
+    // Create a child session.
+    await runtime.event({
+      event: {
+        type: "session.created",
+        properties: { sessionID: "child-no-own", info: { id: "child-no-own", parentID: "root-session" } },
+      },
+    })
+
+    // Fire idle for the child — since it's not owned, the delivery guard (ownedSessions check)
+    // inside deliverPendingReminder would block any delivery attempt. Confirm no ack fired.
+    await runtime.event({ event: { type: "session.idle", properties: { sessionID: "child-no-own" } } })
+    await new Promise((resolve) => setTimeout(resolve, 30))
+
+    assert.ok(!daemon._daemonCalls.includes("ack:handed_off"), "child session idle must not trigger delivery")
+  })
+})

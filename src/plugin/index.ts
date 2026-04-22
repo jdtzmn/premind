@@ -141,6 +141,30 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
   const ownedSessions = new Set<string>()
   let lastPrimarySessionId: string | undefined
 
+  // Sessions confirmed to have a parentID — i.e. ephemeral child sessions
+  // created by other plugins (e.g. delegated-access classifier sessions).
+  // Used to skip all processing for known child sessions without needing a
+  // round-trip to opencode's session.get on every event.
+  const knownChildSessions = new Set<string>()
+
+  // Sessions this plugin has already successfully registered with the daemon.
+  // Used to skip the client.session.get call on subsequent reattach attempts
+  // for a session we know is real.
+  const knownRootSessions = new Set<string>()
+
+  // Soft-cap both caches to avoid unbounded growth in long sessions with many
+  // ephemeral child sessions. When the limit is exceeded, prune the oldest half.
+  const SESSION_CACHE_LIMIT = 1000
+  const pruneSessionCache = (cache: Set<string>) => {
+    if (cache.size <= SESSION_CACHE_LIMIT) return
+    const toRemove = Math.floor(SESSION_CACHE_LIMIT / 2)
+    let i = 0
+    for (const id of cache) {
+      if (i++ >= toRemove) break
+      cache.delete(id)
+    }
+  }
+
   // Per-session idle state for threshold-based delivery.
   const idleSince = new Map<string, number>()
   const deliveryTimers = new Map<string, ReturnType<typeof setTimeout>>()
@@ -162,18 +186,39 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
   if (typeof heartbeat.unref === "function") heartbeat.unref()
 
   const attachSession = async (sessionID: string, trigger: "created" | "reattach" = "created"): Promise<boolean> => {
-    const session = await client.session.get({ path: { id: sessionID } })
-    // The opencode SDK returns { error, data: undefined } instead of throwing on 404.
-    // If data is absent (session doesn't exist on the server) bail immediately so we
-    // never register a zombie session with the daemon or attempt promptAsync against it.
-    if (!session?.data) {
-      writePluginRuntimeState({
-        phase: trigger === "reattach" ? "session-reattach-skipped-nonexistent" : "session-attach-skipped-nonexistent",
-        lastSessionId: sessionID,
-      })
+    // Fast-path: known child — skip immediately, no network call needed.
+    if (knownChildSessions.has(sessionID)) {
+      writePluginRuntimeState({ phase: "session-skipped-child-cached", lastSessionId: sessionID })
       return false
     }
-    const sessionData = session.data
+
+    // Fast-path: known root — skip session.get, we've already verified this session exists.
+    // Go straight to registration/re-registration.
+    let sessionData: { parentID?: string | null } | undefined
+    if (knownRootSessions.has(sessionID)) {
+      writePluginRuntimeState({ phase: "session-attached-from-cache", lastSessionId: sessionID })
+      sessionData = {}  // no parentID — we know it's a root
+    } else {
+      const session = await client.session.get({ path: { id: sessionID } })
+      // The opencode SDK returns { error, data: undefined } instead of throwing on 404.
+      // If data is absent (session doesn't exist on the server) bail immediately so we
+      // never register a zombie session with the daemon or attempt promptAsync against it.
+      if (!session?.data) {
+        writePluginRuntimeState({
+          phase: trigger === "reattach" ? "session-reattach-skipped-nonexistent" : "session-attach-skipped-nonexistent",
+          lastSessionId: sessionID,
+        })
+        return false
+      }
+      sessionData = session.data
+      // If this is a child session, cache it so future events skip the get call.
+      if (sessionData?.parentID) {
+        knownChildSessions.add(sessionID)
+        pruneSessionCache(knownChildSessions)
+        return false
+      }
+    }
+
     const git = await gitDetector(root)
     // Premind only tracks primary (non-child) sessions. Child sessions (subagent,
     // task, etc.) inherit their parent's reminder stream via the parent session.
@@ -189,6 +234,8 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
     })
     lastPrimarySessionId = sessionID
     ownedSessions.add(sessionID)
+    knownRootSessions.add(sessionID)
+    pruneSessionCache(knownRootSessions)
     writePluginRuntimeState({
       phase: trigger === "reattach" ? "session-reattached" : "session-attached",
       lastSessionId: sessionID,
@@ -793,7 +840,28 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
       if (!sessionID) return
 
       if (event.type === "session.created") {
+        // Extract parentID from the event payload without a network round-trip.
+        // EventSessionCreated.properties.info is the full Session object.
+        const info = (event.properties as Record<string, any>)?.info
+        const parentID = info?.parentID
+        if (typeof parentID === "string" && parentID.length > 0) {
+          // This is an ephemeral child session (e.g. a delegated-access classifier).
+          // Cache it immediately and skip all further processing.
+          knownChildSessions.add(sessionID)
+          pruneSessionCache(knownChildSessions)
+          writePluginRuntimeState({ phase: "session-skipped-child-from-event", lastSessionId: sessionID })
+          return
+        }
         await attachSession(sessionID)
+        return
+      }
+
+      // Fast-path: skip all processing for known child sessions.
+      // This avoids session.get + daemon IPC calls for every status/idle/deleted
+      // event fired during a child session's short lifecycle.
+      if (knownChildSessions.has(sessionID)) {
+        writePluginRuntimeState({ phase: "session-skipped-child-cached", lastSessionId: sessionID })
+        return
       }
 
       if (event.type === "session.idle") {
@@ -804,7 +872,8 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
         const statusType = (event.properties as Record<string, any>)?.status?.type
         if (statusType === "busy" || statusType === "retry") {
           // Any event we receive scoped to sessionID comes from the opencode
-          // client this plugin is attached to — adopt ownership.
+          // client this plugin is attached to — adopt ownership (after we've
+          // confirmed it's not a child session above).
           ownedSessions.add(sessionID)
           await withReattach(sessionID, () =>
             daemon.updateSessionState({ sessionId: sessionID, busyState: "busy" }),
@@ -817,7 +886,13 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
       }
 
       if (event.type === "session.deleted") {
-        await daemon.unregisterSession(sessionID)
+        // Clean up both caches. If this was a known child session (which would
+        // have been caught by the fast-path above), skip the daemon IPC call.
+        const wasKnownChild = knownChildSessions.delete(sessionID)
+        knownRootSessions.delete(sessionID)
+        if (!wasKnownChild) {
+          await daemon.unregisterSession(sessionID)
+        }
         cancelDelivery(sessionID)
         ownedSessions.delete(sessionID)
       }
@@ -827,8 +902,11 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
     "chat.message": async (input, output) => {
       if (!input.sessionID) return
 
+      // Skip known child sessions — they won't have slash commands or reminders.
+      if (knownChildSessions.has(input.sessionID)) return
+
       // Any chat activity is conclusive proof this plugin instance owns
-      // the session — the TUI rendering this message belongs to our client.
+      // the session (after confirming it's not a child above).
       ownedSessions.add(input.sessionID)
 
       // Ensure the session is registered and mark it busy FIRST, before
