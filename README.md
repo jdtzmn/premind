@@ -54,6 +54,46 @@ ln -s "$(pwd)/src/plugin/index.ts" .opencode/plugins/premind.ts
 5. When the session becomes idle, premind injects a single `<system-reminder>` message with the incremental changes.
 6. OpenCode processes the reminder like a normal follow-up prompt, and your existing notification setup fires when the model completes.
 
+## Configuration
+
+Premind's config lives in a sibling file next to `opencode.jsonc`:
+
+- **macOS / Linux:** `~/.config/opencode/premind.jsonc`
+
+The file is created with a commented-out template the first time premind starts. Configuration is deliberately **not** put into `opencode.jsonc` — opencode's schema validator rejects unknown top-level keys as a hard startup failure.
+
+### Available settings
+
+| Field | Type | Default | Env var |
+| --- | --- | --- | --- |
+| `idleDeliveryThresholdMs` | integer (ms, min 5000) | `60000` | `PREMIND_IDLE_DELIVERY_THRESHOLD_MS` |
+
+More fields will be added as they become real features.
+
+### Example
+
+```jsonc
+// ~/.config/opencode/premind.jsonc
+{
+  // Wait 15 seconds of idle before delivering PR updates.
+  "idleDeliveryThresholdMs": 15000
+}
+```
+
+### Precedence
+
+Each field's effective value is resolved in this order (highest wins):
+
+1. Environment variable (`PREMIND_<FIELD_IN_UPPER_SNAKE>`)
+2. `~/.config/opencode/premind.jsonc`
+3. Schema default
+
+Malformed files and invalid env values are logged once and ignored — premind will keep running on defaults rather than fail to start.
+
+### Migration note
+
+Earlier versions documented a top-level `premind` key inside `opencode.jsonc`. That location was never actually usable — opencode's schema validator treats unknown top-level keys as a configuration error and refuses to start. If you previously tried to set premind config there and saw an error, this release is the fix: move your settings to `~/.config/opencode/premind.jsonc`.
+
 ## Commands
 
 premind registers these slash commands automatically:
