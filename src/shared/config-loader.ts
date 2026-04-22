@@ -287,24 +287,6 @@ const CONFIG_TEMPLATE = `// premind configuration
 {
   // How long a session must be idle before queued PR updates are delivered.
   // Minimum 5000. Env: PREMIND_IDLE_DELIVERY_THRESHOLD_MS
-  // "idleDeliveryThresholdMs": 60000,
-
-  // Emit verbose logs to the daemon log. Env: PREMIND_DEBUG_LOGGING
-  // "debugLogging": false,
-
-  // Whether premind is enabled at all. Env: PREMIND_ENABLED
-  // "enabled": true,
-
-  // Whether premind auto-attaches to new sessions. Env: PREMIND_AUTO_ATTACH
-  // "autoAttach": true,
-
-  // Polling cadences and limits. These are reserved — not yet wired through
-  // to the daemon — and may change in a future release.
-  // "discoveryPollIntervalMs": 90000,
-  // "activePollIntervalMs": 20000,
-  // "maxActivePollIntervalMs": 120000,
-  // "cacheTtlDays": 14,
-  // "inlineEventLimit": 8,
-  // "inlineCommentCharLimit": 320
+  // "idleDeliveryThresholdMs": 60000
 }
 `

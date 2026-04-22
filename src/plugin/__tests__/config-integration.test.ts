@@ -40,15 +40,6 @@ const makeDaemon = () => {
 }
 
 const defaultsConfig = (overrides: Partial<PremindConfig> = {}): PremindConfig => ({
-  enabled: true,
-  autoAttach: true,
-  discoveryPollIntervalMs: 90_000,
-  activePollIntervalMs: 20_000,
-  maxActivePollIntervalMs: 120_000,
-  cacheTtlDays: 14,
-  inlineEventLimit: 8,
-  inlineCommentCharLimit: 320,
-  debugLogging: false,
   idleDeliveryThresholdMs: 60_000,
   ...overrides,
 })

@@ -18,17 +18,11 @@ export const clientMetadataSchema = z
 export const sessionStatusSchema = z.enum(["active", "paused", "closed"])
 export const busyStateSchema = z.enum(["busy", "idle"])
 
+// Only idleDeliveryThresholdMs is actually consumed today. Add new fields
+// here as they become real features. Defining fields that aren't wired
+// through leads to config that silently does nothing — worse than no config.
 export const premindConfigSchema = z
   .object({
-    enabled: z.boolean().default(true),
-    autoAttach: z.boolean().default(true),
-    discoveryPollIntervalMs: z.number().int().positive().default(90_000),
-    activePollIntervalMs: z.number().int().positive().default(20_000),
-    maxActivePollIntervalMs: z.number().int().positive().default(120_000),
-    cacheTtlDays: z.number().int().positive().default(14),
-    inlineEventLimit: z.number().int().positive().default(8),
-    inlineCommentCharLimit: z.number().int().positive().default(320),
-    debugLogging: z.boolean().default(false),
     // How long the session must be idle before pending PR updates are delivered.
     // Minimum 5 seconds to ensure the countdown toast has time to display.
     idleDeliveryThresholdMs: z.number().int().min(5_000).default(PREMIND_IDLE_DELIVERY_THRESHOLD_MS),

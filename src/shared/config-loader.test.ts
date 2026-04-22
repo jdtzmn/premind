@@ -36,21 +36,18 @@ describe("loadPremindConfig", () => {
     })
 
     assert.equal(config.idleDeliveryThresholdMs, PREMIND_IDLE_DELIVERY_THRESHOLD_MS)
-    assert.equal(config.enabled, true)
-    assert.equal(config.debugLogging, false)
   })
 
   test("reads a plain JSON user config", () => {
     const userConfigPath = writeConfig(
       scratch,
       "premind.json",
-      JSON.stringify({ idleDeliveryThresholdMs: 30000, debugLogging: true }),
+      JSON.stringify({ idleDeliveryThresholdMs: 30000 }),
     )
 
     const config = loadPremindConfig({ userConfigPath, env: {} })
 
     assert.equal(config.idleDeliveryThresholdMs, 30000)
-    assert.equal(config.debugLogging, true)
   })
 
   test("reads a JSONC user config with comments and trailing commas", () => {
@@ -59,67 +56,67 @@ describe("loadPremindConfig", () => {
       "premind.jsonc",
       `{
         // Line comment
-        "idleDeliveryThresholdMs": 45000, /* inline block comment */
-        "debugLogging": true, // trailing comma after this line
+        "idleDeliveryThresholdMs": 45000, /* inline block comment; trailing comma follows */
       }`,
     )
 
     const config = loadPremindConfig({ userConfigPath, env: {} })
 
     assert.equal(config.idleDeliveryThresholdMs, 45000)
-    assert.equal(config.debugLogging, true)
   })
 
   test("env vars override file config", () => {
     const userConfigPath = writeConfig(
       scratch,
       "premind.json",
-      JSON.stringify({ idleDeliveryThresholdMs: 30000, debugLogging: true }),
+      JSON.stringify({ idleDeliveryThresholdMs: 30000 }),
     )
 
     const config = loadPremindConfig({
       userConfigPath,
       env: {
         PREMIND_IDLE_DELIVERY_THRESHOLD_MS: "90000",
-        PREMIND_DEBUG_LOGGING: "false",
       },
     })
 
     assert.equal(config.idleDeliveryThresholdMs, 90000)
-    assert.equal(config.debugLogging, false)
   })
 
   test("env var names are derived from schema field names (UPPER_SNAKE with PREMIND_ prefix)", () => {
+    // idleDeliveryThresholdMs → PREMIND_IDLE_DELIVERY_THRESHOLD_MS
     const config = loadPremindConfig({
       userConfigPath: path.join(scratch, "missing.json"),
       env: {
-        PREMIND_DISCOVERY_POLL_INTERVAL_MS: "123456",
-        PREMIND_INLINE_EVENT_LIMIT: "3",
-        PREMIND_AUTO_ATTACH: "false",
+        PREMIND_IDLE_DELIVERY_THRESHOLD_MS: "42000",
       },
     })
 
-    assert.equal(config.discoveryPollIntervalMs, 123456)
-    assert.equal(config.inlineEventLimit, 3)
-    assert.equal(config.autoAttach, false)
+    assert.equal(config.idleDeliveryThresholdMs, 42000)
   })
 
-  test("boolean env vars accept true/false/1/0 case-insensitively", () => {
-    const cases: Array<[string, boolean]> = [
-      ["true", true],
-      ["TRUE", true],
-      ["1", true],
-      ["false", false],
-      ["FALSE", false],
-      ["0", false],
+  test("numeric env vars reject non-integers and decimals", () => {
+    const cases: Array<[string, number]> = [
+      ["42000", 42000],
+      // "1.5" → rejected, falls back to default
+      // "abc" → rejected
+      // "12x" → rejected
     ]
     for (const [value, expected] of cases) {
       const config = loadPremindConfig({
         userConfigPath: path.join(scratch, "missing.json"),
-        env: { PREMIND_DEBUG_LOGGING: value },
+        env: { PREMIND_IDLE_DELIVERY_THRESHOLD_MS: value },
       })
-      assert.equal(config.debugLogging, expected, `value ${value} should be ${expected}`)
+      assert.equal(config.idleDeliveryThresholdMs, expected, `value ${value} should parse to ${expected}`)
     }
+    // Explicit non-integer and junk values should not apply.
+    const logs: string[] = []
+    const bogus = loadPremindConfig({
+      userConfigPath: path.join(scratch, "missing.json"),
+      env: { PREMIND_IDLE_DELIVERY_THRESHOLD_MS: "1.5" },
+      logger: (m) => logs.push(m),
+    })
+    assert.equal(bogus.idleDeliveryThresholdMs, PREMIND_IDLE_DELIVERY_THRESHOLD_MS)
+    assert.ok(logs.length >= 1)
   })
 
   test("malformed JSON falls back to defaults and logs a warning (no crash)", () => {
