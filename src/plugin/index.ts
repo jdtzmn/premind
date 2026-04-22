@@ -1,6 +1,7 @@
 import { tool, type Plugin } from "@opencode-ai/plugin"
 import { PREMIND_CLIENT_HEARTBEAT_MS, PREMIND_IDLE_DELIVERY_THRESHOLD_MS } from "../shared/constants.ts"
-import { premindConfigSchema } from "../shared/schema.ts"
+import type { PremindConfig } from "../shared/schema.ts"
+import { ensureUserConfigTemplate, getDefaultUserConfigPath, loadPremindConfig } from "../shared/config-loader.ts"
 import { PremindDaemonClient } from "./daemon-client.ts"
 import { renderPremindStatus } from "./commands.ts"
 import { getPluginRuntimeStatePath, readPluginInstances, readPluginRuntimeState, registerPluginInstance, writePluginRuntimeState } from "./debug-state.ts"
@@ -75,6 +76,12 @@ export type PremindPluginDependencies = {
   idleDeliveryThresholdMs?: number
   // Overrides the countdown toast tick interval. Intended for tests.
   toastTickIntervalMs?: number
+  // Override the config loader. Intended for tests and embedders that want
+  // to supply config from a non-default location.
+  loadConfig?: () => PremindConfig
+  // Override the template-ensure step. Intended for tests that shouldn't
+  // touch the user's real config directory.
+  ensureConfigTemplate?: () => void
 }
 
 const getEventSessionId = (event: { properties?: unknown }) => {
@@ -105,8 +112,36 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
   const root = worktree || directory
   const gitDetector = dependencies.detectGit ?? detectGitContext
   const startDaemon = dependencies.ensureDaemon ?? ensureDaemonRunning
-  let idleDeliveryThreshold = dependencies.idleDeliveryThresholdMs ?? PREMIND_IDLE_DELIVERY_THRESHOLD_MS
   const toastTickIntervalMs = dependencies.toastTickIntervalMs ?? 1000
+
+  // Load configuration from ~/.config/opencode/premind.jsonc.
+  //
+  // Two guards protect the user's real config directory from test writes:
+  //  1. Injected `loadConfig` → caller owns config placement; we don't touch
+  //     the filesystem at all.
+  //  2. NODE_TEST_CONTEXT env var (set by `node:test`) → we're inside a test
+  //     runner even if this specific test didn't inject loadConfig. Skip
+  //     template creation; still load, but from the default path which for
+  //     tests will almost always be absent → pure defaults.
+  let resolvedConfig
+  if (dependencies.loadConfig) {
+    resolvedConfig = dependencies.loadConfig()
+  } else {
+    const underNodeTestRunner = typeof process.env.NODE_TEST_CONTEXT === "string"
+    if (!underNodeTestRunner) {
+      const ensureTemplate = dependencies.ensureConfigTemplate ?? (() => {
+        ensureUserConfigTemplate(getDefaultUserConfigPath())
+      })
+      ensureTemplate()
+    }
+    resolvedConfig = loadPremindConfig()
+  }
+
+  // dependencies.idleDeliveryThresholdMs (test injection) takes precedence
+  // over the loaded config value. Strict undefined check so 0 (used in tests
+  // for immediate delivery) is not overridden by the config default.
+  let idleDeliveryThreshold =
+    dependencies.idleDeliveryThresholdMs ?? resolvedConfig.idleDeliveryThresholdMs ?? PREMIND_IDLE_DELIVERY_THRESHOLD_MS
 
   writePluginRuntimeState({ phase: "initializing", root })
   registerPluginInstance(root)
@@ -710,17 +745,11 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
   return {
     // Register slash commands via config mutation.
     config: async (configInput: any) => {
-      // Apply user-configurable idle delivery threshold from opencode.json.
-      // dependencies.idleDeliveryThresholdMs (test injection) takes precedence;
-      // use strict undefined check so 0 (used in tests for immediate delivery)
-      // is not overridden by the config value.
-      if (dependencies.idleDeliveryThresholdMs === undefined) {
-        const premindBlob = (configInput as Record<string, unknown>)["premind"]
-        const parsed = premindConfigSchema.safeParse(premindBlob ?? {})
-        if (parsed.success) {
-          idleDeliveryThreshold = parsed.data.idleDeliveryThresholdMs
-        }
-      }
+      // Premind config is loaded from ~/.config/opencode/premind.jsonc at
+      // plugin-factory time, not from opencode's merged config. opencode's
+      // strict schema rejects unknown top-level keys as a hard startup
+      // failure, so a top-level `premind` key could never be used. If one
+      // is present here, it is ignored.
 
       configInput.command ??= {}
       configInput.command["premind-status"] = {
