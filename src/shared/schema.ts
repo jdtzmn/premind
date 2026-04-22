@@ -2,6 +2,7 @@ import { z } from "zod"
 import {
   PREMIND_CLIENT_HEARTBEAT_MS,
   PREMIND_CLIENT_LEASE_TTL_MS,
+  PREMIND_IDLE_DELIVERY_THRESHOLD_MS,
   PREMIND_IDLE_SHUTDOWN_GRACE_MS,
   PREMIND_PROTOCOL_VERSION,
 } from "./constants.ts"
@@ -28,6 +29,9 @@ export const premindConfigSchema = z
     inlineEventLimit: z.number().int().positive().default(8),
     inlineCommentCharLimit: z.number().int().positive().default(320),
     debugLogging: z.boolean().default(false),
+    // How long the session must be idle before pending PR updates are delivered.
+    // Minimum 5 seconds to ensure the countdown toast has time to display.
+    idleDeliveryThresholdMs: z.number().int().min(5_000).default(PREMIND_IDLE_DELIVERY_THRESHOLD_MS),
   })
   .strict()
 

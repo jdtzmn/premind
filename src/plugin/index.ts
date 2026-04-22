@@ -1,5 +1,6 @@
 import { tool, type Plugin } from "@opencode-ai/plugin"
 import { PREMIND_CLIENT_HEARTBEAT_MS, PREMIND_IDLE_DELIVERY_THRESHOLD_MS } from "../shared/constants.ts"
+import { premindConfigSchema } from "../shared/schema.ts"
 import { PremindDaemonClient } from "./daemon-client.ts"
 import { renderPremindStatus } from "./commands.ts"
 import { getPluginRuntimeStatePath, readPluginInstances, readPluginRuntimeState, registerPluginInstance, writePluginRuntimeState } from "./debug-state.ts"
@@ -104,7 +105,7 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
   const root = worktree || directory
   const gitDetector = dependencies.detectGit ?? detectGitContext
   const startDaemon = dependencies.ensureDaemon ?? ensureDaemonRunning
-  const idleDeliveryThreshold = dependencies.idleDeliveryThresholdMs ?? PREMIND_IDLE_DELIVERY_THRESHOLD_MS
+  let idleDeliveryThreshold = dependencies.idleDeliveryThresholdMs ?? PREMIND_IDLE_DELIVERY_THRESHOLD_MS
   const toastTickIntervalMs = dependencies.toastTickIntervalMs ?? 1000
 
   writePluginRuntimeState({ phase: "initializing", root })
@@ -709,6 +710,18 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
   return {
     // Register slash commands via config mutation.
     config: async (configInput: any) => {
+      // Apply user-configurable idle delivery threshold from opencode.json.
+      // dependencies.idleDeliveryThresholdMs (test injection) takes precedence;
+      // use strict undefined check so 0 (used in tests for immediate delivery)
+      // is not overridden by the config value.
+      if (dependencies.idleDeliveryThresholdMs === undefined) {
+        const premindBlob = (configInput as Record<string, unknown>)["premind"]
+        const parsed = premindConfigSchema.safeParse(premindBlob ?? {})
+        if (parsed.success) {
+          idleDeliveryThreshold = parsed.data.idleDeliveryThresholdMs
+        }
+      }
+
       configInput.command ??= {}
       configInput.command["premind-status"] = {
         template: COMMAND_MARKERS.status,
