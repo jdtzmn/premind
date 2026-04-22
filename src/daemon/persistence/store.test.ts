@@ -269,6 +269,9 @@ describe("StateStore", () => {
     assert.equal(recovery.resetBatches, 1)
     assert.equal(store.getPendingReminder("session-restart"), null)
 
+    // Only one session on its branch — nothing deduplicated.
+    assert.equal(recovery.dedupedSessions, 0)
+
     // Session and watcher state should survive.
     assert.equal(recovery.recoveredSessions, 1)
     assert.ok(store.getSession("session-restart"))
@@ -982,6 +985,40 @@ describe("StateStore", () => {
     ;(store as any).db.prepare(`UPDATE sessions SET status = 'closed' WHERE session_id IN ('s-closed-1', 's-closed-2')`).run()
 
     assert.equal(store.countClosedSessions(), 2)
+    store.close()
+  })
+
+  test("recoverFromRestart deduplicates: keeps most-recent session per branch, closes the rest", () => {
+    const store = createStore()
+    const now = Date.now()
+
+    store.registerClient("client-dedup", { pid: 1, projectRoot: "/tmp/project" }, now - 10_000)
+
+    // Insert three sessions on the same branch directly (bypassing registerSession's
+    // own supersession so we can simulate the pre-fix state where duplicates existed).
+    const insertSession = (store as any).db.prepare(`
+      INSERT INTO sessions (session_id, client_id, repo, branch, pr_number, is_primary, status, busy_state, last_delivered_event_seq, last_activity_at, created_at, updated_at)
+      VALUES (:id, 'client-dedup', 'acme/repo', 'feature/x', NULL, 1, 'active', 'idle', 0, :t, :t, :t)
+    `)
+    insertSession.run({ id: "oldest", t: now - 3000 })
+    insertSession.run({ id: "middle", t: now - 2000 })
+    insertSession.run({ id: "newest", t: now - 1000 })
+
+    // A session on a different branch — must not be affected.
+    ;(store as any).db.prepare(`
+      INSERT INTO sessions (session_id, client_id, repo, branch, pr_number, is_primary, status, busy_state, last_delivered_event_seq, last_activity_at, created_at, updated_at)
+      VALUES ('other-branch', 'client-dedup', 'acme/repo', 'feature/y', NULL, 1, 'active', 'idle', 0, :t, :t, :t)
+    `).run({ t: now - 500 })
+
+    const recovery = store.recoverFromRestart(now)
+
+    assert.equal(recovery.dedupedSessions, 2, "oldest and middle should be closed")
+    assert.equal(store.getSession("oldest")?.status, "closed")
+    assert.equal(store.getSession("middle")?.status, "closed")
+    assert.equal(store.getSession("newest")?.status, "active", "most-recent session survives")
+    assert.equal(store.getSession("other-branch")?.status, "active", "different branch unaffected")
+    assert.equal(recovery.recoveredSessions, 2, "two active sessions remain after dedup")
+
     store.close()
   })
 

@@ -108,6 +108,26 @@ export class StateStore {
     // They'll be rebuilt from the event log on next idle.
     const resetBatches = this.db.prepare(`DELETE FROM reminder_batches WHERE state = 'handed_off'`).run()
 
+    // Deduplicate active sessions: keep only the most-recently-updated session
+    // per (repo, branch) and close the rest. Without this, accumulated duplicate
+    // sessions from prior runs are recovered as-is and never get superseded
+    // (opencode doesn't re-emit session.created on reconnect, so registerSession
+    // never fires for them and the new session's supersession logic can't run).
+    const deduped = this.db.prepare(`
+      UPDATE sessions
+      SET status = 'closed', updated_at = :now
+      WHERE status = 'active'
+        AND session_id NOT IN (
+          SELECT session_id FROM sessions AS s2
+          WHERE s2.repo = sessions.repo
+            AND s2.branch = sessions.branch
+            AND s2.status = 'active'
+          ORDER BY s2.updated_at DESC
+          LIMIT 1
+        )
+    `).run({ now })
+    if ((deduped.changes as number) > 0) this.refreshWatcherCounts(now)
+
     // Count what we're recovering.
     const sessions = this.countActiveSessions()
     const branchWatchers = (this.db.prepare(`SELECT COUNT(*) AS count FROM branch_watchers WHERE active_session_count > 0`).get() as { count: number }).count
@@ -116,6 +136,7 @@ export class StateStore {
     return {
       prunedClients: deletedClients.changes as number,
       resetBatches: resetBatches.changes as number,
+      dedupedSessions: deduped.changes as number,
       recoveredSessions: sessions,
       recoveredBranchWatchers: branchWatchers,
       recoveredPrWatchers: prWatchers,

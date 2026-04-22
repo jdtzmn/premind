@@ -26,6 +26,7 @@ async function main() {
   logger.info("startup recovery", {
     prunedClients: recovery.prunedClients,
     resetBatches: recovery.resetBatches,
+    dedupedSessions: recovery.dedupedSessions,
     recoveredSessions: recovery.recoveredSessions,
     recoveredBranchWatchers: recovery.recoveredBranchWatchers,
     recoveredPrWatchers: recovery.recoveredPrWatchers,
