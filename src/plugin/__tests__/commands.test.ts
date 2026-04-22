@@ -102,6 +102,30 @@ describe("plugin commands", () => {
     )
     assert.match(rendered, /- last reap: 3 minutes ago \(7 reaped\)/)
   })
+
+  test("shows closed sessions line only when > 0", () => {
+    const base = {
+      daemon: { protocolVersion: 1 },
+      activeClients: 1,
+      activeSessions: 2,
+      activeWatchers: 1,
+      lastReapAt: null,
+      lastReapCount: 0,
+      sessions: [],
+    }
+
+    // Zero closed sessions — line must be absent.
+    const withNone = renderPremindStatus({ ...base, closedSessions: 0 })
+    assert.ok(!withNone.includes("closed sessions"), "must not show closed sessions line when 0")
+
+    // Omitted — also absent (field is optional).
+    const withOmitted = renderPremindStatus(base)
+    assert.ok(!withOmitted.includes("closed sessions"), "must not show closed sessions line when omitted")
+
+    // Non-zero — line must appear.
+    const withSome = renderPremindStatus({ ...base, closedSessions: 42 })
+    assert.match(withSome, /- closed sessions \(pending pruning\): 42/)
+  })
 })
 
 describe("formatRelativeTime", () => {

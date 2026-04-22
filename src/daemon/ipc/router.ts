@@ -70,6 +70,7 @@ export class Router {
             globallyDisabled: this.store.isGloballyDisabled(),
             activeClients: this.store.countActiveClients(),
             activeSessions: this.store.countActiveSessions(),
+            closedSessions: this.store.countClosedSessions(),
             activeWatchers: this.store.countActiveWatchers(),
             lastReapAt: this.store.getLastReapAt(),
             lastReapCount: this.store.getLastReapCount(),

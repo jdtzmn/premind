@@ -146,6 +146,7 @@ export const debugStatusResponseSchema = z
     globallyDisabled: z.boolean().default(false),
     activeClients: z.number().int().nonnegative(),
     activeSessions: z.number().int().nonnegative(),
+    closedSessions: z.number().int().nonnegative().default(0),
     activeWatchers: z.number().int().nonnegative(),
     lastReapAt: z.number().int().nullable(),
     lastReapCount: z.number().int().nonnegative(),

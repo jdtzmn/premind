@@ -240,13 +240,65 @@ export class StateStore {
     return this.lastReapCount
   }
 
+  /**
+   * Permanently deletes closed session rows (and their reminder_batches via
+   * CASCADE) that have been closed for longer than retentionMs. This prevents
+   * indefinite accumulation of stale tracking rows that will never receive
+   * delivery.
+   *
+   * Does NOT affect opencode's own session store — premind's DB is a local
+   * tracking layer only.
+   */
+  pruneClosedSessions(retentionMs: number, now = Date.now()): number {
+    const cutoff = now - retentionMs
+    const result = this.db
+      .prepare(`DELETE FROM sessions WHERE status = 'closed' AND updated_at < :cutoff`)
+      .run({ cutoff })
+    return result.changes as number
+  }
+
+  /**
+   * Deletes pr_events and pr_snapshots for (repo, pr_number) pairs that have
+   * no active (non-closed) sessions referencing them. Once the last active
+   * session on a PR is gone, its event history can never be delivered, so
+   * retaining it only wastes space.
+   *
+   * Returns the number of event rows deleted.
+   */
+  pruneOrphanedPrEvents(now = Date.now()): number {
+    // Snapshots first — they're smaller and have no dependents.
+    this.db.prepare(`
+      DELETE FROM pr_snapshots
+      WHERE (repo, pr_number) NOT IN (
+        SELECT repo, pr_number
+        FROM sessions
+        WHERE status != 'closed' AND pr_number IS NOT NULL
+      )
+    `).run()
+
+    const result = this.db.prepare(`
+      DELETE FROM pr_events
+      WHERE (repo, pr_number) NOT IN (
+        SELECT repo, pr_number
+        FROM sessions
+        WHERE status != 'closed' AND pr_number IS NOT NULL
+      )
+    `).run()
+    return result.changes as number
+  }
+
+  countClosedSessions(): number {
+    const row = this.db.prepare(`SELECT COUNT(*) AS count FROM sessions WHERE status = 'closed'`).get() as { count: number }
+    return row.count
+  }
+
   getSession(sessionId: string) {
     return this.db.prepare(`SELECT * FROM sessions WHERE session_id = ?`).get(sessionId) as SessionRow | undefined
   }
 
   listSessionSummaries() {
     const sessions = this.db
-      .prepare(`SELECT session_id, repo, branch, pr_number, status, busy_state, last_delivered_event_seq FROM sessions ORDER BY updated_at DESC`)
+      .prepare(`SELECT session_id, repo, branch, pr_number, status, busy_state, last_delivered_event_seq FROM sessions WHERE status != 'closed' ORDER BY updated_at DESC`)
       .all() as Array<{
       session_id: string
       repo: string

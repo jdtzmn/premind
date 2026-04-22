@@ -29,6 +29,7 @@ export const renderPremindStatus = (status: {
   globallyDisabled?: boolean
   activeClients: number
   activeSessions: number
+  closedSessions?: number
   activeWatchers: number
   lastReapAt: number | null
   lastReapCount: number
@@ -54,6 +55,11 @@ export const renderPremindStatus = (status: {
     `- protocol: ${status.daemon.protocolVersion}`,
     `- active clients: ${status.activeClients}`,
     `- active sessions: ${status.activeSessions}`,
+  )
+  if ((status.closedSessions ?? 0) > 0) {
+    lines.push(`- closed sessions (pending pruning): ${status.closedSessions}`)
+  }
+  lines.push(
     `- active watchers: ${status.activeWatchers}`,
     lastReapLine,
     ...status.sessions.map(

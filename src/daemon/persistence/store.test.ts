@@ -826,4 +826,162 @@ describe("StateStore", () => {
 
     store.close()
   })
+
+  test("pruneClosedSessions: deletes closed rows older than retention, preserves recent and active", () => {
+    const store = createStore()
+    const now = Date.now()
+    const retentionMs = 24 * 60 * 60 * 1000 // 24 h
+
+    store.registerClient("client-prune", { pid: 1, projectRoot: "/tmp/project" })
+
+    // Session closed a long time ago (beyond retention).
+    store.registerSession({
+      clientId: "client-prune", sessionId: "old-closed", repo: "acme/repo",
+      branch: "old", isPrimary: true, status: "active", busyState: "idle",
+    }, now - retentionMs - 1000)
+    ;(store as any).db.prepare(`UPDATE sessions SET status = 'closed', updated_at = :t WHERE session_id = 'old-closed'`)
+      .run({ t: now - retentionMs - 1000 })
+
+    // Session closed recently (within retention window).
+    store.registerSession({
+      clientId: "client-prune", sessionId: "recent-closed", repo: "acme/repo",
+      branch: "recent", isPrimary: true, status: "active", busyState: "idle",
+    }, now - 1000)
+    ;(store as any).db.prepare(`UPDATE sessions SET status = 'closed', updated_at = :t WHERE session_id = 'recent-closed'`)
+      .run({ t: now - 1000 })
+
+    // Active session — must never be touched.
+    store.registerSession({
+      clientId: "client-prune", sessionId: "still-active", repo: "acme/repo",
+      branch: "active", isPrimary: true, status: "active", busyState: "idle",
+    }, now)
+
+    const pruned = store.pruneClosedSessions(retentionMs, now)
+    assert.equal(pruned, 1, "only the old closed session should be pruned")
+    assert.ok(!store.getSession("old-closed"), "old closed session should be gone")
+    assert.ok(store.getSession("recent-closed"), "recently closed session should survive")
+    assert.ok(store.getSession("still-active"), "active session must not be pruned")
+
+    store.close()
+  })
+
+  test("pruneClosedSessions: reminder_batches cascade-deleted with session", () => {
+    const store = createStore()
+    const now = Date.now()
+    const retentionMs = 1000 // very short for test
+
+    store.registerClient("client-cascade", { pid: 1, projectRoot: "/tmp/project" })
+    store.registerSession({
+      clientId: "client-cascade", sessionId: "cascade-session", repo: "acme/repo",
+      branch: "cascade", isPrimary: true, status: "active", busyState: "idle",
+    })
+    store.recordBranchAssociation("acme/repo", "cascade", 99)
+    store.insertEvents("acme/repo", 99, [{
+      dedupeKey: "ev-cascade", kind: "issue_comment.created", priority: "high",
+      summary: "cascade test", payload: {},
+    }])
+    // Build a reminder batch so there's a reminder_batches row.
+    store.buildReminderBatch("cascade-session", now - 2000)
+
+    // Close and age the session beyond retention.
+    ;(store as any).db.prepare(`UPDATE sessions SET status = 'closed', updated_at = :t WHERE session_id = 'cascade-session'`)
+      .run({ t: now - 2000 })
+
+    const pruned = store.pruneClosedSessions(retentionMs, now)
+    assert.equal(pruned, 1)
+    // The reminder batch should be gone via CASCADE.
+    assert.equal(store.getPendingReminder("cascade-session"), null)
+
+    store.close()
+  })
+
+  test("pruneOrphanedPrEvents: removes events and snapshots for PRs with no active sessions", () => {
+    const store = createStore()
+
+    store.registerClient("client-orphan", { pid: 1, projectRoot: "/tmp/project" })
+
+    // PR 1: closed session — events should be pruned.
+    store.registerSession({
+      clientId: "client-orphan", sessionId: "closed-ses", repo: "acme/repo",
+      branch: "branch-a", isPrimary: true, status: "active", busyState: "idle",
+    })
+    store.recordBranchAssociation("acme/repo", "branch-a", 1)
+    store.saveSnapshot("acme/repo", 1, snapshot())
+    store.insertEvents("acme/repo", 1, [{
+      dedupeKey: "orphan-ev-1", kind: "issue_comment.created", priority: "high",
+      summary: "orphaned event", payload: {},
+    }])
+    ;(store as any).db.prepare(`UPDATE sessions SET status = 'closed' WHERE session_id = 'closed-ses'`).run()
+
+    // PR 2: active session — events must survive.
+    store.registerSession({
+      clientId: "client-orphan", sessionId: "active-ses", repo: "acme/repo",
+      branch: "branch-b", isPrimary: true, status: "active", busyState: "idle",
+    })
+    store.recordBranchAssociation("acme/repo", "branch-b", 2)
+    store.insertEvents("acme/repo", 2, [{
+      dedupeKey: "active-ev-1", kind: "issue_comment.created", priority: "high",
+      summary: "active event", payload: {},
+    }])
+
+    const prunedEvents = store.pruneOrphanedPrEvents()
+    assert.equal(prunedEvents, 1, "should prune 1 event for the orphaned PR")
+
+    // PR 1 events gone, snapshot gone.
+    const eventsForPr1 = (store as any).db.prepare(`SELECT COUNT(*) AS c FROM pr_events WHERE repo = 'acme/repo' AND pr_number = 1`).get() as { c: number }
+    assert.equal(eventsForPr1.c, 0)
+    assert.equal(store.getSnapshot("acme/repo", 1), null, "snapshot for orphaned PR should be pruned")
+
+    // PR 2 events survive.
+    const eventsForPr2 = (store as any).db.prepare(`SELECT COUNT(*) AS c FROM pr_events WHERE repo = 'acme/repo' AND pr_number = 2`).get() as { c: number }
+    assert.equal(eventsForPr2.c, 1)
+
+    store.close()
+  })
+
+  test("pruneOrphanedPrEvents: PR with mixed active+closed sessions is NOT pruned", () => {
+    const store = createStore()
+
+    store.registerClient("client-mixed", { pid: 1, projectRoot: "/tmp/project" })
+
+    // Two sessions on the same PR: one closed, one still active.
+    store.registerSession({
+      clientId: "client-mixed", sessionId: "mixed-closed", repo: "acme/repo",
+      branch: "mixed", isPrimary: true, status: "active", busyState: "idle",
+    })
+    store.registerSession({
+      clientId: "client-mixed", sessionId: "mixed-active", repo: "acme/repo",
+      branch: "mixed", isPrimary: false, status: "active", busyState: "idle",
+    })
+    store.recordBranchAssociation("acme/repo", "mixed", 3)
+    store.insertEvents("acme/repo", 3, [{
+      dedupeKey: "mixed-ev", kind: "review.approved", priority: "high",
+      summary: "mixed event", payload: {},
+    }])
+    ;(store as any).db.prepare(`UPDATE sessions SET status = 'closed' WHERE session_id = 'mixed-closed'`).run()
+
+    const prunedEvents = store.pruneOrphanedPrEvents()
+    assert.equal(prunedEvents, 0, "should not prune events when at least one active session exists")
+
+    const eventsForPr3 = (store as any).db.prepare(`SELECT COUNT(*) AS c FROM pr_events WHERE repo = 'acme/repo' AND pr_number = 3`).get() as { c: number }
+    assert.equal(eventsForPr3.c, 1)
+
+    store.close()
+  })
+
+  test("countClosedSessions: counts only closed rows", () => {
+    const store = createStore()
+    store.registerClient("client-count", { pid: 1, projectRoot: "/tmp/project" })
+
+    assert.equal(store.countClosedSessions(), 0)
+
+    store.registerSession({ clientId: "client-count", sessionId: "s-active", repo: "r", branch: "b", isPrimary: true, status: "active", busyState: "idle" })
+    store.registerSession({ clientId: "client-count", sessionId: "s-closed-1", repo: "r", branch: "b2", isPrimary: true, status: "active", busyState: "idle" })
+    store.registerSession({ clientId: "client-count", sessionId: "s-closed-2", repo: "r", branch: "b3", isPrimary: true, status: "active", busyState: "idle" })
+
+    ;(store as any).db.prepare(`UPDATE sessions SET status = 'closed' WHERE session_id IN ('s-closed-1', 's-closed-2')`).run()
+
+    assert.equal(store.countClosedSessions(), 2)
+    store.close()
+  })
 })

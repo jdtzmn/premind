@@ -1,4 +1,4 @@
-import { PREMIND_IDLE_SHUTDOWN_GRACE_MS, PREMIND_SESSION_STALE_MS } from "../shared/constants.ts"
+import { PREMIND_CLOSED_SESSION_RETENTION_MS, PREMIND_IDLE_SHUTDOWN_GRACE_MS, PREMIND_SESSION_STALE_MS } from "../shared/constants.ts"
 import { createLogger } from "./logging/logger.ts"
 import { IpcServer } from "./ipc/server.ts"
 import { GitHubClient } from "./github/client.ts"
@@ -40,6 +40,17 @@ async function main() {
       reaped: startupReap.reaped,
       oldestAgeMs: startupReap.oldestAgeMs,
       thresholdMs: PREMIND_SESSION_STALE_MS,
+    })
+  }
+
+  // Prune closed session rows and orphaned PR events at startup so any backlog
+  // accumulated while the daemon was down is cleaned up immediately.
+  const startupPrunedSessions = server.store.pruneClosedSessions(PREMIND_CLOSED_SESSION_RETENTION_MS)
+  const startupPrunedEvents = server.store.pruneOrphanedPrEvents()
+  if (startupPrunedSessions > 0 || startupPrunedEvents > 0) {
+    logger.info("startup prune", {
+      prunedClosedSessions: startupPrunedSessions,
+      prunedOrphanedEvents: startupPrunedEvents,
     })
   }
 
@@ -98,6 +109,14 @@ async function main() {
         reaped: result.reaped,
         oldestAgeMs: result.oldestAgeMs,
         thresholdMs: PREMIND_SESSION_STALE_MS,
+      })
+    }
+    const prunedSessions = server.store.pruneClosedSessions(PREMIND_CLOSED_SESSION_RETENTION_MS)
+    const prunedEvents = server.store.pruneOrphanedPrEvents()
+    if (prunedSessions > 0 || prunedEvents > 0) {
+      logger.info("pruned closed sessions and orphaned events", {
+        prunedClosedSessions: prunedSessions,
+        prunedOrphanedEvents: prunedEvents,
       })
     }
   }, STALENESS_SWEEP_INTERVAL_MS)

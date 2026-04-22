@@ -14,3 +14,5 @@ export const PREMIND_CLIENT_LEASE_TTL_MS = 30_000
 export const PREMIND_IDLE_SHUTDOWN_GRACE_MS = 15_000
 export const PREMIND_IDLE_DELIVERY_THRESHOLD_MS = 60_000
 export const PREMIND_SESSION_STALE_MS = 6 * 60 * 60 * 1000
+// How long a closed session row is retained before being permanently deleted.
+export const PREMIND_CLOSED_SESSION_RETENTION_MS = 24 * 60 * 60 * 1000
