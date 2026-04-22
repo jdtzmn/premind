@@ -254,3 +254,133 @@ describe("reactive session re-attach", () => {
     assert.match(asyncPrompts[0].text, /queued while absent/)
   })
 })
+
+// ---------------------------------------------------------------------------
+// NotFoundError handling
+// ---------------------------------------------------------------------------
+
+describe("NotFoundError handling", () => {
+  const NOT_FOUND = { name: "NotFoundError", data: { message: "not found" } }
+
+  const makeNotFoundPlugin = async (options: {
+    promptAsyncError?: unknown
+    promptError?: unknown
+  }) => {
+    const operations: string[] = []
+    let batchAvailable = true
+
+    const daemon = {
+      registerClient: async () => ({ heartbeatMs: 10_000, leaseTtlMs: 30_000, idleShutdownGraceMs: 15_000 }),
+      heartbeat: async () => undefined,
+      release: async () => undefined,
+      registerSession: async ({ sessionId }: { sessionId: string }) => {
+        operations.push(`register:${sessionId}`)
+      },
+      updateSessionState: async () => undefined,
+      unregisterSession: async (sessionId: string) => {
+        operations.push(`unregister:${sessionId}`)
+      },
+      pauseSession: async () => undefined,
+      resumeSession: async () => undefined,
+      getPendingReminder: async (sessionId: string) => ({
+        batch: batchAvailable
+          ? {
+              batchId: "b1",
+              sessionId,
+              reminderText: "<system-reminder>test</system-reminder>",
+              events: [{}],
+            }
+          : null,
+      }),
+      ackReminder: async ({ state }: { state: string }) => {
+        operations.push(`ack:${state}`)
+        if (state === "handed_off" || state === "confirmed") batchAvailable = false
+      },
+      setGlobalDisabled: async (d: boolean) => ({ disabled: d }),
+      getGlobalDisabled: async () => ({ disabled: false }),
+      debugStatus: async () => ({ daemon: {}, activeClients: 1, activeSessions: 1, activeWatchers: 0, lastReapAt: null, lastReapCount: 0, sessions: [] }),
+      _operations: operations,
+    }
+
+    const plugin = await createPremindPlugin({
+      createDaemonClient: () => daemon as never,
+      detectGit: async () => ({ repo: "acme/repo", branch: "feature/x" }),
+      ensureDaemon: async () => {},
+      idleDeliveryThresholdMs: 0,
+    })({
+      directory: "/tmp/project",
+      worktree: "/tmp/project",
+      client: {
+        session: {
+          get: async () => ({ data: {} }),
+          prompt: async () => {
+            if (options.promptError) throw options.promptError
+          },
+          promptAsync: async () => {
+            if (options.promptAsyncError) throw options.promptAsyncError
+          },
+        },
+        tui: { showToast: async () => undefined },
+      },
+    } as never)
+
+    const runtime = plugin as unknown as {
+      config: (input: Record<string, unknown>) => Promise<void>
+      event: (input: { event: unknown }) => Promise<void>
+      "chat.message": (input: unknown, output: unknown) => Promise<void>
+    }
+    await runtime.config({})
+    return { runtime, daemon }
+  }
+
+  test("promptAsync NotFoundError: session is unregistered and no ack:failed is sent", async () => {
+    const { runtime, daemon } = await makeNotFoundPlugin({ promptAsyncError: NOT_FOUND })
+
+    await runtime.event({ event: { type: "session.created", properties: { sessionID: "gone-session" } } })
+    await runtime.event({ event: { type: "session.idle", properties: { sessionID: "gone-session" } } })
+    await new Promise((resolve) => setTimeout(resolve, 50))
+
+    // ack:handed_off fires before promptAsync, then the NotFoundError path should
+    // NOT send ack:failed (session is gone — no point acking).
+    assert.ok(daemon._operations.includes("ack:handed_off"), "should have started hand-off")
+    assert.ok(!daemon._operations.includes("ack:failed"), "must NOT ack:failed on NotFoundError")
+    // unregisterSession should be called to clean up the daemon record.
+    assert.ok(daemon._operations.includes("unregister:gone-session"), "should unregister the gone session")
+  })
+
+  test("promptAsync NotFoundError: subsequent idle events do not retry delivery", async () => {
+    const { runtime, daemon } = await makeNotFoundPlugin({ promptAsyncError: NOT_FOUND })
+
+    await runtime.event({ event: { type: "session.created", properties: { sessionID: "gone-session" } } })
+    await runtime.event({ event: { type: "session.idle", properties: { sessionID: "gone-session" } } })
+    await new Promise((resolve) => setTimeout(resolve, 50))
+
+    const ackCountAfterFirst = daemon._operations.filter((o) => o.startsWith("ack:")).length
+    // Fire another idle — should be a no-op (session no longer owned).
+    await runtime.event({ event: { type: "session.idle", properties: { sessionID: "gone-session" } } })
+    await new Promise((resolve) => setTimeout(resolve, 50))
+
+    const ackCountAfterSecond = daemon._operations.filter((o) => o.startsWith("ack:")).length
+    assert.equal(ackCountAfterFirst, ackCountAfterSecond, "no further acks after NotFoundError unregisters the session")
+  })
+
+  test("injectResponse NotFoundError: error does not propagate to the caller", async () => {
+    const { runtime } = await makeNotFoundPlugin({ promptError: NOT_FOUND })
+
+    // /premind-status injects a response via client.session.prompt.
+    // If that throws NotFoundError it must be swallowed, not re-thrown.
+    const registeredConfig: Record<string, unknown> = {}
+    await runtime.config(registeredConfig)
+    const commands = registeredConfig.command as Record<string, { template: string }>
+
+    await runtime.event({ event: { type: "session.created", properties: { sessionID: "gone-session" } } })
+
+    // This should NOT throw even though prompt() will throw NotFoundError.
+    await assert.doesNotReject(async () => {
+      await runtime["chat.message"](
+        { sessionID: "gone-session" },
+        { message: { parts: [{ type: "text", text: commands["premind-status"].template }] }, parts: [{ type: "text", text: commands["premind-status"].template }] },
+      )
+    }, "NotFoundError from injectResponse must not propagate")
+  })
+})

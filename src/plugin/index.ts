@@ -216,6 +216,12 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
   const isSessionNotFound = (error: unknown) =>
     error instanceof Error && error.message.startsWith("SESSION_NOT_FOUND")
 
+  // The opencode SDK throws a plain object with name: "NotFoundError" when a
+  // session no longer exists on the server (HTTP 404). We detect this to cleanly
+  // unregister the session from premind instead of retrying forever.
+  const isNotFoundError = (error: unknown): boolean =>
+    typeof error === "object" && error !== null && (error as Record<string, unknown>).name === "NotFoundError"
+
   // Reactive re-attach: when a daemon call reports SESSION_NOT_FOUND for a session
   // the plugin DID observe an opencode event for, the session almost certainly
   // exists in opencode but not in premind's DB (e.g. opencode resumed a past
@@ -297,12 +303,21 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
         state: "confirmed",
       })
     } catch (error) {
-      await daemon.ackReminder({
-        batchId: pending.batch.batchId,
-        sessionId: sessionID,
-        state: "failed",
-        error: error instanceof Error ? error.message : String(error),
-      })
+      if (isNotFoundError(error)) {
+        // The opencode session no longer exists. Unregister it from premind so
+        // we stop attempting delivery and clear all associated local state.
+        writePluginRuntimeState({ phase: "session-not-found-on-delivery", lastSessionId: sessionID })
+        cancelDelivery(sessionID)
+        ownedSessions.delete(sessionID)
+        void daemon.unregisterSession(sessionID).catch(() => {})
+      } else {
+        await daemon.ackReminder({
+          batchId: pending.batch.batchId,
+          sessionId: sessionID,
+          state: "failed",
+          error: error instanceof Error ? error.message : String(error),
+        })
+      }
     } finally {
       inflightReminders.delete(sessionID)
     }
@@ -552,15 +567,23 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
   }
 
   const injectResponse = async (sessionID: string, text: string, inputRef?: { agent?: string; model?: { providerID: string; modelID: string } }) => {
-    await client.session.prompt({
-      path: { id: sessionID },
-      body: {
-        noReply: true,
-        agent: inputRef?.agent,
-        model: inputRef?.model,
-        parts: [{ type: "text", text, ignored: true }],
-      },
-    })
+    try {
+      await client.session.prompt({
+        path: { id: sessionID },
+        body: {
+          noReply: true,
+          agent: inputRef?.agent,
+          model: inputRef?.model,
+          parts: [{ type: "text", text, ignored: true }],
+        },
+      })
+    } catch (error) {
+      if (isNotFoundError(error)) {
+        // Session no longer exists in opencode — silently abandon the injection.
+        return
+      }
+      throw error
+    }
     throw new Error(ABORT_SENTINEL)
   }
 
