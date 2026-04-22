@@ -57,10 +57,26 @@ export async function ensureDaemonRunning(socketPath = PREMIND_SOCKET_PATH) {
   let exitCode: number | null = null
   let exitSignal: string | null = null
 
+  // Spawn with an explicit cwd set to the daemon entry's directory.
+  // This avoids CWD-relative module resolution quirks when opencode's process
+  // is in a project that has tsx (or other loaders) in its local node_modules —
+  // those loaders would resolve the daemon entry relative to the wrong base.
+  const spawnCwd = path.dirname(DAEMON_ENTRY)
+  const spawnCommand = [runner.command, ...runner.args, DAEMON_ENTRY].join(" ")
+
+  // Write pre-spawn diagnostics immediately so they're visible even if the
+  // spawn hangs or crashes before we can capture the diagnostics below.
+  writePluginRuntimeState({
+    phase: "daemon-spawning",
+    daemonStarted: false,
+    daemonDiagnostics: { runner: runner.command, daemonEntry: DAEMON_ENTRY, spawnCwd, spawnCommand },
+  })
+
   const child = spawn(runner.command, [...runner.args, DAEMON_ENTRY], {
     detached: true,
     stdio: ["ignore", "pipe", "pipe"],
     env: { ...process.env },
+    cwd: spawnCwd,
   })
 
   child.stdout?.setEncoding("utf8")
@@ -85,6 +101,8 @@ export async function ensureDaemonRunning(socketPath = PREMIND_SOCKET_PATH) {
   const diag = {
     runner: runner.command,
     daemonEntry: DAEMON_ENTRY,
+    spawnCwd,
+    spawnCommand,
     spawnPid: child.pid,
     exitCode,
     exitSignal,

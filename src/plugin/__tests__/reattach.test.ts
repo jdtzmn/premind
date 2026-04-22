@@ -464,3 +464,85 @@ describe("attachSession skips nonexistent sessions", () => {
     assert.ok(daemon._operations.includes("register:real-session"), "must register a real session")
   })
 })
+
+// ---------------------------------------------------------------------------
+// chat.message registers the session even on slash commands
+// ---------------------------------------------------------------------------
+
+describe("chat.message session registration", () => {
+  test("slash command chat.message registers an unregistered session before handling the command", async () => {
+    const operations: string[] = []
+    const knownSessions = new Set<string>()
+    const daemon = {
+      registerClient: async () => ({ heartbeatMs: 10_000, leaseTtlMs: 30_000, idleShutdownGraceMs: 15_000 }),
+      heartbeat: async () => undefined,
+      release: async () => undefined,
+      registerSession: async ({ sessionId }: { sessionId: string }) => {
+        operations.push(`register:${sessionId}`)
+        knownSessions.add(sessionId)
+      },
+      updateSessionState: async ({ sessionId, busyState }: { sessionId: string; busyState: string }) => {
+        operations.push(`update:${busyState}:${sessionId}`)
+        // Fails SESSION_NOT_FOUND until session is registered.
+        if (!knownSessions.has(sessionId)) {
+          throw new Error(`SESSION_NOT_FOUND: ${sessionId}`)
+        }
+      },
+      unregisterSession: async () => undefined,
+      pauseSession: async () => undefined,
+      resumeSession: async () => undefined,
+      getPendingReminder: async () => ({ batch: null }),
+      ackReminder: async () => undefined,
+      setGlobalDisabled: async (d: boolean) => ({ disabled: d }),
+      getGlobalDisabled: async () => ({ disabled: false }),
+      debugStatus: async () => ({ daemon: {}, activeClients: 0, activeSessions: 0, activeWatchers: 0, lastReapAt: null, lastReapCount: 0, sessions: [] }),
+    }
+
+    const syncPrompts: Array<{ sessionId: string; text: string }> = []
+    const plugin = await createPremindPlugin({
+      createDaemonClient: () => daemon as never,
+      detectGit: async () => ({ repo: "acme/repo", branch: "feature/x" }),
+      ensureDaemon: async () => {},
+      idleDeliveryThresholdMs: 0,
+    })({
+      directory: "/tmp/project",
+      worktree: "/tmp/project",
+      client: {
+        session: {
+          get: async () => ({ data: {} }),
+          prompt: async ({ path, body }: any) => {
+            syncPrompts.push({ sessionId: path.id, text: body.parts[0].text })
+          },
+          promptAsync: async () => undefined,
+        },
+        tui: { showToast: async () => undefined },
+      },
+    } as never)
+
+    const runtime = plugin as unknown as {
+      config: (input: Record<string, unknown>) => Promise<void>
+      "chat.message": (input: unknown, output: unknown) => Promise<void>
+    }
+    const registeredConfig: Record<string, unknown> = {}
+    await runtime.config(registeredConfig)
+    const commands = registeredConfig.command as Record<string, { template: string }>
+
+    // Fire a /premind-status command without a prior session.created event.
+    // The session is not registered yet. The handler should register it first.
+    const statusMarker = commands["premind-status"].template
+    try {
+      await runtime["chat.message"](
+        { sessionID: "fresh-session" },
+        { message: { parts: [{ type: "text", text: statusMarker }] }, parts: [{ type: "text", text: statusMarker }] },
+      )
+    } catch (err) {
+      // ABORT_SENTINEL throw is expected — the slash command handled successfully.
+      assert.match((err as Error).message, /PREMIND_HANDLED/, "expected ABORT_SENTINEL throw")
+    }
+
+    // The session must have been registered BEFORE the status command ran.
+    assert.ok(operations.includes("register:fresh-session"), "session must be registered even when first message is a slash command")
+    // And the status response was injected.
+    assert.ok(syncPrompts.some((p) => p.sessionId === "fresh-session" && p.text.includes("premind status")), "status response must have been injected")
+  })
+})

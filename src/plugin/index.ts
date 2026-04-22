@@ -2,7 +2,7 @@ import { tool, type Plugin } from "@opencode-ai/plugin"
 import { PREMIND_CLIENT_HEARTBEAT_MS, PREMIND_IDLE_DELIVERY_THRESHOLD_MS } from "../shared/constants.ts"
 import { PremindDaemonClient } from "./daemon-client.ts"
 import { renderPremindStatus } from "./commands.ts"
-import { getPluginRuntimeStatePath, readPluginRuntimeState, writePluginRuntimeState } from "./debug-state.ts"
+import { getPluginRuntimeStatePath, readPluginInstances, readPluginRuntimeState, registerPluginInstance, writePluginRuntimeState } from "./debug-state.ts"
 import { detectGitContext } from "./git-context.ts"
 import { ensureDaemonRunning } from "./daemon-launcher.ts"
 
@@ -108,6 +108,7 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
   const toastTickIntervalMs = dependencies.toastTickIntervalMs ?? 1000
 
   writePluginRuntimeState({ phase: "initializing", root })
+  registerPluginInstance(root)
 
   try {
     await startDaemon()
@@ -761,12 +762,15 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
         },
       }),
       premind_probe: tool({
-        description: "Verify premind plugin initialization and return runtime diagnostics",
+        description: "Verify premind plugin initialization and return runtime diagnostics for this instance and all other live instances",
         args: {},
         async execute() {
           const state = readPluginRuntimeState()
+          const instances = readPluginInstances()
+          const otherInstances = instances.filter((i) => i.pid !== process.pid)
           return [
             "premind probe",
+            `- pid: ${process.pid}`,
             `- state file: ${getPluginRuntimeStatePath()}`,
             `- phase: ${state.phase ?? "unknown"}`,
             `- daemon started: ${state.daemonStarted === true ? "yes" : state.daemonStarted === false ? "no" : "unknown"}`,
@@ -776,6 +780,9 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
             `- last session: ${state.lastSessionId ?? "none"}`,
             `- updated at: ${state.updatedAt ?? "unknown"}`,
             ...(state.error ? [`- error: ${state.error}`] : []),
+            ...(otherInstances.length > 0
+              ? [`- other live instances (${otherInstances.length}):`, ...otherInstances.map((i) => `  pid=${i.pid} root=${i.root ?? "?"} started=${i.startedAt}`)]
+              : ["- other live instances: none"]),
           ].join("\n")
         },
       }),
@@ -824,6 +831,16 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
       // the session — the TUI rendering this message belongs to our client.
       ownedSessions.add(input.sessionID)
 
+      // Ensure the session is registered and mark it busy FIRST, before
+      // handling any slash commands. Slash commands throw ABORT_SENTINEL
+      // after responding, which would skip this call if it came after them.
+      // This guarantees the session is always registered on first interaction,
+      // even if the user's first message is a slash command like /premind-status.
+      await withReattach(input.sessionID, () =>
+        daemon.updateSessionState({ sessionId: input.sessionID, busyState: "busy" }),
+      )
+      cancelDelivery(input.sessionID)
+
       const outputText = extractText(output)
       const inputRef = { agent: input.agent, model: input.model }
 
@@ -846,13 +863,6 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
       if (outputText.includes(COMMAND_MARKERS.enable)) {
         await handleEnableCommand(input.sessionID, inputRef)
       }
-
-      // Mark the session busy. If the session isn't registered yet (e.g. opencode
-      // resumed a past session, or the daemon DB was wiped), re-attach and retry.
-      await withReattach(input.sessionID, () =>
-        daemon.updateSessionState({ sessionId: input.sessionID, busyState: "busy" }),
-      )
-      cancelDelivery(input.sessionID)
     },
   }
 }
