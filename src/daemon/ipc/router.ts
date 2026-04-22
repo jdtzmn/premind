@@ -35,6 +35,12 @@ export class Router {
       case "updateSessionState": {
         const updated = this.store.updateSessionState(request.payload)
         if (!updated) return this.fail("SESSION_NOT_FOUND", `Unknown session: ${request.payload.sessionId}`)
+        if (request.payload.busyState) {
+          this.logger.info("session state updated", {
+            sessionId: request.payload.sessionId,
+            busyState: request.payload.busyState,
+          })
+        }
         return this.ok({ updated: true })
       }
       case "unregisterSession":

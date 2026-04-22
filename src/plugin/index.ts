@@ -839,6 +839,11 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
       const sessionID = getEventSessionId(event)
       if (!sessionID) return
 
+      // Trace every event arrival so we can see which events reach this plugin
+      // instance's handler. The phase is intentionally overwritten on each event
+      // so the most recent one is visible in the per-PID state file.
+      writePluginRuntimeState({ phase: `event:${event.type}`, lastSessionId: sessionID })
+
       if (event.type === "session.created") {
         // Extract parentID from the event payload without a network round-trip.
         // EventSessionCreated.properties.info is the full Session object.
@@ -901,6 +906,9 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
     // Handle both slash command markers and reminder confirmation.
     "chat.message": async (input, output) => {
       if (!input.sessionID) return
+
+      // Trace every chat.message arrival so we can confirm the handler fires.
+      writePluginRuntimeState({ phase: "chat.message", lastSessionId: input.sessionID })
 
       // Skip known child sessions — they won't have slash commands or reminders.
       if (knownChildSessions.has(input.sessionID)) return
