@@ -222,6 +222,16 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
   const isNotFoundError = (error: unknown): boolean =>
     typeof error === "object" && error !== null && (error as Record<string, unknown>).name === "NotFoundError"
 
+  // The opencode SDK does NOT set throwOnError on prompt/promptAsync, so errors
+  // are returned as { error: {...}, response, request } rather than thrown.
+  // Extract and throw the error field so our existing catch blocks handle it.
+  const throwIfResponseError = (result: unknown): void => {
+    if (result && typeof result === "object" && "error" in (result as object)) {
+      const err = (result as Record<string, unknown>).error
+      if (err) throw err
+    }
+  }
+
   // Reactive re-attach: when a daemon call reports SESSION_NOT_FOUND for a session
   // the plugin DID observe an opencode event for, the session almost certainly
   // exists in opencode but not in premind's DB (e.g. opencode resumed a past
@@ -288,12 +298,15 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
     // Stop countdown toast — delivery is in progress.
     stopToastCountdown(sessionID)
     try {
-      await client.session.promptAsync({
+      const promptResult = await client.session.promptAsync({
         path: { id: sessionID },
         body: {
           parts: [{ type: "text", text: pending.batch.reminderText }],
         },
       })
+      // The SDK returns error objects instead of throwing on non-2xx responses.
+      // Rethrow so our catch block handles NotFoundError and other failures.
+      throwIfResponseError(promptResult)
       // Auto-confirm immediately after successful delivery. The reminder has
       // been enqueued in the session; no need to wait for a marker in the
       // user's next message.
@@ -568,7 +581,7 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
 
   const injectResponse = async (sessionID: string, text: string, inputRef?: { agent?: string; model?: { providerID: string; modelID: string } }) => {
     try {
-      await client.session.prompt({
+      const promptResult = await client.session.prompt({
         path: { id: sessionID },
         body: {
           noReply: true,
@@ -577,6 +590,8 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
           parts: [{ type: "text", text, ignored: true }],
         },
       })
+      // The SDK returns error objects instead of throwing on non-2xx responses.
+      throwIfResponseError(promptResult)
     } catch (error) {
       if (isNotFoundError(error)) {
         // Session no longer exists in opencode — silently abandon the injection.

@@ -260,11 +260,14 @@ describe("reactive session re-attach", () => {
 // ---------------------------------------------------------------------------
 
 describe("NotFoundError handling", () => {
+  // The opencode SDK returns { error: NOT_FOUND } instead of throwing on 404.
+  // These tests use the same return-not-throw pattern to match the real SDK.
   const NOT_FOUND = { name: "NotFoundError", data: { message: "not found" } }
+  const NOT_FOUND_RESPONSE = { error: NOT_FOUND }
 
   const makeNotFoundPlugin = async (options: {
-    promptAsyncError?: unknown
-    promptError?: unknown
+    promptAsyncNotFound?: boolean
+    promptNotFound?: boolean
   }) => {
     const operations: string[] = []
     let batchAvailable = true
@@ -313,12 +316,9 @@ describe("NotFoundError handling", () => {
       client: {
         session: {
           get: async () => ({ data: {} }),
-          prompt: async () => {
-            if (options.promptError) throw options.promptError
-          },
-          promptAsync: async () => {
-            if (options.promptAsyncError) throw options.promptAsyncError
-          },
+          // Mimic the real SDK: return { error } instead of throwing.
+          prompt: async () => options.promptNotFound ? NOT_FOUND_RESPONSE : undefined,
+          promptAsync: async () => options.promptAsyncNotFound ? NOT_FOUND_RESPONSE : undefined,
         },
         tui: { showToast: async () => undefined },
       },
@@ -334,7 +334,7 @@ describe("NotFoundError handling", () => {
   }
 
   test("promptAsync NotFoundError: session is unregistered and no ack:failed is sent", async () => {
-    const { runtime, daemon } = await makeNotFoundPlugin({ promptAsyncError: NOT_FOUND })
+    const { runtime, daemon } = await makeNotFoundPlugin({ promptAsyncNotFound: true })
 
     await runtime.event({ event: { type: "session.created", properties: { sessionID: "gone-session" } } })
     await runtime.event({ event: { type: "session.idle", properties: { sessionID: "gone-session" } } })
@@ -349,7 +349,7 @@ describe("NotFoundError handling", () => {
   })
 
   test("promptAsync NotFoundError: subsequent idle events do not retry delivery", async () => {
-    const { runtime, daemon } = await makeNotFoundPlugin({ promptAsyncError: NOT_FOUND })
+    const { runtime, daemon } = await makeNotFoundPlugin({ promptAsyncNotFound: true })
 
     await runtime.event({ event: { type: "session.created", properties: { sessionID: "gone-session" } } })
     await runtime.event({ event: { type: "session.idle", properties: { sessionID: "gone-session" } } })
@@ -365,7 +365,7 @@ describe("NotFoundError handling", () => {
   })
 
   test("injectResponse NotFoundError: error does not propagate to the caller", async () => {
-    const { runtime } = await makeNotFoundPlugin({ promptError: NOT_FOUND })
+    const { runtime } = await makeNotFoundPlugin({ promptNotFound: true })
 
     // /premind-status injects a response via client.session.prompt.
     // If that throws NotFoundError it must be swallowed, not re-thrown.
