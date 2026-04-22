@@ -162,6 +162,16 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
 
   const attachSession = async (sessionID: string, trigger: "created" | "reattach" = "created"): Promise<boolean> => {
     const session = await client.session.get({ path: { id: sessionID } })
+    // The opencode SDK returns { error, data: undefined } instead of throwing on 404.
+    // If data is absent (session doesn't exist on the server) bail immediately so we
+    // never register a zombie session with the daemon or attempt promptAsync against it.
+    if (!session?.data) {
+      writePluginRuntimeState({
+        phase: trigger === "reattach" ? "session-reattach-skipped-nonexistent" : "session-attach-skipped-nonexistent",
+        lastSessionId: sessionID,
+      })
+      return false
+    }
     const sessionData = session.data
     const git = await gitDetector(root)
     // Premind only tracks primary (non-child) sessions. Child sessions (subagent,

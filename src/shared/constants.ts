@@ -16,3 +16,7 @@ export const PREMIND_IDLE_DELIVERY_THRESHOLD_MS = 60_000
 export const PREMIND_SESSION_STALE_MS = 6 * 60 * 60 * 1000
 // How long a closed session row is retained before being permanently deleted.
 export const PREMIND_CLOSED_SESSION_RETENTION_MS = 24 * 60 * 60 * 1000
+// Daemon log file. Entries are appended here for post-hoc diagnosis.
+export const PREMIND_DAEMON_LOG_PATH = path.join(PREMIND_STATE_DIR, "daemon.log")
+// Rotate the log file when it exceeds this size.
+export const PREMIND_DAEMON_LOG_MAX_BYTES = 10 * 1024 * 1024

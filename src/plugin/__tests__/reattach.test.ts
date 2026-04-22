@@ -384,3 +384,83 @@ describe("NotFoundError handling", () => {
     }, "NotFoundError from injectResponse must not propagate")
   })
 })
+
+// ---------------------------------------------------------------------------
+// attachSession skips sessions that don't exist in opencode
+// ---------------------------------------------------------------------------
+
+describe("attachSession skips nonexistent sessions", () => {
+  const makePlugin = async (sessionGetResponse: unknown) => {
+    const operations: string[] = []
+    const daemon = {
+      registerClient: async () => ({ heartbeatMs: 10_000, leaseTtlMs: 30_000, idleShutdownGraceMs: 15_000 }),
+      heartbeat: async () => undefined,
+      release: async () => undefined,
+      registerSession: async ({ sessionId }: { sessionId: string }) => {
+        operations.push(`register:${sessionId}`)
+      },
+      updateSessionState: async () => undefined,
+      unregisterSession: async (sessionId: string) => { operations.push(`unregister:${sessionId}`) },
+      pauseSession: async () => undefined,
+      resumeSession: async () => undefined,
+      getPendingReminder: async () => ({ batch: null }),
+      ackReminder: async () => undefined,
+      setGlobalDisabled: async (d: boolean) => ({ disabled: d }),
+      getGlobalDisabled: async () => ({ disabled: false }),
+      debugStatus: async () => ({ daemon: {}, activeClients: 0, activeSessions: 0, activeWatchers: 0, lastReapAt: null, lastReapCount: 0, sessions: [] }),
+      _operations: operations,
+    }
+
+    const plugin = await createPremindPlugin({
+      createDaemonClient: () => daemon as never,
+      detectGit: async () => ({ repo: "acme/repo", branch: "feature/x" }),
+      ensureDaemon: async () => {},
+      idleDeliveryThresholdMs: 0,
+    })({
+      directory: "/tmp/project",
+      worktree: "/tmp/project",
+      client: {
+        session: {
+          // Return the configured response for every session.get call.
+          get: async () => sessionGetResponse,
+          prompt: async () => undefined,
+          promptAsync: async () => undefined,
+        },
+        tui: { showToast: async () => undefined },
+      },
+    } as never)
+
+    const runtime = plugin as unknown as {
+      config: (input: Record<string, unknown>) => Promise<void>
+      event: (input: { event: unknown }) => Promise<void>
+    }
+    await runtime.config({})
+    return { runtime, daemon }
+  }
+
+  test("session.created with error response does not register the session", async () => {
+    // SDK returns { error: NotFoundError } when the session doesn't exist.
+    const { runtime, daemon } = await makePlugin({ error: { name: "NotFoundError" } })
+
+    await runtime.event({ event: { type: "session.created", properties: { sessionID: "ghost-session" } } })
+
+    assert.ok(!daemon._operations.includes("register:ghost-session"), "must not register a nonexistent session")
+  })
+
+  test("session.created with missing data does not register the session", async () => {
+    // data field absent (undefined), e.g. a session that was garbage-collected.
+    const { runtime, daemon } = await makePlugin({ data: undefined })
+
+    await runtime.event({ event: { type: "session.created", properties: { sessionID: "ghost-session-2" } } })
+
+    assert.ok(!daemon._operations.includes("register:ghost-session-2"), "must not register when data is missing")
+  })
+
+  test("session.created with valid response registers normally", async () => {
+    const { runtime, daemon } = await makePlugin({ data: {} })
+
+    await runtime.event({ event: { type: "session.created", properties: { sessionID: "real-session" } } })
+
+    assert.ok(daemon._operations.includes("register:real-session"), "must register a real session")
+  })
+})
