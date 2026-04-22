@@ -6,8 +6,6 @@ import { getPluginRuntimeStatePath, readPluginRuntimeState, writePluginRuntimeSt
 import { detectGitContext } from "./git-context.ts"
 import { ensureDaemonRunning } from "./daemon-launcher.ts"
 
-const REMINDER_MARKER_PREFIX = "premind://reminder/"
-
 const COMMAND_MARKERS = {
   status: "[PREMIND_STATUS]",
   pause: "[PREMIND_PAUSE]",
@@ -74,11 +72,7 @@ export type PremindPluginDependencies = {
   detectGit?: (cwd: string) => Promise<{ repo: string; branch: string }>
   ensureDaemon?: () => Promise<void>
   idleDeliveryThresholdMs?: number
-  // Overrides the staleness TTL for inflight reminders. Intended for tests;
-  // production always uses the computed default (see inflightStaleTtlMs).
-  inflightStaleTtlMs?: number
-  // Overrides the countdown toast tick interval. Intended for tests so the
-  // stall self-correction path can be exercised without multi-second waits.
+  // Overrides the countdown toast tick interval. Intended for tests.
   toastTickIntervalMs?: number
 }
 
@@ -131,11 +125,11 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
   const daemon = dependencies.createDaemonClient?.() ?? new PremindDaemonClient()
   const lease = await daemon.registerClient(root, "opencode-plugin")
   writePluginRuntimeState({ phase: "client-registered", root, daemonStarted: true, clientRegistered: true })
-  // Tracks reminders that have been handed off to opencode but have not yet
-  // had their chat.message confirmation observed. Entries are keyed by session
-  // and carry the hand-off timestamp so stale entries (e.g. prompts whose ack
-  // never arrived because opencode reattached mid-flight) can be cleared.
-  const inflightReminders = new Map<string, { batchId: string; startedAt: number }>()
+  // Tracks reminders currently being handed off via promptAsync. Acts as a
+  // delivery-in-progress guard to prevent concurrent delivery for the same
+  // session. Entries are set just before promptAsync and cleared immediately
+  // after (success or failure) — no waiting for user-message confirmation.
+  const inflightReminders = new Set<string>()
   // Sessions this plugin instance has observed through its own lifecycle
   // (opencode event stream, successful attach, or direct interaction). The
   // daemon's debugStatus.sessions returns the global session list across all
@@ -145,11 +139,6 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
   // session.deleted.
   const ownedSessions = new Set<string>()
   let lastPrimarySessionId: string | undefined
-
-  // How long a hand-off may sit without a confirmation before we consider the
-  // inflight entry stale and allow a fresh delivery attempt. Generous relative
-  // to idleDeliveryThreshold so normal ack latency does not trigger it.
-  const inflightStaleTtlMs = dependencies.inflightStaleTtlMs ?? Math.max(60_000, (dependencies.idleDeliveryThresholdMs ?? PREMIND_IDLE_DELIVERY_THRESHOLD_MS) * 2)
 
   // Per-session idle state for threshold-based delivery.
   const idleSince = new Map<string, number>()
@@ -266,27 +255,15 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
   }
 
   // Attempt immediate delivery of a pending reminder for a session.
-  // Does nothing if no batch exists or if one is already in-flight (unless the
-  // inflight entry is stale, in which case we discard it and retry).
+  // Does nothing if no batch exists or if a delivery is already in progress.
   const deliverPendingReminder = async (sessionID: string) => {
     // Never deliver to a session this plugin instance doesn't own. The
-    // promptAsync call would fail SESSION_NOT_FOUND anyway, but we'd
-    // already have acked "handed_off" to the daemon, leaving the batch in
-    // a wrong state for the session's real owner.
+    // promptAsync call would fail anyway, but we'd have already acked
+    // "handed_off" to the daemon, leaving the batch in a wrong state.
     if (!ownedSessions.has(sessionID)) return
 
-    const existingInflight = inflightReminders.get(sessionID)
-    if (existingInflight !== undefined) {
-      const age = Date.now() - existingInflight.startedAt
-      if (age < inflightStaleTtlMs) return
-      // Stale hand-off — the chat.message ack never arrived. Clear it and let
-      // the normal delivery path attempt again with a fresh hand-off.
-      inflightReminders.delete(sessionID)
-      writePluginRuntimeState({
-        phase: "inflight-reminder-stale",
-        lastSessionId: sessionID,
-      })
-    }
+    // Prevent concurrent delivery for the same session.
+    if (inflightReminders.has(sessionID)) return
 
     const pending = await daemon.getPendingReminder(sessionID)
     if (!pending.batch) return
@@ -297,24 +274,33 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
       state: "handed_off",
     })
 
-    inflightReminders.set(sessionID, { batchId: pending.batch.batchId, startedAt: Date.now() })
+    inflightReminders.add(sessionID)
     // Stop countdown toast — delivery is in progress.
     stopToastCountdown(sessionID)
     try {
       await client.session.promptAsync({
         path: { id: sessionID },
         body: {
-          parts: [{ type: "text", text: `${pending.batch.reminderText}\n\n${REMINDER_MARKER_PREFIX}${pending.batch.batchId}` }],
+          parts: [{ type: "text", text: pending.batch.reminderText }],
         },
       })
+      // Auto-confirm immediately after successful delivery. The reminder has
+      // been enqueued in the session; no need to wait for a marker in the
+      // user's next message.
+      await daemon.ackReminder({
+        batchId: pending.batch.batchId,
+        sessionId: sessionID,
+        state: "confirmed",
+      })
     } catch (error) {
-      inflightReminders.delete(sessionID)
       await daemon.ackReminder({
         batchId: pending.batch.batchId,
         sessionId: sessionID,
         state: "failed",
         error: error instanceof Error ? error.message : String(error),
       })
+    } finally {
+      inflightReminders.delete(sessionID)
     }
   }
 
@@ -393,6 +379,12 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
 
       // Session is no longer idle (cancelled locally) — stop the countdown.
       if (since === undefined) {
+        stopToastCountdown(sessionID)
+        return
+      }
+
+      // Delivery is in progress — hide the countdown toast until it settles.
+      if (inflightReminders.has(sessionID)) {
         stopToastCountdown(sessionID)
         return
       }
@@ -817,21 +809,6 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
       }
       if (outputText.includes(COMMAND_MARKERS.enable)) {
         await handleEnableCommand(input.sessionID, inputRef)
-      }
-
-      // Check for reminder confirmation marker.
-      const fullText = `${extractText(input)}\n${outputText}`
-      const expectedInflight = inflightReminders.get(input.sessionID)
-      if (expectedInflight && fullText.includes(`${REMINDER_MARKER_PREFIX}${expectedInflight.batchId}`)) {
-        await daemon.ackReminder({
-          batchId: expectedInflight.batchId,
-          sessionId: input.sessionID,
-          state: "confirmed",
-        })
-        inflightReminders.delete(input.sessionID)
-        stopToastCountdown(input.sessionID)
-        void client.tui.showToast({ body: { variant: "success", message: "PR updates delivered to session", duration: 3_000 } }).catch(() => {})
-        return
       }
 
       // Mark the session busy. If the session isn't registered yet (e.g. opencode

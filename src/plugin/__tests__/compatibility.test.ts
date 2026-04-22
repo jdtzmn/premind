@@ -112,27 +112,21 @@ describe("premind plugin compatibility harness", () => {
     await runtime.event({ event: { type: "session.created", properties: { sessionID: "session-1" } } })
     assert.ok(operations.includes("register:session-1"))
 
-    // 3. session.idle event triggers reminder injection.
+    // 3. session.idle event triggers reminder injection with immediate auto-confirm.
     await runtime.event({ event: { type: "session.idle", properties: { sessionID: "session-1" } } })
+    // scheduleDelivery fires deliverPendingReminder as a void promise when threshold=0;
+    // yield to let the microtask queue drain so acks complete before we assert.
+    await new Promise((resolve) => setTimeout(resolve, 0))
     assert.equal(asyncPrompts.length, 1)
-    assert.match(asyncPrompts[0].text, /premind:\/\/reminder\/batch-1/)
-    assert.deepEqual(
-      acknowledgements.map((entry) => entry.state),
-      ["handed_off"],
-    )
-
-    // 4. chat.message with marker confirms delivery.
-    const reminderText = asyncPrompts[0].text
-    await runtime["chat.message"](
-      { sessionID: "session-1", messageID: "msg-1" },
-      { message: { parts: [{ type: "text", text: reminderText }] }, parts: [] },
-    )
+    // Reminder text should no longer contain a marker suffix.
+    assert.ok(!asyncPrompts[0].text.includes("premind://reminder/"), "reminder text must not contain marker suffix")
     assert.deepEqual(
       acknowledgements.map((entry) => entry.state),
       ["handed_off", "confirmed"],
+      "delivery should auto-confirm immediately after promptAsync succeeds",
     )
 
-    // 5. Slash command via chat.message: premind-status marker injects noReply and throws.
+    // 4. Slash command via chat.message: premind-status marker injects noReply and throws.
     const statusMarker = commands["premind-status"].template
     try {
       await runtime["chat.message"](
