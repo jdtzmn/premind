@@ -146,10 +146,14 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
   // Per-session background poll intervals that check for new batches while idle.
   // This ensures a batch that arrives after the session is already idle still gets delivered.
   const idlePollIntervals = new Map<string, ReturnType<typeof setInterval>>()
-  // Per-session 1-second toast countdown timers shown in the TUI while a batch is pending.
-  const toastTimers = new Map<string, ReturnType<typeof setInterval>>()
+  // Sessions currently showing a toast countdown. A single global interval
+  // aggregates these into one showToast call per tick so multiple sessions
+  // don't interleave their individual toasts and cause visible flicker.
+  const toastSessions = new Set<string>()
   // Mutable count refs so the idle poll can update the displayed count without restarting the interval.
   const pendingCountRefs = new Map<string, { value: number }>()
+  // Per-session zero-stall counter for the global tick's self-correction logic.
+  const zeroTickCounts = new Map<string, number>()
 
   const heartbeat = setInterval(() => {
     void daemon.heartbeat().catch(() => {})
@@ -193,7 +197,7 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
       try {
         const pending = await daemon.getPendingReminder(sessionID)
         if (pending.batch) {
-          if (!toastTimers.has(sessionID)) {
+          if (!toastSessions.has(sessionID)) {
             startToastCountdown(sessionID, pending.batch.events.length)
           } else {
             const ref = pendingCountRefs.get(sessionID)
@@ -336,108 +340,91 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
     deliveryTimers.set(sessionID, timer)
   }
 
-  // Show a replacing TUI toast every second with the current countdown.
+  // Register a session for the global countdown toast.
   const startToastCountdown = (sessionID: string, initialPendingCount: number) => {
     // Never render a toast for a session this plugin instance doesn't own.
-    // Defense in depth against any caller that might forget to check.
     if (!ownedSessions.has(sessionID)) return
+    pendingCountRefs.set(sessionID, { value: initialPendingCount })
+    zeroTickCounts.set(sessionID, 0)
+    toastSessions.add(sessionID)
+  }
 
-    // Stop any existing toast timer for this session first.
-    const existing = toastTimers.get(sessionID)
-    if (existing !== undefined) {
-      clearInterval(existing)
-      toastTimers.delete(sessionID)
-    }
+  const stopToastCountdown = (sessionID: string) => {
+    toastSessions.delete(sessionID)
+    pendingCountRefs.delete(sessionID)
+    zeroTickCounts.delete(sessionID)
+  }
 
-    // Mutable count ref — the idle poll updates this in place so showTick always
-    // displays the latest count without restarting the interval.
-    const countRef = { value: initialPendingCount }
-    pendingCountRefs.set(sessionID, countRef)
+  // Global tick: runs once per toastTickIntervalMs regardless of how many sessions
+  // are active. Aggregates all pending-countdown sessions into a single showToast
+  // call so multiple sessions never interleave their individual toasts.
+  let globalToastTickCount = 0
+  const globalToastTick = () => {
+    globalToastTickCount++
 
-    // Async check: verify session is still idle from daemon's perspective.
-    // This handles cross-instance cases where session.status busy events may not
-    // reach this plugin instance (e.g. sessions in other worktrees).
-    const verifyStillIdle = () => {
+    // Every 10 ticks (10s) verify all countdown sessions are still idle from the
+    // daemon's perspective. Handles cross-instance busy transitions.
+    if (globalToastTickCount % 10 === 0) {
       void daemon.debugStatus().then((status) => {
-        const sessions: Array<{ sessionId: string; busyState?: string }> = status?.sessions ?? []
-        const session = sessions.find((s) => s.sessionId === sessionID)
-        if (!session || session.busyState !== "idle") {
-          cancelDelivery(sessionID)
+        const daemonSessions: Array<{ sessionId: string; busyState?: string }> = status?.sessions ?? []
+        for (const sessionID of toastSessions) {
+          const ds = daemonSessions.find((s) => s.sessionId === sessionID)
+          if (!ds || ds.busyState !== "idle") {
+            cancelDelivery(sessionID)
+          }
         }
       }).catch(() => {})
     }
 
-    let tickCount = 0
-    // Consecutive ticks the toast has spent at remainingSecs === 0. If this
-    // crosses the threshold below without a delivery happening, we force a
-    // fresh scheduleDelivery call to recover from any corrupted scheduler
-    // state (e.g. a delivery path that silently no-oped).
-    let zeroTickCount = 0
-    const ZERO_STALL_TICKS = 5
-    const showTick = () => {
+    // Collect active sessions: owned, idle locally, not in-flight.
+    let totalCount = 0
+    let minRemainingSecs = Infinity
+    const activeSessions: string[] = []
+
+    for (const sessionID of toastSessions) {
       const since = idleSince.get(sessionID)
-
-      // Session is no longer idle (cancelled locally) — stop the countdown.
       if (since === undefined) {
+        // Session is no longer locally idle — remove from set.
         stopToastCountdown(sessionID)
-        return
+        continue
       }
-
-      // Delivery is in progress — hide the countdown toast until it settles.
       if (inflightReminders.has(sessionID)) {
-        stopToastCountdown(sessionID)
-        return
+        // Delivery in progress — skip (toast hidden while in-flight).
+        continue
       }
-
-      // Every 10 seconds verify the session is still idle from the daemon's perspective.
-      // This catches busy transitions that may not have reached this plugin instance.
-      tickCount++
-      if (tickCount % 10 === 0) verifyStillIdle()
-
-      const count = countRef.value
-      const label = `${count} PR update${count === 1 ? "" : "s"} queued`
+      const count = (pendingCountRefs.get(sessionID)?.value ?? 0)
       const elapsed = Date.now() - since
       const remainingSecs = Math.max(0, Math.ceil((idleDeliveryThreshold - elapsed) / 1000))
-      const message = `${label} — sending in ${remainingSecs}s`
 
-      void client.tui.showToast({ body: { variant: "info", message, duration: 1200 } }).catch(() => {})
+      totalCount += count
+      if (remainingSecs < minRemainingSecs) minRemainingSecs = remainingSecs
+      activeSessions.push(sessionID)
 
-      // Self-correction: if the countdown has been stuck at 0s for several
-      // consecutive ticks, force a reschedule. This is a safety net for any
-      // code path that leaves the toast running without an active delivery
-      // cycle. If inflight is fresh, deliverPendingReminder will gate on it
-      // as usual; if inflight is stale, the TTL check will clear it and
-      // allow a fresh hand-off. Either way we accelerate recovery compared
-      // to waiting for the idle poll's heartbeat interval.
+      // Per-session zero-stall self-correction.
+      const ZERO_STALL_TICKS = 5
       if (remainingSecs === 0) {
-        zeroTickCount++
-        if (zeroTickCount >= ZERO_STALL_TICKS) {
-          zeroTickCount = 0
-          writePluginRuntimeState({
-            phase: "toast-countdown-stalled",
-            lastSessionId: sessionID,
-          })
+        const prev = zeroTickCounts.get(sessionID) ?? 0
+        const next = prev + 1
+        zeroTickCounts.set(sessionID, next)
+        if (next >= ZERO_STALL_TICKS) {
+          zeroTickCounts.set(sessionID, 0)
+          writePluginRuntimeState({ phase: "toast-countdown-stalled", lastSessionId: sessionID })
           scheduleDelivery(sessionID)
         }
       } else {
-        zeroTickCount = 0
+        zeroTickCounts.set(sessionID, 0)
       }
     }
 
-    showTick()
-    const timer = setInterval(showTick, toastTickIntervalMs)
-    if (typeof timer === "object" && "unref" in timer) timer.unref()
-    toastTimers.set(sessionID, timer)
+    if (activeSessions.length === 0) return
+
+    const label = `${totalCount} PR update${totalCount === 1 ? "" : "s"} queued`
+    const message = `${label} — sending in ${minRemainingSecs === Infinity ? 0 : minRemainingSecs}s`
+    void client.tui.showToast({ body: { variant: "info", message, duration: 1500 } }).catch(() => {})
   }
 
-  const stopToastCountdown = (sessionID: string) => {
-    const timer = toastTimers.get(sessionID)
-    if (timer !== undefined) {
-      clearInterval(timer)
-      toastTimers.delete(sessionID)
-    }
-    pendingCountRefs.delete(sessionID)
-  }
+  const globalToastInterval = setInterval(globalToastTick, toastTickIntervalMs)
+  if (typeof globalToastInterval === "object" && "unref" in globalToastInterval) globalToastInterval.unref()
 
   // Poll the daemon for new batches while a session is idle.
   // This catches batches that arrive after the session already went idle.
@@ -456,12 +443,12 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
       // Check for a new batch and start toast countdown + schedule delivery.
       void daemon.getPendingReminder(sessionID).then((pending) => {
         if (!pending.batch) return
-        if (!toastTimers.has(sessionID)) {
-          // No countdown running yet — start one.
+        if (!toastSessions.has(sessionID)) {
+          // No countdown registered yet — start one.
           startToastCountdown(sessionID, pending.batch.events.length)
         } else {
-          // Countdown already running — update the count ref in place so the
-          // next showTick displays the latest count without restarting the interval.
+          // Countdown already registered — update the count ref in place so the
+          // next global tick displays the latest count.
           const ref = pendingCountRefs.get(sessionID)
           if (ref) ref.value = pending.batch.events.length
         }
@@ -506,7 +493,7 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
         // and arm the delivery timer right away.
         try {
           const pending = await daemon.getPendingReminder(s.sessionId)
-          if (pending.batch && !toastTimers.has(s.sessionId)) {
+          if (pending.batch && !toastSessions.has(s.sessionId)) {
             startToastCountdown(s.sessionId, pending.batch.events.length)
           }
           if (pending.batch) {
@@ -555,7 +542,7 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
 
     // Start toast countdown if there is already a pending batch.
     const pending = await daemon.getPendingReminder(sessionID).catch(() => ({ batch: null }))
-    if (pending.batch && !toastTimers.has(sessionID)) {
+    if (pending.batch && !toastSessions.has(sessionID)) {
       startToastCountdown(sessionID, pending.batch.events.length)
     }
 
@@ -655,6 +642,7 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
       // Keep the heartbeat alive for the lifetime of the plugin instance.
       process.on("exit", () => {
         clearInterval(heartbeat)
+        clearInterval(globalToastInterval)
         void daemon.release().catch(() => {})
       })
 
