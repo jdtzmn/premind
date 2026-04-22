@@ -22,12 +22,13 @@ export class Router {
         this.store.releaseClient(request.payload.clientId)
         return this.ok({ released: true })
       case "registerSession": {
-        const { created } = this.store.registerSession(request.payload)
+        const { created, superseded } = this.store.registerSession(request.payload)
         this.logger.info(created ? "session registered" : "session re-registered", {
           sessionId: request.payload.sessionId,
           repo: request.payload.repo,
           branch: request.payload.branch,
           reattach: !created,
+          ...(superseded > 0 ? { superseded } : {}),
         })
         return this.ok({ registered: true, created })
       }

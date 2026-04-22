@@ -194,6 +194,9 @@ describe("watcher integration", () => {
     const github = new FixtureGitHubClient()
     const prWatcher = new PullRequestWatcher(store, github)
 
+    // Use different branches so supersession doesn't close either session.
+    // Both branches point at PR #42 (simulating two devs working on the same PR
+    // via different checkout paths, or a branch + its worktree).
     store.registerClient("client-3", { pid: 3, projectRoot: "/tmp" })
     store.registerSession({
       clientId: "client-3",
@@ -208,12 +211,13 @@ describe("watcher integration", () => {
       clientId: "client-3",
       sessionId: "session-b",
       repo: "acme/repo",
-      branch: "feature/test",
+      branch: "feature/test-worktree",
       isPrimary: true,
       status: "active",
       busyState: "idle",
     })
     store.recordBranchAssociation("acme/repo", "feature/test", 42)
+    store.recordBranchAssociation("acme/repo", "feature/test-worktree", 42)
 
     // Tick 1: initial snapshot — produces pr.snapshot.initialized event.
     github.pushSnapshot(makeSnapshot())

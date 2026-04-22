@@ -681,7 +681,7 @@ describe("StateStore", () => {
       status: "active",
       busyState: "idle",
     })
-    assert.deepEqual(result, { created: true })
+    assert.deepEqual(result, { created: true, superseded: 0 })
 
     store.close()
   })
@@ -699,7 +699,7 @@ describe("StateStore", () => {
       status: "active",
       busyState: "idle",
     })
-    assert.deepEqual(first, { created: true })
+    assert.deepEqual(first, { created: true, superseded: 0 })
 
     const second = store.registerSession({
       clientId: "client-re-2",
@@ -710,7 +710,7 @@ describe("StateStore", () => {
       status: "active",
       busyState: "idle",
     })
-    assert.deepEqual(second, { created: false })
+    assert.deepEqual(second, { created: false, superseded: 0 })
 
     store.close()
   })
@@ -982,6 +982,101 @@ describe("StateStore", () => {
     ;(store as any).db.prepare(`UPDATE sessions SET status = 'closed' WHERE session_id IN ('s-closed-1', 's-closed-2')`).run()
 
     assert.equal(store.countClosedSessions(), 2)
+    store.close()
+  })
+
+  test("registerSession closes superseded sessions on the same (repo, branch)", () => {
+    const store = createStore()
+    store.registerClient("client-sup", { pid: 1, projectRoot: "/tmp/project" })
+
+    // Register session A on acme/repo @ feature/x.
+    const r1 = store.registerSession({
+      clientId: "client-sup", sessionId: "session-A", repo: "acme/repo",
+      branch: "feature/x", isPrimary: true, status: "active", busyState: "idle",
+    })
+    assert.deepEqual(r1, { created: true, superseded: 0 })
+    assert.equal(store.getSession("session-A")?.status, "active")
+
+    // Register session B on the same branch — A should be superseded.
+    const r2 = store.registerSession({
+      clientId: "client-sup", sessionId: "session-B", repo: "acme/repo",
+      branch: "feature/x", isPrimary: true, status: "active", busyState: "idle",
+    })
+    assert.deepEqual(r2, { created: true, superseded: 1 })
+    assert.equal(store.getSession("session-A")?.status, "closed", "A should be closed")
+    assert.equal(store.getSession("session-B")?.status, "active", "B should be active")
+
+    store.close()
+  })
+
+  test("registerSession does NOT close sessions on different branches", () => {
+    const store = createStore()
+    store.registerClient("client-diff", { pid: 1, projectRoot: "/tmp/project" })
+
+    store.registerSession({
+      clientId: "client-diff", sessionId: "branch-a-ses", repo: "acme/repo",
+      branch: "feature/a", isPrimary: true, status: "active", busyState: "idle",
+    })
+    const r = store.registerSession({
+      clientId: "client-diff", sessionId: "branch-b-ses", repo: "acme/repo",
+      branch: "feature/b", isPrimary: true, status: "active", busyState: "idle",
+    })
+
+    assert.equal(r.superseded, 0, "different branch must not be superseded")
+    assert.equal(store.getSession("branch-a-ses")?.status, "active")
+    assert.equal(store.getSession("branch-b-ses")?.status, "active")
+
+    store.close()
+  })
+
+  test("registerSession re-registering the same session does not close itself", () => {
+    const store = createStore()
+    store.registerClient("client-idem", { pid: 1, projectRoot: "/tmp/project" })
+
+    store.registerSession({
+      clientId: "client-idem", sessionId: "session-X", repo: "acme/repo",
+      branch: "feature/x", isPrimary: true, status: "active", busyState: "idle",
+    })
+    const r = store.registerSession({
+      clientId: "client-idem", sessionId: "session-X", repo: "acme/repo",
+      branch: "feature/x", isPrimary: true, status: "active", busyState: "idle",
+    })
+
+    assert.deepEqual(r, { created: false, superseded: 0 }, "idempotent re-register must not supersede itself")
+    assert.equal(store.getSession("session-X")?.status, "active")
+
+    store.close()
+  })
+
+  test("superseded sessions become orphan-pruneable once they lose the only active reference", () => {
+    const store = createStore()
+    store.registerClient("client-orphan2", { pid: 1, projectRoot: "/tmp/project" })
+
+    // Register A, associate with PR 7.
+    store.registerSession({
+      clientId: "client-orphan2", sessionId: "sup-A", repo: "acme/repo",
+      branch: "feature/x", isPrimary: true, status: "active", busyState: "idle",
+    })
+    store.recordBranchAssociation("acme/repo", "feature/x", 7)
+    store.insertEvents("acme/repo", 7, [{
+      dedupeKey: "sup-ev-1", kind: "review.approved", priority: "high",
+      summary: "approved", payload: {},
+    }])
+
+    // Before supersession: events must NOT be prunable (A is active).
+    assert.equal(store.pruneOrphanedPrEvents(), 0, "events must survive while A is active")
+
+    // Register B on the same branch — supersedes A.
+    store.registerSession({
+      clientId: "client-orphan2", sessionId: "sup-B", repo: "acme/repo",
+      branch: "feature/x", isPrimary: true, status: "active", busyState: "idle",
+    })
+    assert.equal(store.getSession("sup-A")?.status, "closed")
+
+    // B has no pr_number yet (recordBranchAssociation hasn't run for it).
+    // So PR 7 now has zero active sessions — events are prunable.
+    assert.equal(store.pruneOrphanedPrEvents(), 1, "events for orphaned PR should now be prunable")
+
     store.close()
   })
 })

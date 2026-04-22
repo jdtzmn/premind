@@ -137,7 +137,7 @@ export class StateStore {
     this.db.prepare(`DELETE FROM client_leases WHERE expires_at <= ?`).run(now)
   }
 
-  registerSession(payload: RegisterSessionPayload, now = Date.now()): { created: boolean } {
+  registerSession(payload: RegisterSessionPayload, now = Date.now()): { created: boolean; superseded: number } {
     const existing = this.getSession(payload.sessionId)
     this.db
       .prepare(
@@ -161,7 +161,28 @@ export class StateStore {
         now,
       })
     this.touchBranchWatcher(payload.repo, payload.branch, now)
-    return { created: !existing }
+
+    // Only one active premind session per (repo, branch) — close any pre-existing
+    // sessions on this branch so they stop receiving delivery and drop out of
+    // watchers/status. The new session becomes the sole active one.
+    const superseded = this.closeSupersededSessions(payload.repo, payload.branch, payload.sessionId, now)
+
+    return { created: !existing, superseded }
+  }
+
+  /**
+   * Marks all non-closed sessions on (repo, branch) other than exceptSessionId
+   * as closed. Returns the number of sessions closed.
+   */
+  closeSupersededSessions(repo: string, branch: string, exceptSessionId: string, now = Date.now()): number {
+    const result = this.db
+      .prepare(
+        `UPDATE sessions SET status = 'closed', updated_at = :now
+         WHERE repo = :repo AND branch = :branch AND session_id != :exceptSessionId AND status != 'closed'`,
+      )
+      .run({ repo, branch, exceptSessionId, now })
+    if ((result.changes as number) > 0) this.refreshWatcherCounts(now)
+    return result.changes as number
   }
 
   updateSessionState(payload: UpdateSessionStatePayload, now = Date.now()) {
