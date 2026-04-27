@@ -66,7 +66,7 @@ export function diffSnapshot(previous: PullRequestSnapshot | null, next: PullReq
         kind: "pr.snapshot.initialized",
         priority: "low",
         summary: `Started tracking ${next.core.number}: ${next.core.title}`,
-        detailFilePath: next.core.url,
+        referenceLink: next.core.url,
         payload: {
           prNumber: next.core.number,
           headSha: next.core.headRefOid,
@@ -84,7 +84,7 @@ export function diffSnapshot(previous: PullRequestSnapshot | null, next: PullReq
       kind: "pr.ready_for_review",
       priority: "high",
       summary: `PR is ready for review: ${next.core.title}`,
-      detailFilePath: next.core.url,
+      referenceLink: next.core.url,
       payload: { prNumber: next.core.number },
     })
   }
@@ -95,7 +95,7 @@ export function diffSnapshot(previous: PullRequestSnapshot | null, next: PullReq
       kind: "pr.converted_to_draft",
       priority: "medium",
       summary: `PR moved back to draft: ${next.core.title}`,
-      detailFilePath: next.core.url,
+      referenceLink: next.core.url,
       payload: { prNumber: next.core.number },
     })
   }
@@ -106,7 +106,7 @@ export function diffSnapshot(previous: PullRequestSnapshot | null, next: PullReq
       kind: "pr.synchronized",
       priority: "medium",
       summary: `New commits pushed to PR #${next.core.number}`,
-      detailFilePath: next.core.url,
+      referenceLink: next.core.url,
       payload: { previousHeadSha: previous.core.headRefOid, headSha: next.core.headRefOid },
     })
   }
@@ -125,7 +125,7 @@ export function diffSnapshot(previous: PullRequestSnapshot | null, next: PullReq
         kind: "merge_conflict.detected",
         priority: "high",
         summary: `Merge conflicts detected for PR #${next.core.number}`,
-        detailFilePath: next.core.url,
+        referenceLink: next.core.url,
         payload: { mergeStateStatus: next.core.mergeStateStatus ?? null },
       })
     }
@@ -135,7 +135,7 @@ export function diffSnapshot(previous: PullRequestSnapshot | null, next: PullReq
         kind: "merge_conflict.cleared",
         priority: "medium",
         summary: `Merge conflicts cleared for PR #${next.core.number}`,
-        detailFilePath: next.core.url,
+        referenceLink: next.core.url,
         payload: { mergeStateStatus: next.core.mergeStateStatus ?? null },
       })
     }
@@ -149,7 +149,7 @@ export function diffSnapshot(previous: PullRequestSnapshot | null, next: PullReq
         kind: "pr.review_decision.approved",
         priority: "high",
         summary: `PR review decision is now approved for #${next.core.number}`,
-        detailFilePath: next.core.url,
+        referenceLink: next.core.url,
         payload: { reviewDecision: nextDecision },
       })
     } else if (nextDecision === "CHANGES_REQUESTED") {
@@ -158,7 +158,7 @@ export function diffSnapshot(previous: PullRequestSnapshot | null, next: PullReq
         kind: "pr.review_decision.changes_requested",
         priority: "high",
         summary: `PR review decision now requests changes for #${next.core.number}`,
-        detailFilePath: next.core.url,
+        referenceLink: next.core.url,
         payload: { reviewDecision: nextDecision },
       })
     } else if (nextDecision === "REVIEW_REQUIRED") {
@@ -167,7 +167,7 @@ export function diffSnapshot(previous: PullRequestSnapshot | null, next: PullReq
         kind: "pr.review_decision.review_required",
         priority: "medium",
         summary: `PR review decision now requires review for #${next.core.number}`,
-        detailFilePath: next.core.url,
+        referenceLink: next.core.url,
         payload: { reviewDecision: nextDecision },
       })
     }
@@ -182,7 +182,7 @@ export function diffSnapshot(previous: PullRequestSnapshot | null, next: PullReq
       kind: "reviewer.requested",
       priority: "high",
       summary: `Reviewer requested: ${reviewer}`,
-      detailFilePath: next.core.url,
+      referenceLink: next.core.url,
       payload: { reviewer },
     })
   }
@@ -194,7 +194,7 @@ export function diffSnapshot(previous: PullRequestSnapshot | null, next: PullReq
       kind: "reviewer.removed",
       priority: "medium",
       summary: `Reviewer removed: ${reviewer}`,
-      detailFilePath: next.core.url,
+      referenceLink: next.core.url,
       payload: { reviewer },
     })
   }
@@ -217,7 +217,7 @@ export function diffSnapshot(previous: PullRequestSnapshot | null, next: PullReq
       kind,
       priority: kind === "review.changes_requested" || kind === "review.approved" ? "high" : "medium",
       summary: `${user} ${kind.replace("review.", "").replaceAll("_", " ")}${compact(review.body) ? `: ${compact(review.body)}` : ""}`,
-      detailFilePath: next.core.url,
+      referenceLink: next.core.url,
       payload: {
         reviewId: review.id,
         user,
@@ -242,7 +242,7 @@ export function diffSnapshot(previous: PullRequestSnapshot | null, next: PullReq
           kind: "issue_comment.edited",
           priority: "medium",
           summary: `Issue comment edited by ${user}${compact(comment.body) ? `: ${compact(comment.body)}` : ""}`,
-          detailFilePath: next.core.url,
+          referenceLink: next.core.url,
           payload: {
             commentId: comment.id,
             user,
@@ -261,7 +261,7 @@ export function diffSnapshot(previous: PullRequestSnapshot | null, next: PullReq
       kind: "issue_comment.created",
       priority: "high",
       summary: `New issue comment from ${user}${compact(comment.body) ? `: ${compact(comment.body)}` : ""}`,
-      detailFilePath: next.core.url,
+      referenceLink: next.core.url,
       payload: {
         commentId: comment.id,
         user,
@@ -278,7 +278,7 @@ export function diffSnapshot(previous: PullRequestSnapshot | null, next: PullReq
       kind: "issue_comment.deleted",
       priority: "medium",
       summary: `Issue comment deleted by ${user}${compact(previousComment.body) ? `: ${compact(previousComment.body)}` : ""}`,
-      detailFilePath: next.core.url,
+      referenceLink: next.core.url,
       payload: {
         commentId: previousComment.id,
         user,
@@ -303,7 +303,7 @@ export function diffSnapshot(previous: PullRequestSnapshot | null, next: PullReq
           kind: "review_comment.edited",
           priority: "medium",
           summary: `Review comment edited by ${user}${location}${compact(comment.body) ? `: ${compact(comment.body)}` : ""}`,
-          detailFilePath: next.core.url,
+          referenceLink: next.core.url,
           payload: {
             commentId: comment.id,
             user,
@@ -325,7 +325,7 @@ export function diffSnapshot(previous: PullRequestSnapshot | null, next: PullReq
       kind: "review_comment.created",
       priority: "high",
       summary: `New review comment from ${user}${location}${compact(comment.body) ? `: ${compact(comment.body)}` : ""}`,
-      detailFilePath: next.core.url,
+      referenceLink: next.core.url,
       payload: {
         commentId: comment.id,
         user,
@@ -347,7 +347,7 @@ export function diffSnapshot(previous: PullRequestSnapshot | null, next: PullReq
       kind: "review_comment.deleted",
       priority: "medium",
       summary: `Review comment deleted by ${user}${location}${compact(previousComment.body) ? `: ${compact(previousComment.body)}` : ""}`,
-      detailFilePath: next.core.url,
+      referenceLink: next.core.url,
       payload: {
         commentId: previousComment.id,
         user,
@@ -368,7 +368,7 @@ export function diffSnapshot(previous: PullRequestSnapshot | null, next: PullReq
       kind,
       priority: checkPriority(kind),
       summary: checkSummary(check, kind),
-      detailFilePath: check.link ?? next.core.url,
+      referenceLink: check.link ?? next.core.url,
       payload: {
         name: check.name,
         state: check.state ?? null,
@@ -406,7 +406,7 @@ export function diffSnapshot(previous: PullRequestSnapshot | null, next: PullReq
           ? "medium"
           : "low",
       summary: `${bucket.length} ${kind.replaceAll("_", " ")} events${sampleSummaries(bucket).length > 0 ? ` (${sampleSummaries(bucket).join("; ")})` : ""}`,
-      detailFilePath: next.core.url,
+      referenceLink: next.core.url,
       payload: {
         count: bucket.length,
         samples: sampleSummaries(bucket),

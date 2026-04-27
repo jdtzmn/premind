@@ -82,7 +82,7 @@ export class DetailFileWriter {
       kind: event.kind,
       priority: event.priority,
       summary: event.summary,
-      sourceLink: event.detailFilePath ?? null,
+      sourceLink: event.referenceLink ?? null,
       generatedAt: new Date().toISOString(),
     }
 

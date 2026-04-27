@@ -48,7 +48,7 @@ export class BranchDiscoveryWatcher {
             kind: "pr.discovered",
             priority: "medium",
             summary: `Discovered open PR ${target.repo}#${pr.number}: ${pr.title}`,
-            detailFilePath: pr.url,
+            referenceLink: pr.url,
             payload: {
               repo: target.repo,
               branch: target.branch,
