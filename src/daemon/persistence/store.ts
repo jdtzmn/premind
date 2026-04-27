@@ -574,7 +574,12 @@ export class StateStore {
     this.db.exec("BEGIN")
     try {
       for (const event of events) {
-        const referenceLink = this.detailFiles.write(repo, prNumber, event)
+        // Prefer the local detail file (rich body content for comments and
+        // reviews). When the writer skips the file (no rich content for this
+        // kind, e.g. check.*), fall back to the GitHub URL the event was
+        // built with so the reminder still carries an actionable link.
+        const localPath = this.detailFiles.write(repo, prNumber, event)
+        const referenceLink = localPath ?? event.referenceLink ?? null
         insert.run({
           repo,
           prNumber,

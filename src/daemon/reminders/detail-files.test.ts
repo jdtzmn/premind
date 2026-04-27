@@ -21,37 +21,54 @@ afterEach(() => {
 })
 
 describe("DetailFileWriter", () => {
-  test("writes detail files and cleans up old ones", () => {
+  test("writes detail files for body-rich events and cleans up old ones", () => {
     const writer = createWriter()
 
-    // Write two events.
-    const path1 = writer.write("acme/repo", 42, {
+    // issue_comment.* — rich body content; gets a file.
+    const issuePath = writer.write("acme/repo", 42, {
       dedupeKey: "issue_comment.created:100",
       kind: "issue_comment.created",
       priority: "high",
       summary: "New comment",
       payload: { commentId: 100, user: "alice", body: "Please fix this" },
     })
-
-    const path2 = writer.write("acme/repo", 42, {
-      dedupeKey: "check.failed:lint:sha-1",
-      kind: "check.failed",
+    // review_comment.* — body + file/line context; gets a file.
+    const reviewCommentPath = writer.write("acme/repo", 42, {
+      dedupeKey: "review_comment.created:200",
+      kind: "review_comment.created",
       priority: "high",
-      summary: "Check failed: lint",
-      payload: { name: "lint", state: "fail" },
+      summary: "New review comment",
+      payload: {
+        commentId: 200,
+        user: "bob",
+        path: "src/foo.ts",
+        line: 42,
+        body: "nit: rename this",
+      },
+    })
+    // review.* — review body; gets a file.
+    const reviewPath = writer.write("acme/repo", 42, {
+      dedupeKey: "review.commented:300",
+      kind: "review.commented",
+      priority: "medium",
+      summary: "Review comment from carol",
+      payload: { reviewId: 300, user: "carol", state: "commented", body: "looks good" },
     })
 
-    assert.ok(fs.existsSync(path1))
-    assert.ok(fs.existsSync(path2))
+    assert.ok(issuePath !== null && fs.existsSync(issuePath))
+    assert.ok(reviewCommentPath !== null && fs.existsSync(reviewCommentPath))
+    assert.ok(reviewPath !== null && fs.existsSync(reviewPath))
 
     // Verify content shape.
-    const content1 = JSON.parse(fs.readFileSync(path1, "utf8"))
-    assert.equal(content1.type, "issue_comment")
-    assert.equal(content1.author, "alice")
+    const issue = JSON.parse(fs.readFileSync(issuePath as string, "utf8"))
+    assert.equal(issue.type, "issue_comment")
+    assert.equal(issue.author, "alice")
+    assert.equal(issue.body, "Please fix this")
 
-    const content2 = JSON.parse(fs.readFileSync(path2, "utf8"))
-    assert.equal(content2.type, "check")
-    assert.equal(content2.name, "lint")
+    const reviewComment = JSON.parse(fs.readFileSync(reviewCommentPath as string, "utf8"))
+    assert.equal(reviewComment.type, "review_comment")
+    assert.equal(reviewComment.file, "src/foo.ts")
+    assert.equal(reviewComment.line, 42)
 
     // Both files are fresh, so cleanup with a 14-day TTL should remove nothing.
     const removedNone = writer.cleanup(14 * 24 * 60 * 60 * 1000)
@@ -59,8 +76,42 @@ describe("DetailFileWriter", () => {
 
     // Cleanup with TTL=0 and a slightly future now should remove everything.
     const removedAll = writer.cleanup(0, Date.now() + 1_000)
-    assert.equal(removedAll, 2)
-    assert.ok(!fs.existsSync(path1))
-    assert.ok(!fs.existsSync(path2))
+    assert.equal(removedAll, 3)
+    assert.ok(!fs.existsSync(issuePath as string))
+    assert.ok(!fs.existsSync(reviewCommentPath as string))
+    assert.ok(!fs.existsSync(reviewPath as string))
+  })
+
+  test("returns null and skips file creation for check.* events", () => {
+    const writer = createWriter()
+
+    const result = writer.write("acme/repo", 42, {
+      dedupeKey: "check.failed:lint:sha-1",
+      kind: "check.failed",
+      priority: "high",
+      summary: "Check failed: lint",
+      referenceLink: "https://github.com/acme/repo/runs/1",
+      payload: { name: "lint", state: "fail" },
+    })
+
+    assert.equal(result, null, "check events must not get a local detail file")
+    // No file should have been created on disk for this PR directory.
+    const prDir = path.join((writer as unknown as { baseDir: string }).baseDir, "acme-repo", "42")
+    if (fs.existsSync(prDir)) {
+      const entries = fs.readdirSync(prDir)
+      assert.deepEqual(entries, [], "no files for check.* events")
+    }
+  })
+
+  test("returns null for unrecognized event kinds (no rich body)", () => {
+    const writer = createWriter()
+    const result = writer.write("acme/repo", 42, {
+      dedupeKey: "label.added:bug",
+      kind: "label.added",
+      priority: "low",
+      summary: "label added",
+      payload: { name: "bug" },
+    })
+    assert.equal(result, null)
   })
 })

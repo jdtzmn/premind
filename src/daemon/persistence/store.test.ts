@@ -1223,4 +1223,65 @@ describe("StateStore", () => {
     assert.ok(columns.some((c) => c.name === "reference_link"))
     reopened.close()
   })
+
+  test("insertEvents stores local file path for body-rich events and GitHub URL for check events", () => {
+    const store = createStore()
+
+    store.registerClient("client-1", { pid: 1, projectRoot: "/tmp/p" })
+    store.registerSession({
+      clientId: "client-1",
+      sessionId: "session-1",
+      repo: "acme/repo",
+      branch: "feature/x",
+      isPrimary: true,
+      status: "active",
+      busyState: "idle",
+    })
+    store.recordBranchAssociation("acme/repo", "feature/x", 7)
+    store.saveSnapshot("acme/repo", 7, snapshot())
+
+    store.insertEvents("acme/repo", 7, [
+      {
+        dedupeKey: "issue_comment.created:11",
+        kind: "issue_comment.created",
+        priority: "high",
+        summary: "New issue comment from bob",
+        referenceLink: "https://github.com/acme/repo/pull/7",
+        payload: { commentId: 11, user: "bob", body: "looks good" },
+      },
+      {
+        dedupeKey: "check.queued:lint:sha-7",
+        kind: "check.queued",
+        priority: "low",
+        summary: "Check queued: lint",
+        referenceLink: "https://github.com/acme/repo/actions/runs/123/job/456",
+        payload: { name: "lint", state: "pending" },
+      },
+    ])
+
+    const rows = (store as unknown as {
+      db: {
+        prepare: (sql: string) => { all: () => Array<{ kind: string; reference_link: string | null }> }
+      }
+    })
+      .db.prepare(`SELECT kind, reference_link FROM pr_events WHERE repo = 'acme/repo' ORDER BY seq ASC`)
+      .all()
+
+    assert.equal(rows.length, 2)
+    const issueRow = rows.find((r) => r.kind === "issue_comment.created")
+    const checkRow = rows.find((r) => r.kind === "check.queued")
+
+    // issue_comment.* gets a local file path (writer wrote a file).
+    assert.ok(issueRow?.reference_link?.endsWith(".json"), `expected local path, got ${issueRow?.reference_link}`)
+    assert.ok(issueRow?.reference_link?.includes("issue_comment.created"))
+
+    // check.* falls back to the GitHub URL.
+    assert.equal(
+      checkRow?.reference_link,
+      "https://github.com/acme/repo/actions/runs/123/job/456",
+      "check events should retain the GitHub URL as their reference_link",
+    )
+
+    store.close()
+  })
 })

@@ -8,6 +8,23 @@ const sanitize = (value: string) => value.replace(/[^a-zA-Z0-9._-]+/g, "-")
 
 const DEFAULT_TTL_MS = 14 * 24 * 60 * 60 * 1000 // 14 days
 
+/**
+ * Returns true when an event kind carries enough body content (comment text,
+ * review body, file/line context, etc.) to justify a local detail file.
+ *
+ * For kinds that only have shallow metadata already in the reminder summary
+ * (notably `check.*` events, whose richer info lives in GitHub's CI logs we
+ * never fetch) we skip the file write — the reminder template falls back to
+ * the GitHub URL stored on the event itself, which is more useful than a
+ * local file the agent would have to open just to learn it has nothing new.
+ */
+const shouldWriteDetailFile = (kind: string): boolean => {
+  if (kind.startsWith("issue_comment.")) return true
+  if (kind.startsWith("review_comment.")) return true
+  if (kind.startsWith("review.")) return true
+  return false
+}
+
 export class DetailFileWriter {
   private readonly logger = createLogger("daemon.detail-files")
 
@@ -63,7 +80,16 @@ export class DetailFileWriter {
     return removed
   }
 
-  write(repo: string, prNumber: number, event: NormalizedPrEvent) {
+  /**
+   * Writes a detail file for the given event, returning the resulting absolute
+   * path. Returns `null` when the event kind is not eligible (see
+   * shouldWriteDetailFile) — in that case the caller should fall back to the
+   * event's referenceLink (GitHub URL) so the reminder still carries a useful
+   * link rather than a path to a redundant metadata-only file.
+   */
+  write(repo: string, prNumber: number, event: NormalizedPrEvent): string | null {
+    if (!shouldWriteDetailFile(event.kind)) return null
+
     const repoDir = path.join(this.baseDir, sanitize(repo), String(prNumber))
     fs.mkdirSync(repoDir, { recursive: true })
 
