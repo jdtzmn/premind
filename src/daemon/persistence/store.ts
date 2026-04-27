@@ -744,7 +744,7 @@ export class StateStore {
       kind: event.kind,
       priority: event.priority,
       summary: event.summary,
-      detailFilePath: event.reference_link ?? undefined,
+      referenceLink: event.reference_link ?? undefined,
     }))
 
     const grouped = new Map<string, GroupedReminderEvent[]>()
@@ -779,7 +779,7 @@ export class StateStore {
       "New pull request context was detected since the last reminder.",
       "",
       "Changes:",
-      ...condensed.map((event, index) => `${index + 1}. ${event.kind} - ${event.summary}${event.detailFilePath ? ` (${event.detailFilePath})` : ""}`),
+      ...condensed.map((event, index) => `${index + 1}. ${event.kind} - ${event.summary}${event.referenceLink ? ` (${event.referenceLink})` : ""}`),
       "",
       "Please incorporate only the new information above into your reasoning and continue the current task.",
       "</system-reminder>",

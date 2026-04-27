@@ -91,7 +91,7 @@ export const reminderEventSchema = z
     kind: z.string().min(1),
     priority: z.enum(["high", "medium", "low"]),
     summary: z.string().min(1),
-    detailFilePath: z.string().min(1).optional(),
+    referenceLink: z.string().min(1).optional(),
   })
   .passthrough()
 
