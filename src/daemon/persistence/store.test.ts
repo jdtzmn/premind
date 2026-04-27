@@ -1159,4 +1159,68 @@ describe("StateStore", () => {
 
     store.close()
   })
+
+  test("migrates pr_events.detail_file_path -> reference_link on existing databases", async () => {
+    // Build a database that mimics the pre-rename schema, then open it with
+    // StateStore and verify the column got renamed in-place.
+    const Database = (await import("better-sqlite3")).default
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "premind-store-test-"))
+    const dbPath = path.join(dir, "premind.db")
+    tempPaths.push(dir)
+
+    // Hand-craft the legacy schema with the old column name.
+    const legacy = new Database(dbPath)
+    legacy.exec(`
+      CREATE TABLE pr_events (
+        seq INTEGER PRIMARY KEY AUTOINCREMENT,
+        repo TEXT NOT NULL,
+        pr_number INTEGER NOT NULL,
+        dedupe_key TEXT NOT NULL UNIQUE,
+        kind TEXT NOT NULL,
+        priority TEXT NOT NULL,
+        summary TEXT NOT NULL,
+        detail_file_path TEXT,
+        payload_json TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+    `)
+    legacy.prepare(
+      `INSERT INTO pr_events (repo, pr_number, dedupe_key, kind, priority, summary, detail_file_path, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run("acme/repo", 1, "k:1", "check.queued", "low", "stale entry", "https://github.com/acme/repo/runs/1", "{}", 0)
+    legacy.close()
+
+    // Opening the StateStore should run the migration.
+    const store = new StateStore(dbPath)
+    const columns = (store as unknown as { db: { prepare: (sql: string) => { all: () => Array<{ name: string }> } } })
+      .db.prepare(`PRAGMA table_info(pr_events)`)
+      .all()
+    assert.ok(columns.some((c) => c.name === "reference_link"), "reference_link column should exist after migration")
+    assert.ok(!columns.some((c) => c.name === "detail_file_path"), "detail_file_path column should be gone")
+
+    // The pre-existing row's data should have survived the rename.
+    const row = (store as unknown as { db: { prepare: (sql: string) => { get: () => { reference_link: string } | undefined } } })
+      .db.prepare(`SELECT reference_link FROM pr_events WHERE dedupe_key = 'k:1'`)
+      .get()
+    assert.equal(row?.reference_link, "https://github.com/acme/repo/runs/1")
+
+    store.close()
+  })
+
+  test("migration is idempotent and a no-op on a fresh database", () => {
+    // First open creates the new schema directly.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "premind-store-test-"))
+    const dbPath = path.join(dir, "premind.db")
+    tempPaths.push(dir)
+
+    const store = new StateStore(dbPath)
+    store.close()
+
+    // Second open should re-run migrate() without throwing.
+    const reopened = new StateStore(dbPath)
+    const columns = (reopened as unknown as { db: { prepare: (sql: string) => { all: () => Array<{ name: string }> } } })
+      .db.prepare(`PRAGMA table_info(pr_events)`)
+      .all()
+    assert.ok(columns.some((c) => c.name === "reference_link"))
+    reopened.close()
+  })
 })

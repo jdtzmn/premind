@@ -41,7 +41,7 @@ type EventRow = {
   kind: string
   priority: "high" | "medium" | "low"
   summary: string
-  detail_file_path: string | null
+  reference_link: string | null
 }
 
 type GroupedReminderEvent = ReminderEvent & {
@@ -566,15 +566,15 @@ export class StateStore {
   insertEvents(repo: string, prNumber: number, events: NormalizedPrEvent[], now = Date.now()) {
     const insert = this.db.prepare(
       `
-        INSERT OR IGNORE INTO pr_events (repo, pr_number, dedupe_key, kind, priority, summary, detail_file_path, payload_json, created_at)
-        VALUES (:repo, :prNumber, :dedupeKey, :kind, :priority, :summary, :detailFilePath, :payloadJson, :now)
+        INSERT OR IGNORE INTO pr_events (repo, pr_number, dedupe_key, kind, priority, summary, reference_link, payload_json, created_at)
+        VALUES (:repo, :prNumber, :dedupeKey, :kind, :priority, :summary, :referenceLink, :payloadJson, :now)
       `,
     )
 
     this.db.exec("BEGIN")
     try {
       for (const event of events) {
-        const detailFilePath = this.detailFiles.write(repo, prNumber, event)
+        const referenceLink = this.detailFiles.write(repo, prNumber, event)
         insert.run({
           repo,
           prNumber,
@@ -582,7 +582,7 @@ export class StateStore {
           kind: event.kind,
           priority: event.priority,
           summary: event.summary,
-          detailFilePath,
+          referenceLink,
           payloadJson: JSON.stringify(event.payload),
           now,
         })
@@ -633,7 +633,7 @@ export class StateStore {
     return this.db
       .prepare(
         `
-          SELECT seq, kind, priority, summary, detail_file_path
+          SELECT seq, kind, priority, summary, reference_link
           FROM pr_events
           WHERE repo = :repo
             AND pr_number = :prNumber
@@ -744,7 +744,7 @@ export class StateStore {
       kind: event.kind,
       priority: event.priority,
       summary: event.summary,
-      detailFilePath: event.detail_file_path ?? undefined,
+      detailFilePath: event.reference_link ?? undefined,
     }))
 
     const grouped = new Map<string, GroupedReminderEvent[]>()
@@ -936,7 +936,7 @@ export class StateStore {
         kind TEXT NOT NULL,
         priority TEXT NOT NULL,
         summary TEXT NOT NULL,
-        detail_file_path TEXT,
+        reference_link TEXT,
         payload_json TEXT NOT NULL,
         created_at INTEGER NOT NULL
       );
@@ -964,6 +964,19 @@ export class StateStore {
     const reminderColumns = this.db.prepare(`PRAGMA table_info(reminder_batches)`).all() as Array<{ name: string }>
     if (!reminderColumns.some((column) => column.name === "max_event_seq")) {
       this.db.exec(`ALTER TABLE reminder_batches ADD COLUMN max_event_seq INTEGER`)
+    }
+
+    // Rename pr_events.detail_file_path -> reference_link. The legacy name
+    // implied a local file path, but the column actually stores either a
+    // local detail-file path or a GitHub URL depending on the event kind.
+    // SQLite >= 3.25 supports RENAME COLUMN; this codebase already requires
+    // a Node version that bundles a newer SQLite.
+    const prEventColumns = this.db.prepare(`PRAGMA table_info(pr_events)`).all() as Array<{ name: string }>
+    if (
+      prEventColumns.some((column) => column.name === "detail_file_path") &&
+      !prEventColumns.some((column) => column.name === "reference_link")
+    ) {
+      this.db.exec(`ALTER TABLE pr_events RENAME COLUMN detail_file_path TO reference_link`)
     }
   }
 }
