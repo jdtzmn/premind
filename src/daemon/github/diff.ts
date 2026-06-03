@@ -60,17 +60,48 @@ const sampleSummaries = (bucket: NormalizedPrEvent[], max = 2) => bucket.slice(0
 
 export function diffSnapshot(previous: PullRequestSnapshot | null, next: PullRequestSnapshot): NormalizedPrEvent[] {
   if (!previous) {
+    // On the very first snapshot we have no prior state to diff against, so the
+    // transition-based detectors below never fire. A PR can already be in a bad
+    // state when tracking begins (e.g. the head commit was pushed before the PR
+    // was opened), so surface any pre-existing blockers directly on the
+    // initialization event. This lets the agent know it can start fixing merge
+    // conflicts / failing checks / requested changes right away instead of
+    // waiting for a later transition that may never come.
+    const failingChecks = next.checks
+      .filter((check) => checkKind(check.state) === "check.failed")
+      .map((check) => check.name || "unnamed check")
+
+    const mergeState = (next.core.mergeStateStatus ?? "").toUpperCase()
+    const hasMergeConflict = mergeState === "DIRTY"
+    const changesRequested = next.core.reviewDecision === "CHANGES_REQUESTED"
+
+    const blockers: string[] = []
+    if (hasMergeConflict) blockers.push("merge conflicts present")
+    if (failingChecks.length > 0) {
+      blockers.push(
+        `${failingChecks.length} check${failingChecks.length === 1 ? "" : "s"} failing (${failingChecks.join(", ")})`,
+      )
+    }
+    if (changesRequested) blockers.push("changes requested")
+
+    const baseSummary = `Started tracking ${next.core.number}: ${next.core.title}`
+    const summary = blockers.length > 0 ? `${baseSummary} — ${blockers.join("; ")}` : baseSummary
+
     return [
       {
         dedupeKey: `pr.snapshot.initial:${next.core.number}:${next.core.headRefOid}`,
         kind: "pr.snapshot.initialized",
-        priority: "low",
-        summary: `Started tracking ${next.core.number}: ${next.core.title}`,
+        priority: blockers.length > 0 ? "high" : "low",
+        summary,
         referenceLink: next.core.url,
         payload: {
           prNumber: next.core.number,
           headSha: next.core.headRefOid,
           reviewDecision: next.core.reviewDecision ?? null,
+          mergeStateStatus: next.core.mergeStateStatus ?? null,
+          hasMergeConflict,
+          failingChecks,
+          changesRequested,
         },
       },
     ]
