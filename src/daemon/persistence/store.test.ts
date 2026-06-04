@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
+import { DatabaseSync } from "node:sqlite"
 import { afterEach, describe, test } from "node:test"
 import { StateStore } from "./store.ts"
 import type { PullRequestSnapshot } from "../github/types.ts"
@@ -1160,16 +1161,17 @@ describe("StateStore", () => {
     store.close()
   })
 
-  test("migrates pr_events.detail_file_path -> reference_link on existing databases", async () => {
+  test("migrates pr_events.detail_file_path -> reference_link on existing databases", () => {
     // Build a database that mimics the pre-rename schema, then open it with
-    // StateStore and verify the column got renamed in-place.
-    const Database = (await import("better-sqlite3")).default
+    // StateStore and verify the column got renamed in-place. We use the same
+    // built-in node:sqlite driver StateStore uses, so the test needs no extra
+    // (and intentionally absent) better-sqlite3 dependency.
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "premind-store-test-"))
     const dbPath = path.join(dir, "premind.db")
     tempPaths.push(dir)
 
     // Hand-craft the legacy schema with the old column name.
-    const legacy = new Database(dbPath)
+    const legacy = new DatabaseSync(dbPath)
     legacy.exec(`
       CREATE TABLE pr_events (
         seq INTEGER PRIMARY KEY AUTOINCREMENT,
