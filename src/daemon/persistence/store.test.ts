@@ -1,286 +1,337 @@
-import assert from "node:assert/strict"
-import fs from "node:fs"
-import os from "node:os"
-import path from "node:path"
-import { afterEach, describe, test } from "node:test"
-import { StateStore } from "./store.ts"
-import type { PullRequestSnapshot } from "../github/types.ts"
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, test } from "node:test";
+import { StateStore } from "./store.ts";
+import type { PullRequestSnapshot } from "../github/types.ts";
 
-const tempPaths: string[] = []
+const tempPaths: string[] = [];
 
 const createStore = () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "premind-store-test-"))
-  const dbPath = path.join(dir, "premind.db")
-  tempPaths.push(dir)
-  return new StateStore(dbPath)
-}
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "premind-store-test-"));
+	const dbPath = path.join(dir, "premind.db");
+	tempPaths.push(dir);
+	return new StateStore(dbPath);
+};
 
 const snapshot = (): PullRequestSnapshot => ({
-  core: {
-    number: 7,
-    title: "Track PR",
-    url: "https://github.com/acme/repo/pull/7",
-    state: "OPEN",
-    isDraft: false,
-    headRefName: "feature/x",
-    baseRefName: "main",
-    headRefOid: "sha-7",
-    mergeStateStatus: "CLEAN",
-    reviewDecision: null,
-    updatedAt: "2026-04-08T00:00:00Z",
-  },
-  reviews: [],
-  issueComments: [],
-  reviewComments: [],
-  checks: [],
-  fetchedAt: Date.now(),
-})
+	core: {
+		number: 7,
+		title: "Track PR",
+		url: "https://github.com/acme/repo/pull/7",
+		state: "OPEN",
+		isDraft: false,
+		headRefName: "feature/x",
+		baseRefName: "main",
+		headRefOid: "sha-7",
+		mergeStateStatus: "CLEAN",
+		reviewDecision: null,
+		updatedAt: "2026-04-08T00:00:00Z",
+	},
+	reviews: [],
+	issueComments: [],
+	reviewComments: [],
+	checks: [],
+	fetchedAt: Date.now(),
+});
 
 afterEach(() => {
-  while (tempPaths.length > 0) {
-    const dir = tempPaths.pop()
-    if (dir) fs.rmSync(dir, { recursive: true, force: true })
-  }
-})
+	while (tempPaths.length > 0) {
+		const dir = tempPaths.pop();
+		if (dir) fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
 
 describe("StateStore", () => {
-  test("advances delivery cursor after confirmed ack", () => {
-    const store = createStore()
+	test("advances delivery cursor after confirmed ack", () => {
+		const store = createStore();
 
-    store.registerClient("client-1", { pid: 123, projectRoot: "/tmp/project" })
-    store.registerSession({
-      clientId: "client-1",
-      sessionId: "session-1",
-      repo: "acme/repo",
-      branch: "feature/x",
-      isPrimary: true,
-      status: "active",
-      busyState: "idle",
-    })
-    store.recordBranchAssociation("acme/repo", "feature/x", 7)
-    store.saveSnapshot("acme/repo", 7, snapshot())
-    store.insertEvents("acme/repo", 7, [
-      {
-        dedupeKey: "issue_comment.created:11",
-        kind: "issue_comment.created",
-        priority: "high",
-        summary: "New issue comment from bob",
-        payload: { commentId: 11 },
-      },
-      {
-        dedupeKey: "check.failed:lint:sha-7",
-        kind: "check.failed",
-        priority: "high",
-        summary: "Check failed: lint",
-        payload: { name: "lint" },
-      },
-    ])
+		store.registerClient("client-1", { pid: 123, projectRoot: "/tmp/project" });
+		store.registerSession({
+			clientId: "client-1",
+			sessionId: "session-1",
+			repo: "acme/repo",
+			branch: "feature/x",
+			isPrimary: true,
+			status: "active",
+			busyState: "idle",
+		});
+		store.recordBranchAssociation("acme/repo", "feature/x", 7);
+		store.saveSnapshot("acme/repo", 7, snapshot());
+		store.insertEvents("acme/repo", 7, [
+			{
+				dedupeKey: "issue_comment.created:11",
+				kind: "issue_comment.created",
+				priority: "high",
+				summary: "New issue comment from bob",
+				payload: { commentId: 11 },
+			},
+			{
+				dedupeKey: "check.failed:lint:sha-7",
+				kind: "check.failed",
+				priority: "high",
+				summary: "Check failed: lint",
+				payload: { name: "lint" },
+			},
+		]);
 
-    const batch = store.buildReminderBatch("session-1")
-    assert.ok(batch)
-    assert.equal(batch.events.length, 2)
+		const batch = store.buildReminderBatch("session-1");
+		assert.ok(batch);
+		assert.equal(batch.events.length, 2);
 
-    const pending = store.getPendingReminder("session-1")
-    assert.equal(pending?.batchId, batch.batchId)
+		const pending = store.getPendingReminder("session-1");
+		assert.equal(pending?.batchId, batch.batchId);
 
-    store.ackReminder({
-      batchId: batch!.batchId,
-      sessionId: "session-1",
-      state: "confirmed",
-    })
+		store.ackReminder({
+			batchId: batch!.batchId,
+			sessionId: "session-1",
+			state: "confirmed",
+		});
 
-    assert.equal(store.getPendingReminder("session-1"), null)
-    assert.equal(store.buildReminderBatch("session-1"), null)
+		assert.equal(store.getPendingReminder("session-1"), null);
+		assert.equal(store.buildReminderBatch("session-1"), null);
 
-    store.close()
-  })
+		store.close();
+	});
 
-  test("keeps failed reminder batches retryable", () => {
-    const store = createStore()
+	test("keeps failed reminder batches retryable", () => {
+		const store = createStore();
 
-    store.registerClient("client-2", { pid: 456, projectRoot: "/tmp/project" })
-    store.registerSession({
-      clientId: "client-2",
-      sessionId: "session-2",
-      repo: "acme/repo",
-      branch: "feature/y",
-      isPrimary: true,
-      status: "active",
-      busyState: "idle",
-    })
-    store.recordBranchAssociation("acme/repo", "feature/y", 8)
-    store.insertEvents("acme/repo", 8, [
-      {
-        dedupeKey: "review.approved:9",
-        kind: "review.approved",
-        priority: "high",
-        summary: "alice approved",
-        payload: { reviewId: 9 },
-      },
-    ])
+		store.registerClient("client-2", { pid: 456, projectRoot: "/tmp/project" });
+		store.registerSession({
+			clientId: "client-2",
+			sessionId: "session-2",
+			repo: "acme/repo",
+			branch: "feature/y",
+			isPrimary: true,
+			status: "active",
+			busyState: "idle",
+		});
+		store.recordBranchAssociation("acme/repo", "feature/y", 8);
+		store.insertEvents("acme/repo", 8, [
+			{
+				dedupeKey: "review.approved:9",
+				kind: "review.approved",
+				priority: "high",
+				summary: "alice approved",
+				payload: { reviewId: 9 },
+			},
+		]);
 
-    const batch = store.buildReminderBatch("session-2")
-    assert.ok(batch)
+		const batch = store.buildReminderBatch("session-2");
+		assert.ok(batch);
 
-    store.ackReminder({
-      batchId: batch!.batchId,
-      sessionId: "session-2",
-      state: "failed",
-      error: "network",
-    })
+		store.ackReminder({
+			batchId: batch!.batchId,
+			sessionId: "session-2",
+			state: "failed",
+			error: "network",
+		});
 
-    const retryBatch = store.getPendingReminder("session-2")
-    assert.equal(retryBatch?.batchId, batch.batchId)
+		const retryBatch = store.getPendingReminder("session-2");
+		assert.equal(retryBatch?.batchId, batch.batchId);
 
-    store.close()
-  })
+		store.close();
+	});
 
-  test("paused sessions block delivery and resumed sessions recover", () => {
-    const store = createStore()
+	test("paused sessions block delivery and resumed sessions recover", () => {
+		const store = createStore();
 
-    store.registerClient("client-3", { pid: 789, projectRoot: "/tmp/project" })
-    store.registerSession({
-      clientId: "client-3",
-      sessionId: "session-3",
-      repo: "acme/repo",
-      branch: "feature/z",
-      isPrimary: true,
-      status: "active",
-      busyState: "idle",
-    })
-    store.recordBranchAssociation("acme/repo", "feature/z", 10)
-    store.insertEvents("acme/repo", 10, [
-      {
-        dedupeKey: "check.failed:build:sha-10",
-        kind: "check.failed",
-        priority: "high",
-        summary: "Check failed: build",
-        payload: { name: "build" },
-      },
-    ])
+		store.registerClient("client-3", { pid: 789, projectRoot: "/tmp/project" });
+		store.registerSession({
+			clientId: "client-3",
+			sessionId: "session-3",
+			repo: "acme/repo",
+			branch: "feature/z",
+			isPrimary: true,
+			status: "active",
+			busyState: "idle",
+		});
+		store.recordBranchAssociation("acme/repo", "feature/z", 10);
+		store.insertEvents("acme/repo", 10, [
+			{
+				dedupeKey: "check.failed:build:sha-10",
+				kind: "check.failed",
+				priority: "high",
+				summary: "Check failed: build",
+				payload: { name: "build" },
+			},
+		]);
 
-    // Pause the session — should block delivery.
-    store.setSessionPaused("session-3", true)
-    assert.equal(store.buildReminderBatch("session-3"), null)
+		// Pause the session — should block delivery.
+		store.setSessionPaused("session-3", true);
+		assert.equal(store.buildReminderBatch("session-3"), null);
 
-    // Events should still accumulate while paused.
-    store.insertEvents("acme/repo", 10, [
-      {
-        dedupeKey: "issue_comment.created:99",
-        kind: "issue_comment.created",
-        priority: "high",
-        summary: "New comment while paused",
-        payload: { commentId: 99 },
-      },
-    ])
-    assert.equal(store.buildReminderBatch("session-3"), null)
+		// Events should still accumulate while paused.
+		store.insertEvents("acme/repo", 10, [
+			{
+				dedupeKey: "issue_comment.created:99",
+				kind: "issue_comment.created",
+				priority: "high",
+				summary: "New comment while paused",
+				payload: { commentId: 99 },
+			},
+		]);
+		assert.equal(store.buildReminderBatch("session-3"), null);
 
-    // Resume — should now deliver both events.
-    store.setSessionPaused("session-3", false)
-    const batch = store.buildReminderBatch("session-3")
-    assert.ok(batch)
-    assert.equal(batch.events.length, 2)
+		// Resume — should now deliver both events.
+		store.setSessionPaused("session-3", false);
+		const batch = store.buildReminderBatch("session-3");
+		assert.ok(batch);
+		assert.equal(batch.events.length, 2);
 
-    store.close()
-  })
+		store.close();
+	});
 
-  test("restart recovery prunes stale leases and resets handed-off batches", () => {
-    const store = createStore()
+	test("restart recovery prunes stale leases and resets handed-off batches", () => {
+		const store = createStore();
 
-    // Simulate a previous daemon session: register client, session, PR, events, and a batch.
-    store.registerClient("client-old", { pid: 111, projectRoot: "/tmp/project" })
-    store.registerSession({
-      clientId: "client-old",
-      sessionId: "session-restart",
-      repo: "acme/repo",
-      branch: "feature/restart",
-      isPrimary: true,
-      status: "active",
-      busyState: "idle",
-    })
-    store.recordBranchAssociation("acme/repo", "feature/restart", 20)
-    store.insertEvents("acme/repo", 20, [
-      {
-        dedupeKey: "check.failed:ci:sha-20",
-        kind: "check.failed",
-        priority: "high",
-        summary: "Check failed: ci",
-        payload: { name: "ci" },
-      },
-    ])
+		// Simulate a previous daemon session: register client, session, PR, events, and a batch.
+		store.registerClient("client-old", {
+			pid: 111,
+			projectRoot: "/tmp/project",
+		});
+		store.registerSession({
+			clientId: "client-old",
+			sessionId: "session-restart",
+			repo: "acme/repo",
+			branch: "feature/restart",
+			isPrimary: true,
+			status: "active",
+			busyState: "idle",
+		});
+		store.recordBranchAssociation("acme/repo", "feature/restart", 20);
+		store.insertEvents("acme/repo", 20, [
+			{
+				dedupeKey: "check.failed:ci:sha-20",
+				kind: "check.failed",
+				priority: "high",
+				summary: "Check failed: ci",
+				payload: { name: "ci" },
+			},
+		]);
 
-    // Build a batch and mark it handed_off (simulating crash mid-delivery).
-    const batch = store.buildReminderBatch("session-restart")
-    assert.ok(batch)
-    store.ackReminder({
-      batchId: batch.batchId,
-      sessionId: "session-restart",
-      state: "handed_off",
-    })
+		// Build a batch and mark it handed_off (simulating crash mid-delivery).
+		const batch = store.buildReminderBatch("session-restart");
+		assert.ok(batch);
+		store.ackReminder({
+			batchId: batch.batchId,
+			sessionId: "session-restart",
+			state: "handed_off",
+		});
 
-    // Verify pre-recovery state.
-    assert.equal(store.countActiveClients(), 1)
-    assert.ok(store.getPendingReminder("session-restart"))
+		// Verify pre-recovery state.
+		assert.equal(store.countActiveClients(), 1);
+		assert.ok(store.getPendingReminder("session-restart"));
 
-    // Simulate daemon restart.
-    const recovery = store.recoverFromRestart()
+		// Simulate daemon restart.
+		const recovery = store.recoverFromRestart();
 
-    // Stale client leases should be pruned.
-    assert.equal(recovery.prunedClients, 1)
-    assert.equal(store.countActiveClients(), 0)
+		// Stale client leases should be pruned.
+		assert.equal(recovery.prunedClients, 1);
+		assert.equal(store.countActiveClients(), 0);
 
-    // Handed-off batch should be reset (deleted).
-    assert.equal(recovery.resetBatches, 1)
-    assert.equal(store.getPendingReminder("session-restart"), null)
+		// Handed-off batch should be reset (deleted).
+		assert.equal(recovery.resetBatches, 1);
+		assert.equal(store.getPendingReminder("session-restart"), null);
 
-    // Session and watcher state should survive.
-    assert.equal(recovery.recoveredSessions, 1)
-    assert.deepEqual(recovery.prunedClosedSessions, { sessions: 0, reminderBatches: 0 })
-    assert.ok(store.getSession("session-restart"))
+		// Session and watcher state should survive.
+		assert.equal(recovery.recoveredSessions, 1);
+		assert.deepEqual(recovery.prunedClosedSessions, {
+			sessions: 0,
+			reminderBatches: 0,
+		});
+		assert.ok(store.getSession("session-restart"));
 
-    // Events survive, so rebuilding should work after a new client registers.
-    const rebuilt = store.buildReminderBatch("session-restart")
-    assert.ok(rebuilt)
-    assert.equal(rebuilt.events.length, 1)
+		// Events survive, so rebuilding should work after a new client registers.
+		const rebuilt = store.buildReminderBatch("session-restart");
+		assert.ok(rebuilt);
+		assert.equal(rebuilt.events.length, 1);
 
-    store.close()
-  })
+		store.close();
+	});
 
-  test("restart recovery prunes closed sessions and their reminder batches", () => {
-    const store = createStore()
+	test("manual prune removes orphaned sessions and their reminder batches", () => {
+		const store = createStore();
 
-    store.registerClient("client-old", { pid: 111, projectRoot: "/tmp/project" })
-    store.registerSession({
-      clientId: "client-old",
-      sessionId: "session-closed",
-      repo: "acme/repo",
-      branch: "feature/closed",
-      isPrimary: true,
-      status: "active",
-      busyState: "idle",
-    })
-    store.recordBranchAssociation("acme/repo", "feature/closed", 21)
-    store.insertEvents("acme/repo", 21, [
-      {
-        dedupeKey: "issue_comment.created:closed",
-        kind: "issue_comment.created",
-        priority: "high",
-        summary: "comment for closed session",
-        payload: { commentId: "closed" },
-      },
-    ])
-    const batch = store.buildReminderBatch("session-closed")
-    assert.ok(batch)
+		store.registerClient("client-orphan", {
+			pid: 222,
+			projectRoot: "/tmp/project",
+		});
+		store.registerSession({
+			clientId: "client-orphan",
+			sessionId: "session-orphan",
+			repo: "acme/repo",
+			branch: "feature/orphan",
+			isPrimary: true,
+			status: "active",
+			busyState: "idle",
+		});
+		store.recordBranchAssociation("acme/repo", "feature/orphan", 22);
+		store.insertEvents("acme/repo", 22, [
+			{
+				dedupeKey: "issue_comment.created:orphan",
+				kind: "issue_comment.created",
+				priority: "high",
+				summary: "comment for orphaned session",
+				payload: { commentId: "orphan" },
+			},
+		]);
+		const batch = store.buildReminderBatch("session-orphan");
+		assert.ok(batch);
 
-    store.updateSessionState({ sessionId: "session-closed", status: "closed" })
-    assert.equal(store.listSessionSummaries().length, 0)
+		store.releaseClient("client-orphan");
+		const pruned = store.pruneClosedSessions({ includeOrphaned: true });
 
-    const recovery = store.recoverFromRestart()
+		assert.deepEqual(pruned, { sessions: 1, reminderBatches: 1 });
+		assert.equal(store.getSession("session-orphan"), undefined);
+		assert.equal(store.getPendingReminder("session-orphan"), null);
 
-    assert.deepEqual(recovery.prunedClosedSessions, { sessions: 1, reminderBatches: 1 })
-    assert.equal(store.getSession("session-closed"), undefined)
-    assert.equal(store.getPendingReminder("session-closed"), null)
+		store.close();
+	});
 
-    store.close()
-  })
-})
+	test("restart recovery prunes closed sessions and their reminder batches", () => {
+		const store = createStore();
+
+		store.registerClient("client-old", {
+			pid: 111,
+			projectRoot: "/tmp/project",
+		});
+		store.registerSession({
+			clientId: "client-old",
+			sessionId: "session-closed",
+			repo: "acme/repo",
+			branch: "feature/closed",
+			isPrimary: true,
+			status: "active",
+			busyState: "idle",
+		});
+		store.recordBranchAssociation("acme/repo", "feature/closed", 21);
+		store.insertEvents("acme/repo", 21, [
+			{
+				dedupeKey: "issue_comment.created:closed",
+				kind: "issue_comment.created",
+				priority: "high",
+				summary: "comment for closed session",
+				payload: { commentId: "closed" },
+			},
+		]);
+		const batch = store.buildReminderBatch("session-closed");
+		assert.ok(batch);
+
+		store.updateSessionState({ sessionId: "session-closed", status: "closed" });
+		assert.equal(store.listSessionSummaries().length, 0);
+
+		const recovery = store.recoverFromRestart();
+
+		assert.deepEqual(recovery.prunedClosedSessions, {
+			sessions: 1,
+			reminderBatches: 1,
+		});
+		assert.equal(store.getSession("session-closed"), undefined);
+		assert.equal(store.getPendingReminder("session-closed"), null);
+
+		store.close();
+	});
+});
