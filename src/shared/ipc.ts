@@ -36,6 +36,7 @@ export const requestSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("setGlobalDisabled"), protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION), payload: setGlobalDisabledPayloadSchema }),
   z.object({ type: z.literal("getGlobalDisabled"), protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION), payload: getGlobalDisabledPayloadSchema }),
   z.object({ type: z.literal("debugStatus"), protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION), payload: debugStatusPayloadSchema }),
+  z.object({ type: z.literal("pruneClosedSessions"), protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION), payload: debugStatusPayloadSchema }),
 ])
 
 export const successResponseSchema = z.object({
