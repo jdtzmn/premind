@@ -234,6 +234,7 @@ describe("premind Pi extension", () => {
 		const client = createClient();
 		createPremindPiExtension({
 			createDaemonClient: () => client.client,
+			config: { statusPollIntervalMs: 0 },
 		})(mock.pi as never);
 
 		assert.ok(mock.events.has("session_start"));
@@ -319,6 +320,7 @@ describe("premind Pi extension", () => {
 		const { ctx, statuses } = createEventContext();
 		createPremindPiExtension({
 			createDaemonClient: () => client.client,
+			config: { statusPollIntervalMs: 0 },
 			detectGit: async () => ({ repo: "owner/repo", branch: "feature/pi" }),
 		})(mock.pi as never);
 
@@ -364,6 +366,7 @@ describe("premind Pi extension", () => {
 		const { ctx, statuses } = createEventContext();
 		createPremindPiExtension({
 			createDaemonClient: () => client.client,
+			config: { statusPollIntervalMs: 0 },
 			detectGit: async () => ({ repo: "owner/repo", branch: "feature/pi" }),
 		})(mock.pi as never);
 
@@ -380,6 +383,7 @@ describe("premind Pi extension", () => {
 		const { ctx, statuses } = createEventContext();
 		createPremindPiExtension({
 			createDaemonClient: () => client.client,
+			config: { statusPollIntervalMs: 0 },
 			detectGit: async () => ({ repo: "owner/repo", branch: "feature/pi" }),
 		})(mock.pi as never);
 
@@ -405,6 +409,7 @@ describe("premind Pi extension", () => {
 		const { ctx, statuses } = createEventContext();
 		createPremindPiExtension({
 			createDaemonClient: () => client.client,
+			config: { statusPollIntervalMs: 0 },
 			detectGit: async () => ({ repo: "owner/repo", branch: "feature/pi" }),
 		})(mock.pi as never);
 
@@ -448,6 +453,7 @@ describe("premind Pi extension", () => {
 		const notifications: Array<{ message: string; level: string }> = [];
 		createPremindPiExtension({
 			createDaemonClient: () => client.client,
+			config: { statusPollIntervalMs: 0 },
 		})(mock.pi as never);
 
 		const command = mock.commands.get("premind:status");
@@ -471,6 +477,7 @@ describe("premind Pi extension", () => {
 		const notifications: Array<{ message: string; level: string }> = [];
 		createPremindPiExtension({
 			createDaemonClient: () => client.client,
+			config: { statusPollIntervalMs: 0 },
 		})(mock.pi as never);
 
 		const command = mock.commands.get("premind:prune");
@@ -491,6 +498,7 @@ describe("premind Pi extension", () => {
 		const notifications: Array<{ message: string; level: string }> = [];
 		createPremindPiExtension({
 			createDaemonClient: () => client.client,
+			config: { statusPollIntervalMs: 0 },
 		})(mock.pi as never);
 
 		const pause = mock.commands.get("premind:pause");
@@ -515,6 +523,7 @@ describe("premind Pi extension", () => {
 		const client = createClient();
 		createPremindPiExtension({
 			createDaemonClient: () => client.client,
+			config: { statusPollIntervalMs: 0 },
 		})(mock.pi as never);
 
 		const pause = mock.tools.get("premind_pause");
@@ -548,6 +557,7 @@ describe("premind Pi extension", () => {
 		const notifications: Array<{ message: string; level: string }> = [];
 		createPremindPiExtension({
 			createDaemonClient: () => client.client,
+			config: { statusPollIntervalMs: 0 },
 		})(mock.pi as never);
 
 		const command = mock.commands.get("premind:flush");
@@ -570,6 +580,7 @@ describe("premind Pi extension", () => {
 		const notifications: Array<{ message: string; level: string }> = [];
 		createPremindPiExtension({
 			createDaemonClient: () => client.client,
+			config: { statusPollIntervalMs: 0 },
 		})(mock.pi as never);
 
 		const command = mock.commands.get("premind:flush");
@@ -603,6 +614,7 @@ describe("premind Pi extension", () => {
 		const client = createClient();
 		createPremindPiExtension({
 			createDaemonClient: () => client.client,
+			config: { statusPollIntervalMs: 0 },
 		})(mock.pi as never);
 
 		const tool = mock.tools.get("premind_status");
