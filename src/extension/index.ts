@@ -62,6 +62,7 @@ const RESUME_ERROR_PREFIX = "premind resume failed";
 const SESSION_SOURCE = "pi-extension";
 const DEFAULT_HEARTBEAT_MS = 10_000;
 const REMINDER_VISIBLE_EVENT_LIMIT = 3;
+const PR_ICON = ""; // nf-oct-git_pull_request
 
 const priorityRank: Record<
 	ReminderBatch["events"][number]["priority"],
@@ -117,6 +118,16 @@ export const renderPremindReminderText = (batch: ReminderBatch | undefined) => {
 	return [title, ...(bullets.length > 0 ? ["", ...bullets] : [])].join("\n");
 };
 
+const formatStatusbar = (
+	session: DebugStatusResponse["sessions"][number] | undefined,
+) => {
+	if (!session) return undefined;
+	if (session.status === "paused") return `${PR_ICON} paused`;
+	if (session.pendingReminderCount > 0)
+		return `${PR_ICON} ${session.pendingReminderCount} pending`;
+	return undefined;
+};
+
 const getPiSessionId = (ctx: {
 	cwd: string;
 	sessionManager?: { getSessionFile?: () => string | undefined };
@@ -168,6 +179,22 @@ export const createPremindPiExtension = (
 		) => {
 			if (!ctx.hasUI) return;
 			ctx.ui?.setStatus?.("premind", value);
+		};
+
+		const refreshStatusbar = async (ctx: {
+			hasUI?: boolean;
+			ui?: { setStatus?: (key: string, value?: string) => void };
+		}) => {
+			if (!currentSessionId) return;
+			const status = await getClient().debugStatus();
+			setStatus(
+				ctx,
+				formatStatusbar(
+					status.sessions.find(
+						(session) => session.sessionId === currentSessionId,
+					),
+				),
+			);
 		};
 
 		const deliverPendingReminder = async (sessionId: string) => {
@@ -244,9 +271,9 @@ export const createPremindPiExtension = (
 					status: "active",
 					busyState: "idle",
 				});
-				setStatus(ctx, `premind ${git.repo} @ ${git.branch}`);
+				await refreshStatusbar(ctx);
 			} catch (error) {
-				setStatus(ctx, "premind error");
+				setStatus(ctx, `${PR_ICON} error`);
 				if (ctx.hasUI) {
 					ctx.ui.notify(
 						`premind session registration failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -269,10 +296,11 @@ export const createPremindPiExtension = (
 				await markBusyState("idle");
 				if (currentSessionId) {
 					const result = await deliverPendingReminder(currentSessionId);
-					if (result.delivered) setStatus(ctx, "premind reminder delivered");
+					if (result.delivered) setStatus(ctx, undefined);
+					else await refreshStatusbar(ctx);
 				}
 			} catch (error) {
-				setStatus(ctx, "premind error");
+				setStatus(ctx, `${PR_ICON} error`);
 				if (ctx.hasUI) {
 					ctx.ui.notify(
 						`premind automatic delivery failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -335,7 +363,7 @@ export const createPremindPiExtension = (
 				const sessionId = currentSessionId ?? getPiSessionId(ctx);
 				try {
 					await pauseCurrentSession(sessionId);
-					setStatus(ctx, "premind paused");
+					setStatus(ctx, `${PR_ICON} paused`);
 					ctx.ui.notify("premind paused for this session.", "info");
 				} catch (error) {
 					ctx.ui.notify(
@@ -352,7 +380,7 @@ export const createPremindPiExtension = (
 				const sessionId = currentSessionId ?? getPiSessionId(ctx);
 				try {
 					await resumeCurrentSession(sessionId);
-					setStatus(ctx, "premind resumed");
+					await refreshStatusbar(ctx);
 					ctx.ui.notify("premind resumed for this session.", "info");
 				} catch (error) {
 					ctx.ui.notify(
@@ -370,6 +398,8 @@ export const createPremindPiExtension = (
 				const sessionId = currentSessionId ?? getPiSessionId(ctx);
 				try {
 					const result = await deliverPendingReminder(sessionId);
+					if (result.delivered) setStatus(ctx, undefined);
+					else await refreshStatusbar(ctx);
 					ctx.ui.notify(
 						result.delivered
 							? `premind delivered reminder batch ${result.batch.batchId}.`

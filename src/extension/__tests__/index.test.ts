@@ -161,6 +161,7 @@ const createClient = (
 	options: {
 		pruneResult?: { sessions: number; reminderBatches: number };
 		pendingBatch?: ReminderBatch | null;
+		statusResult?: DebugStatusResponse;
 	} = {},
 ) => {
 	const operations: string[] = [];
@@ -220,7 +221,7 @@ const createClient = (
 					`ackReminder:${payload.batchId}:${payload.sessionId}:${payload.state}`,
 				);
 			},
-			debugStatus: async () => status,
+			debugStatus: async () => options.statusResult ?? status,
 			pruneClosedSessions: async () =>
 				options.pruneResult ?? { sessions: 0, reminderBatches: 0 },
 		},
@@ -339,9 +340,38 @@ describe("premind Pi extension", () => {
 			"registerClient:/tmp/project:pi-extension",
 			"registerSession:/tmp/session.jsonl:owner/repo:feature/pi",
 		]);
-		assert.deepEqual(statuses, [
-			{ key: "premind", value: "premind owner/repo @ feature/pi" },
-		]);
+		assert.deepEqual(statuses, [{ key: "premind", value: undefined }]);
+	});
+
+	test("session_start shows pending count in the statusbar", async () => {
+		const mock = createMockPi();
+		const client = createClient({
+			statusResult: {
+				...status,
+				sessions: [
+					{
+						sessionId: "/tmp/session.jsonl",
+						repo: "owner/repo",
+						branch: "feature/pi",
+						prNumber: 123,
+						status: "active",
+						busyState: "idle",
+						pendingReminderCount: 4,
+					},
+				],
+			},
+		});
+		const { ctx, statuses } = createEventContext();
+		createPremindPiExtension({
+			createDaemonClient: () => client.client,
+			detectGit: async () => ({ repo: "owner/repo", branch: "feature/pi" }),
+		})(mock.pi as never);
+
+		const handler = mock.events.get("session_start");
+		assert.ok(handler);
+		await handler({}, ctx);
+
+		assert.deepEqual(statuses.at(-1), { key: "premind", value: " 4 pending" });
 	});
 
 	test("session_shutdown unregisters the Pi session and releases the client", async () => {
@@ -409,10 +439,7 @@ describe("premind Pi extension", () => {
 				options: { deliverAs: "followUp", triggerTurn: true },
 			},
 		]);
-		assert.deepEqual(statuses.at(-1), {
-			key: "premind",
-			value: "premind reminder delivered",
-		});
+		assert.deepEqual(statuses.at(-1), { key: "premind", value: undefined });
 	});
 
 	test("/premind:status renders daemon status", async () => {
