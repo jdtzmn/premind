@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import {
 	createPremindPiExtension,
+	renderPremindPiStatus,
 	renderPremindReminderText,
 } from "../index.ts";
 import type {
@@ -192,6 +193,12 @@ const createClient = (
 			unregisterSession: async (sessionId: string) => {
 				operations.push(`unregisterSession:${sessionId}`);
 			},
+			pauseSession: async (sessionId: string) => {
+				operations.push(`pauseSession:${sessionId}`);
+			},
+			resumeSession: async (sessionId: string) => {
+				operations.push(`resumeSession:${sessionId}`);
+			},
 			updateSessionState: async (payload: {
 				sessionId: string;
 				busyState: string;
@@ -235,7 +242,11 @@ describe("premind Pi extension", () => {
 		assert.ok(mock.renderers.has("premind-reminder"));
 		assert.ok(mock.commands.has("premind:status"));
 		assert.ok(mock.commands.has("premind:prune"));
+		assert.ok(mock.commands.has("premind:pause"));
+		assert.ok(mock.commands.has("premind:resume"));
 		assert.ok(mock.commands.has("premind:flush"));
+		assert.ok(mock.tools.has("premind_pause"));
+		assert.ok(mock.tools.has("premind_resume"));
 		assert.ok(mock.tools.has("premind_status"));
 	});
 
@@ -277,6 +288,26 @@ describe("premind Pi extension", () => {
 				"- alice commented on src/extension/index.ts",
 				"- branch synchronized",
 				"- 1 more change queued",
+			].join("\n"),
+		);
+	});
+
+	test("renders Pi status with a shortened session id", () => {
+		assert.equal(
+			renderPremindPiStatus({
+				...status,
+				sessions: [
+					{
+						...status.sessions[0],
+						sessionId:
+							"/Users/jacob/.pi/agent/sessions/project/2026-07-18T05-45-33-751Z_019f73c2-2f37-7098-88f3-a096cda8ea14.jsonl",
+					},
+				],
+			}),
+			[
+				"premind: 1 active session",
+				"clients 1 · watchers 1",
+				"- owner/repo @ feature/pi (PR #123) | active/idle | pending 2 | session …a096cda8ea14",
 			].join("\n"),
 		);
 	});
@@ -398,7 +429,7 @@ describe("premind Pi extension", () => {
 
 		assert.equal(notifications.length, 1);
 		assert.equal(notifications[0]?.level, "info");
-		assert.match(notifications[0]?.message ?? "", /premind status/);
+		assert.match(notifications[0]?.message ?? "", /premind: 1 active session/);
 		assert.match(
 			notifications[0]?.message ?? "",
 			/owner\/repo @ feature\/pi \(PR #123\)/,
@@ -425,6 +456,63 @@ describe("premind Pi extension", () => {
 			notifications[0]?.message ?? "",
 			/premind pruned 401 closed sessions and 17 reminder batches\./,
 		);
+	});
+
+	test("/premind:pause and /premind:resume control the current session", async () => {
+		const mock = createMockPi();
+		const client = createClient();
+		const notifications: Array<{ message: string; level: string }> = [];
+		createPremindPiExtension({
+			createDaemonClient: () => client.client,
+		})(mock.pi as never);
+
+		const pause = mock.commands.get("premind:pause");
+		const resume = mock.commands.get("premind:resume");
+		assert.ok(pause);
+		assert.ok(resume);
+		await pause.handler("", createCommandContext(notifications));
+		await resume.handler("", createCommandContext(notifications));
+
+		assert.deepEqual(client.operations, [
+			"pauseSession:/tmp/session.jsonl",
+			"resumeSession:/tmp/session.jsonl",
+		]);
+		assert.deepEqual(
+			notifications.map((notification) => notification.message),
+			["premind paused for this session.", "premind resumed for this session."],
+		);
+	});
+
+	test("premind_pause and premind_resume tools control the current session", async () => {
+		const mock = createMockPi();
+		const client = createClient();
+		createPremindPiExtension({
+			createDaemonClient: () => client.client,
+		})(mock.pi as never);
+
+		const pause = mock.tools.get("premind_pause");
+		const resume = mock.tools.get("premind_resume");
+		assert.ok(pause);
+		assert.ok(resume);
+		await pause.execute(
+			"tool-call-1",
+			{},
+			undefined,
+			undefined,
+			createCommandContext(),
+		);
+		await resume.execute(
+			"tool-call-2",
+			{},
+			undefined,
+			undefined,
+			createCommandContext(),
+		);
+
+		assert.deepEqual(client.operations, [
+			"pauseSession:/tmp/session.jsonl",
+			"resumeSession:/tmp/session.jsonl",
+		]);
 	});
 
 	test("/premind:flush reports when there is no pending reminder", async () => {
@@ -499,7 +587,7 @@ describe("premind Pi extension", () => {
 			undefined,
 			{},
 		);
-		assert.match(result.content[0].text, /premind status/);
+		assert.match(result.content[0].text, /premind: 1 active session/);
 		assert.match(result.content[0].text, /pending 2/);
 	});
 });

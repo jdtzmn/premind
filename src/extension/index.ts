@@ -1,7 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { renderPremindStatus } from "../plugin/commands.ts";
 import { PremindDaemonClient } from "../plugin/daemon-client.ts";
 import { detectGitContext } from "../plugin/git-context.ts";
 import type {
@@ -31,6 +30,8 @@ type DaemonClientLike = {
 		payload: Omit<RegisterSessionPayload, "clientId">,
 	) => Promise<unknown>;
 	unregisterSession: (sessionId: string) => Promise<unknown>;
+	pauseSession: (sessionId: string) => Promise<unknown>;
+	resumeSession: (sessionId: string) => Promise<unknown>;
 	updateSessionState: (payload: {
 		sessionId: string;
 		busyState: "busy" | "idle";
@@ -56,6 +57,8 @@ export type PremindPiExtensionDependencies = {
 const STATUS_ERROR_PREFIX = "premind status failed";
 const PRUNE_ERROR_PREFIX = "premind prune failed";
 const FLUSH_ERROR_PREFIX = "premind flush failed";
+const PAUSE_ERROR_PREFIX = "premind pause failed";
+const RESUME_ERROR_PREFIX = "premind resume failed";
 const SESSION_SOURCE = "pi-extension";
 const DEFAULT_HEARTBEAT_MS = 10_000;
 const REMINDER_VISIBLE_EVENT_LIMIT = 3;
@@ -71,6 +74,27 @@ const priorityRank: Record<
 
 const formatPruneResult = (result: PruneClosedSessionsResult) =>
 	`premind pruned ${result.sessions} closed session${result.sessions === 1 ? "" : "s"} and ${result.reminderBatches} reminder batch${result.reminderBatches === 1 ? "" : "es"}.`;
+
+const formatSessionId = (sessionId: string) => {
+	const normalized = sessionId.replace(/\.jsonl$/, "");
+	const leaf = normalized.split(/[\\/]/).pop() ?? normalized;
+	if (leaf.length <= 18) return leaf;
+	return `…${leaf.slice(-12)}`;
+};
+
+export const renderPremindPiStatus = (status: DebugStatusResponse) => {
+	const activeLabel = `${status.activeSessions} active session${status.activeSessions === 1 ? "" : "s"}`;
+	const header = `premind: ${activeLabel}`;
+	const sessions = status.sessions.map((session) => {
+		const pr = session.prNumber ? ` (PR #${session.prNumber})` : "";
+		return `- ${session.repo} @ ${session.branch}${pr} | ${session.status}/${session.busyState} | pending ${session.pendingReminderCount} | session ${formatSessionId(session.sessionId)}`;
+	});
+	return [
+		header,
+		`clients ${status.activeClients} · watchers ${status.activeWatchers}`,
+		...sessions,
+	].join("\n");
+};
 
 export const renderPremindReminderText = (batch: ReminderBatch | undefined) => {
 	const events = batch?.events ?? [];
@@ -119,12 +143,20 @@ export const createPremindPiExtension = (
 
 		const getStatusText = async () => {
 			const status = await createDaemonClient().debugStatus();
-			return renderPremindStatus(status);
+			return renderPremindPiStatus(status);
 		};
 
 		const pruneClosedSessions = async () => {
 			const result = await createDaemonClient().pruneClosedSessions();
 			return result as PruneClosedSessionsResult;
+		};
+
+		const pauseCurrentSession = async (sessionId: string) => {
+			await getClient().pauseSession(sessionId);
+		};
+
+		const resumeCurrentSession = async (sessionId: string) => {
+			await getClient().resumeSession(sessionId);
 		};
 
 		const setStatus = (
@@ -297,6 +329,40 @@ export const createPremindPiExtension = (
 			},
 		});
 
+		pi.registerCommand("premind:pause", {
+			description: "Pause premind reminders for the current session",
+			handler: async (_args, ctx) => {
+				const sessionId = currentSessionId ?? getPiSessionId(ctx);
+				try {
+					await pauseCurrentSession(sessionId);
+					setStatus(ctx, "premind paused");
+					ctx.ui.notify("premind paused for this session.", "info");
+				} catch (error) {
+					ctx.ui.notify(
+						`${PAUSE_ERROR_PREFIX}: ${error instanceof Error ? error.message : String(error)}`,
+						"error",
+					);
+				}
+			},
+		});
+
+		pi.registerCommand("premind:resume", {
+			description: "Resume premind reminders for the current session",
+			handler: async (_args, ctx) => {
+				const sessionId = currentSessionId ?? getPiSessionId(ctx);
+				try {
+					await resumeCurrentSession(sessionId);
+					setStatus(ctx, "premind resumed");
+					ctx.ui.notify("premind resumed for this session.", "info");
+				} catch (error) {
+					ctx.ui.notify(
+						`${RESUME_ERROR_PREFIX}: ${error instanceof Error ? error.message : String(error)}`,
+						"error",
+					);
+				}
+			},
+		});
+
 		pi.registerCommand("premind:flush", {
 			description:
 				"Deliver one pending premind reminder for the current session, if any",
@@ -316,6 +382,44 @@ export const createPremindPiExtension = (
 						"error",
 					);
 				}
+			},
+		});
+
+		pi.registerTool({
+			name: "premind_pause",
+			label: "Premind Pause",
+			description:
+				"Pause premind PR reminders for the current session. Events still accumulate while paused.",
+			parameters: Type.Object({}),
+			async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+				const sessionId = currentSessionId ?? getPiSessionId(ctx);
+				await pauseCurrentSession(sessionId);
+				return {
+					content: [
+						{ type: "text" as const, text: "premind paused for this session." },
+					],
+					details: {},
+				};
+			},
+		});
+
+		pi.registerTool({
+			name: "premind_resume",
+			label: "Premind Resume",
+			description: "Resume premind PR reminders for the current session.",
+			parameters: Type.Object({}),
+			async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+				const sessionId = currentSessionId ?? getPiSessionId(ctx);
+				await resumeCurrentSession(sessionId);
+				return {
+					content: [
+						{
+							type: "text" as const,
+							text: "premind resumed for this session.",
+						},
+					],
+					details: {},
+				};
 			},
 		});
 
