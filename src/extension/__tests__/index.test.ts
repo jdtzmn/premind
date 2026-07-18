@@ -178,6 +178,14 @@ const createClient = (
 			unregisterSession: async (sessionId: string) => {
 				operations.push(`unregisterSession:${sessionId}`);
 			},
+			updateSessionState: async (payload: {
+				sessionId: string;
+				busyState: string;
+			}) => {
+				operations.push(
+					`updateSessionState:${payload.sessionId}:${payload.busyState}`,
+				);
+			},
 			getPendingReminder: async (sessionId: string) => {
 				operations.push(`getPendingReminder:${sessionId}`);
 				return { batch: options.pendingBatch ?? null };
@@ -208,6 +216,8 @@ describe("premind Pi extension", () => {
 
 		assert.ok(mock.events.has("session_start"));
 		assert.ok(mock.events.has("session_shutdown"));
+		assert.ok(mock.events.has("agent_start"));
+		assert.ok(mock.events.has("agent_end"));
 		assert.ok(mock.commands.has("premind:status"));
 		assert.ok(mock.commands.has("premind:prune"));
 		assert.ok(mock.commands.has("premind:flush"));
@@ -269,6 +279,52 @@ describe("premind Pi extension", () => {
 			"release",
 		]);
 		assert.deepEqual(statuses.at(-1), { key: "premind", value: undefined });
+	});
+
+	test("agent lifecycle updates busy state and auto-delivers pending reminders on idle", async () => {
+		const mock = createMockPi();
+		const client = createClient({ pendingBatch: reminderBatch });
+		const { ctx, statuses } = createEventContext();
+		createPremindPiExtension({
+			createDaemonClient: () => client.client,
+			detectGit: async () => ({ repo: "owner/repo", branch: "feature/pi" }),
+		})(mock.pi as never);
+
+		const startSession = mock.events.get("session_start");
+		const agentStart = mock.events.get("agent_start");
+		const agentEnd = mock.events.get("agent_end");
+		assert.ok(startSession);
+		assert.ok(agentStart);
+		assert.ok(agentEnd);
+
+		await startSession({}, ctx);
+		await agentStart({}, ctx);
+		await agentEnd({}, ctx);
+
+		assert.deepEqual(client.operations, [
+			"registerClient:/tmp/project:pi-extension",
+			"registerSession:/tmp/session.jsonl:owner/repo:feature/pi",
+			"updateSessionState:/tmp/session.jsonl:busy",
+			"updateSessionState:/tmp/session.jsonl:idle",
+			"getPendingReminder:/tmp/session.jsonl",
+			"ackReminder:batch-1:/tmp/session.jsonl:handed_off",
+			"ackReminder:batch-1:/tmp/session.jsonl:confirmed",
+		]);
+		assert.deepEqual(mock.sentMessages, [
+			{
+				message: {
+					customType: "premind-reminder",
+					content: reminderBatch.reminderText,
+					display: true,
+					details: reminderBatch,
+				},
+				options: { deliverAs: "followUp", triggerTurn: true },
+			},
+		]);
+		assert.deepEqual(statuses.at(-1), {
+			key: "premind",
+			value: "premind reminder delivered",
+		});
 	});
 
 	test("/premind:status renders daemon status", async () => {

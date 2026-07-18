@@ -30,6 +30,10 @@ type DaemonClientLike = {
 		payload: Omit<RegisterSessionPayload, "clientId">,
 	) => Promise<unknown>;
 	unregisterSession: (sessionId: string) => Promise<unknown>;
+	updateSessionState: (payload: {
+		sessionId: string;
+		busyState: "busy" | "idle";
+	}) => Promise<unknown>;
 	getPendingReminder: (
 		sessionId: string,
 	) => Promise<{ batch: ReminderBatch | null }>;
@@ -140,6 +144,14 @@ export const createPremindPiExtension = (
 			}
 		};
 
+		const markBusyState = async (busyState: "busy" | "idle") => {
+			if (!currentSessionId || !sessionClient) return;
+			await sessionClient.updateSessionState({
+				sessionId: currentSessionId,
+				busyState,
+			});
+		};
+
 		pi.on("session_start", async (_event, ctx) => {
 			clearHeartbeat();
 			const client = createDaemonClient();
@@ -169,6 +181,32 @@ export const createPremindPiExtension = (
 				if (ctx.hasUI) {
 					ctx.ui.notify(
 						`premind session registration failed: ${error instanceof Error ? error.message : String(error)}`,
+						"error",
+					);
+				}
+			}
+		});
+
+		pi.on("agent_start", async () => {
+			try {
+				await markBusyState("busy");
+			} catch {
+				// Busy-state updates are advisory; status/debug commands can surface daemon health.
+			}
+		});
+
+		pi.on("agent_end", async (_event, ctx) => {
+			try {
+				await markBusyState("idle");
+				if (currentSessionId) {
+					const result = await deliverPendingReminder(currentSessionId);
+					if (result.delivered) setStatus(ctx, "premind reminder delivered");
+				}
+			} catch (error) {
+				setStatus(ctx, "premind error");
+				if (ctx.hasUI) {
+					ctx.ui.notify(
+						`premind automatic delivery failed: ${error instanceof Error ? error.message : String(error)}`,
 						"error",
 					);
 				}
