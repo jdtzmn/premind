@@ -235,12 +235,51 @@ describe("StateStore", () => {
 
     // Session and watcher state should survive.
     assert.equal(recovery.recoveredSessions, 1)
+    assert.deepEqual(recovery.prunedClosedSessions, { sessions: 0, reminderBatches: 0 })
     assert.ok(store.getSession("session-restart"))
 
     // Events survive, so rebuilding should work after a new client registers.
     const rebuilt = store.buildReminderBatch("session-restart")
     assert.ok(rebuilt)
     assert.equal(rebuilt.events.length, 1)
+
+    store.close()
+  })
+
+  test("restart recovery prunes closed sessions and their reminder batches", () => {
+    const store = createStore()
+
+    store.registerClient("client-old", { pid: 111, projectRoot: "/tmp/project" })
+    store.registerSession({
+      clientId: "client-old",
+      sessionId: "session-closed",
+      repo: "acme/repo",
+      branch: "feature/closed",
+      isPrimary: true,
+      status: "active",
+      busyState: "idle",
+    })
+    store.recordBranchAssociation("acme/repo", "feature/closed", 21)
+    store.insertEvents("acme/repo", 21, [
+      {
+        dedupeKey: "issue_comment.created:closed",
+        kind: "issue_comment.created",
+        priority: "high",
+        summary: "comment for closed session",
+        payload: { commentId: "closed" },
+      },
+    ])
+    const batch = store.buildReminderBatch("session-closed")
+    assert.ok(batch)
+
+    store.updateSessionState({ sessionId: "session-closed", status: "closed" })
+    assert.equal(store.listSessionSummaries().length, 0)
+
+    const recovery = store.recoverFromRestart()
+
+    assert.deepEqual(recovery.prunedClosedSessions, { sessions: 1, reminderBatches: 1 })
+    assert.equal(store.getSession("session-closed"), undefined)
+    assert.equal(store.getPendingReminder("session-closed"), null)
 
     store.close()
   })

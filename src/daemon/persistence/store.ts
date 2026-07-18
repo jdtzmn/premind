@@ -101,6 +101,10 @@ export class StateStore {
     // so all leases from it are stale regardless of expiry.
     const deletedClients = this.db.prepare(`DELETE FROM client_leases`).run()
 
+    // Drop closed sessions left behind by older plugin versions or unclean host shutdowns.
+    // Closed sessions should not keep status output noisy or retain stale reminder batches.
+    const prunedClosedSessions = this.pruneClosedSessions()
+
     // Clear any in-flight reminder batches that were handed_off but never confirmed.
     // They'll be rebuilt from the event log on next idle.
     const resetBatches = this.db.prepare(`DELETE FROM reminder_batches WHERE state = 'handed_off'`).run()
@@ -113,6 +117,7 @@ export class StateStore {
     return {
       prunedClients: deletedClients.changes as number,
       resetBatches: resetBatches.changes as number,
+      prunedClosedSessions,
       recoveredSessions: sessions,
       recoveredBranchWatchers: branchWatchers,
       recoveredPrWatchers: prWatchers,
@@ -195,13 +200,24 @@ export class StateStore {
     this.db.prepare(`DELETE FROM reminder_batches WHERE session_id = ?`).run(sessionId)
   }
 
+  pruneClosedSessions() {
+    const deletedBatches = this.db
+      .prepare(`DELETE FROM reminder_batches WHERE session_id IN (SELECT session_id FROM sessions WHERE status = 'closed')`)
+      .run()
+    const deletedSessions = this.db.prepare(`DELETE FROM sessions WHERE status = 'closed'`).run()
+    return {
+      sessions: deletedSessions.changes as number,
+      reminderBatches: deletedBatches.changes as number,
+    }
+  }
+
   getSession(sessionId: string) {
     return this.db.prepare(`SELECT * FROM sessions WHERE session_id = ?`).get(sessionId) as SessionRow | undefined
   }
 
   listSessionSummaries() {
     const sessions = this.db
-      .prepare(`SELECT session_id, repo, branch, pr_number, status, busy_state, last_delivered_event_seq FROM sessions ORDER BY updated_at DESC`)
+      .prepare(`SELECT session_id, repo, branch, pr_number, status, busy_state, last_delivered_event_seq FROM sessions WHERE status != 'closed' ORDER BY updated_at DESC`)
       .all() as Array<{
       session_id: string
       repo: string
