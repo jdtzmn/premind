@@ -1,1 +1,1 @@
-export { default } from "../src/extension/index.ts";
+export { createPremindPiExtension, default } from "../src/extension/index.ts";

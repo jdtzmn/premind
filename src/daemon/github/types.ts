@@ -62,6 +62,14 @@ export type NormalizedPrEvent = {
   kind: string
   priority: "high" | "medium" | "low"
   summary: string
-  detailFilePath?: string
+  /**
+   * Pointer to where richer information about this event lives.
+   * Pre-persistence this is always a GitHub URL (PR page or check job link).
+   * After insertEvents runs, the persistence layer may overwrite the stored
+   * value with a local detail-file path for event kinds that carry rich body
+   * content (comments, reviews). The reminder template treats both
+   * identically — it just renders the link in parentheses.
+   */
+  referenceLink?: string
   payload: Record<string, unknown>
 }

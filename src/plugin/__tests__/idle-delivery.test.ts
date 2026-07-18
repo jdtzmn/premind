@@ -35,7 +35,7 @@ const makeDaemon = (initialBatch: PendingBatch = {
       acknowledgements.push({ batchId, state })
       if (state === "handed_off" || state === "confirmed") pendingBatch = null
     },
-    debugStatus: async () => ({ daemon: {}, activeClients: 0, activeSessions: 0, activeWatchers: 0, sessions: [] }),
+    debugStatus: async () => ({ daemon: {}, activeClients: 0, activeSessions: 0, activeWatchers: 0, lastReapAt: null, lastReapCount: 0, sessions: [] }),
     // Test helpers
     _acknowledgements: acknowledgements,
     _setPendingBatch: (b: PendingBatch) => { pendingBatch = b },
@@ -60,6 +60,9 @@ const makePlugin = async (daemon: ReturnType<typeof makeDaemon>, thresholdMs = T
         promptAsync: async ({ path, body }: any) => {
           asyncPrompts.push({ sessionId: path.id, text: body.parts[0].text })
         },
+      },
+      tui: {
+        showToast: async () => undefined,
       },
     },
   } as never)
@@ -174,6 +177,9 @@ describe("idle delivery threshold", () => {
             asyncPrompts.push({ sessionId: path.id, text: body.parts[0].text })
           },
         },
+        tui: {
+          showToast: async () => undefined,
+        },
       },
     } as never)
 
@@ -209,5 +215,71 @@ describe("idle delivery threshold", () => {
     await sleep(TEST_THRESHOLD_MS + 100)
 
     assert.equal(asyncPrompts.length, 0, "no reminder when no pending batch")
+  })
+
+  test("bootstrap: foreign sessions in daemon.debugStatus are ignored (no toast, no delivery)", async () => {
+    // The daemon's debugStatus.sessions is the GLOBAL session list across all
+    // opencode instances and worktrees. A fresh plugin instance must not act
+    // on any session it has not itself observed, otherwise it would render
+    // toasts for batches belonging to other worktrees.
+    const daemon = makeDaemon({
+      batchId: "batch-bootstrap",
+      sessionId: "foreign-session",
+      reminderText: "<system-reminder>not ours</system-reminder>",
+      events: [{} as never],
+    })
+    ;(daemon as unknown as { debugStatus: () => Promise<unknown> }).debugStatus = async () => ({
+      daemon: {},
+      activeClients: 1,
+      activeSessions: 1,
+      activeWatchers: 0,
+      lastReapAt: null,
+      lastReapCount: 0,
+      sessions: [
+        { sessionId: "foreign-session", repo: "acme/repo", branch: "feature/other", busyState: "idle" },
+      ],
+    })
+
+    const { asyncPrompts } = await makePlugin(daemon)
+
+    await sleep(TEST_THRESHOLD_MS + 100)
+
+    assert.equal(asyncPrompts.length, 0, "bootstrap must NOT deliver for a session the plugin never observed")
+  })
+
+  test("bootstrap: picks up a pending batch for a session the plugin has already adopted via session.created", async () => {
+    const daemon = makeDaemon({
+      batchId: "batch-adopted",
+      sessionId: "session-1",
+      reminderText: "<system-reminder>adopted"
+        + " and bootstrapped</system-reminder>",
+      events: [{} as never],
+    })
+    // Inject into debugStatus so bootstrap CAN discover it, but the session
+    // also must be adopted via a session.created event for bootstrap to act.
+    ;(daemon as unknown as { debugStatus: () => Promise<unknown> }).debugStatus = async () => ({
+      daemon: {},
+      activeClients: 1,
+      activeSessions: 1,
+      activeWatchers: 0,
+      lastReapAt: null,
+      lastReapCount: 0,
+      sessions: [
+        { sessionId: "session-1", repo: "acme/repo", branch: "feature/test", busyState: "idle" },
+      ],
+    })
+
+    const { runtime, asyncPrompts } = await makePlugin(daemon)
+
+    // Adopt the session via the opencode event stream BEFORE the async
+    // bootstrap microtask resolves. In real use session.created fires while
+    // the plugin is still initializing; we simulate that here.
+    await fireCreated(runtime, "session-1")
+    await fireIdle(runtime, "session-1")
+
+    await sleep(TEST_THRESHOLD_MS + 100)
+
+    assert.equal(asyncPrompts.length, 1, "adopted session with pending batch should receive delivery")
+    assert.match(asyncPrompts[0].text, /bootstrapped/)
   })
 })

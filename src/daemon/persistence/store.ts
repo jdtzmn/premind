@@ -31,6 +31,7 @@ type SessionRow = {
 	status: "active" | "paused" | "closed";
 	busy_state: "busy" | "idle";
 	last_delivered_event_seq: number;
+	last_activity_at: number;
 };
 
 type ReminderRow = {
@@ -47,7 +48,7 @@ type EventRow = {
 	kind: string;
 	priority: "high" | "medium" | "low";
 	summary: string;
-	detail_file_path: string | null;
+	reference_link: string | null;
 };
 
 type GroupedReminderEvent = ReminderEvent & {
@@ -64,6 +65,8 @@ const priorityRank: Record<ReminderEvent["priority"], number> = {
 export class StateStore {
 	private readonly db: DatabaseSync;
 	private readonly detailFiles = new DetailFileWriter();
+	private lastReapAt: number | null = null;
+	private lastReapCount = 0;
 
 	constructor(dbPath = PREMIND_DB_PATH) {
 		fs.mkdirSync(path.dirname(dbPath), { recursive: true });
@@ -108,15 +111,33 @@ export class StateStore {
 		// so all leases from it are stale regardless of expiry.
 		const deletedClients = this.db.prepare(`DELETE FROM client_leases`).run();
 
-		// Drop closed sessions left behind by older plugin versions or unclean host shutdowns.
-		// Closed sessions should not keep status output noisy or retain stale reminder batches.
-		const prunedClosedSessions = this.pruneClosedSessions();
-
 		// Clear any in-flight reminder batches that were handed_off but never confirmed.
 		// They'll be rebuilt from the event log on next idle.
 		const resetBatches = this.db
 			.prepare(`DELETE FROM reminder_batches WHERE state = 'handed_off'`)
 			.run();
+
+		// Deduplicate active sessions: keep only the most-recently-updated session
+		// per (repo, branch) and close the rest. Without this, accumulated duplicate
+		// sessions from prior runs are recovered as-is and never get superseded
+		// (opencode doesn't re-emit session.created on reconnect, so registerSession
+		// never fires for them and the new session's supersession logic can't run).
+		const deduped = this.db
+			.prepare(`
+      UPDATE sessions
+      SET status = 'closed', updated_at = :now
+      WHERE status = 'active'
+        AND session_id NOT IN (
+          SELECT session_id FROM sessions AS s2
+          WHERE s2.repo = sessions.repo
+            AND s2.branch = sessions.branch
+            AND s2.status = 'active'
+          ORDER BY s2.updated_at DESC
+          LIMIT 1
+        )
+    `)
+			.run({ now });
+		if ((deduped.changes as number) > 0) this.refreshWatcherCounts(now);
 
 		// Count what we're recovering.
 		const sessions = this.countActiveSessions();
@@ -132,7 +153,7 @@ export class StateStore {
 		return {
 			prunedClients: deletedClients.changes as number,
 			resetBatches: resetBatches.changes as number,
-			prunedClosedSessions,
+			dedupedSessions: deduped.changes as number,
 			recoveredSessions: sessions,
 			recoveredBranchWatchers: branchWatchers,
 			recoveredPrWatchers: prWatchers,
@@ -158,7 +179,11 @@ export class StateStore {
 		this.db.prepare(`DELETE FROM client_leases WHERE expires_at <= ?`).run(now);
 	}
 
-	registerSession(payload: RegisterSessionPayload, now = Date.now()) {
+	registerSession(
+		payload: RegisterSessionPayload,
+		now = Date.now(),
+	): { created: boolean; superseded: number } {
+		const existing = this.getSession(payload.sessionId);
 		this.db
 			.prepare(
 				`
@@ -181,16 +206,53 @@ export class StateStore {
 				now,
 			});
 		this.touchBranchWatcher(payload.repo, payload.branch, now);
+
+		// Only one active premind session per (repo, branch) — close any pre-existing
+		// sessions on this branch so they stop receiving delivery and drop out of
+		// watchers/status. The new session becomes the sole active one.
+		const superseded = this.closeSupersededSessions(
+			payload.repo,
+			payload.branch,
+			payload.sessionId,
+			now,
+		);
+
+		return { created: !existing, superseded };
+	}
+
+	/**
+	 * Marks all non-closed sessions on (repo, branch) other than exceptSessionId
+	 * as closed. Returns the number of sessions closed.
+	 */
+	closeSupersededSessions(
+		repo: string,
+		branch: string,
+		exceptSessionId: string,
+		now = Date.now(),
+	): number {
+		const result = this.db
+			.prepare(
+				`UPDATE sessions SET status = 'closed', updated_at = :now
+         WHERE repo = :repo AND branch = :branch AND session_id != :exceptSessionId AND status != 'closed'`,
+			)
+			.run({ repo, branch, exceptSessionId, now });
+		if ((result.changes as number) > 0) this.refreshWatcherCounts(now);
+		return result.changes as number;
 	}
 
 	updateSessionState(payload: UpdateSessionStatePayload, now = Date.now()) {
 		const current = this.getSession(payload.sessionId);
-		if (!current) return false;
+		if (!current) return { updated: false, revived: false };
+		const revived = current.status === "closed" && !!payload.busyState;
 		const next = {
 			repo: payload.repo ?? current.repo,
 			branch: payload.branch ?? current.branch,
-			status: payload.status ?? current.status,
 			busyState: payload.busyState ?? current.busy_state,
+			// If the session was closed by supersession but activity is now arriving
+			// (e.g. user resumed via `opencode --continue`), revive it to active so
+			// delivery can resume. A subsequent registerSession from the same or a
+			// newer session will re-apply supersession if needed.
+			status: revived ? "active" : (payload.status ?? current.status),
 		};
 
 		this.db
@@ -212,8 +274,9 @@ export class StateStore {
 				now,
 			});
 
+		if (revived) this.refreshWatcherCounts(now);
 		this.touchBranchWatcher(next.repo, next.branch, now);
-		return true;
+		return { updated: true, revived };
 	}
 
 	unregisterSession(sessionId: string) {
@@ -223,10 +286,71 @@ export class StateStore {
 			.run(sessionId);
 	}
 
-	pruneClosedSessions(options: { includeOrphaned?: boolean } = {}) {
-		const predicate = options.includeOrphaned
-			? `status = 'closed' OR NOT EXISTS (SELECT 1 FROM client_leases WHERE client_leases.client_id = sessions.client_id)`
-			: `status = 'closed'`;
+	/**
+	 * Marks any non-closed session whose last_activity_at is older than the
+	 * threshold as "closed". Also refreshes watcher counts when any rows were
+	 * reaped so the next poll tick reflects reality.
+	 *
+	 * Records lastReapAt/lastReapCount on every call (including no-op sweeps)
+	 * so operators can verify the sweep is actually running.
+	 */
+	reapStaleSessions(
+		thresholdMs: number,
+		now = Date.now(),
+	): { reaped: number; oldestAgeMs: number | null } {
+		const cutoff = now - thresholdMs;
+		const result = this.db
+			.prepare(
+				`UPDATE sessions SET status = 'closed', updated_at = :now WHERE status != 'closed' AND last_activity_at < :cutoff`,
+			)
+			.run({ now, cutoff });
+
+		const reaped = result.changes as number;
+		if (reaped > 0) this.refreshWatcherCounts(now);
+
+		const oldestRow = this.db
+			.prepare(
+				`SELECT MIN(last_activity_at) AS oldest FROM sessions WHERE status != 'closed'`,
+			)
+			.get() as { oldest: number | null };
+		const oldestAgeMs =
+			oldestRow.oldest === null ? null : now - oldestRow.oldest;
+
+		this.lastReapAt = now;
+		this.lastReapCount = reaped;
+
+		return { reaped, oldestAgeMs };
+	}
+
+	getLastReapAt(): number | null {
+		return this.lastReapAt;
+	}
+
+	getLastReapCount(): number {
+		return this.lastReapCount;
+	}
+
+	/**
+	 * Permanently deletes closed session rows (and their reminder_batches via
+	 * CASCADE) that have been closed for longer than retentionMs. This prevents
+	 * indefinite accumulation of stale tracking rows that will never receive
+	 * delivery.
+	 *
+	 * Does NOT affect opencode's own session store — premind's DB is a local
+	 * tracking layer only.
+	 */
+	pruneClosedSessions(retentionMs: number, now = Date.now()): number {
+		const cutoff = now - retentionMs;
+		const result = this.db
+			.prepare(
+				`DELETE FROM sessions WHERE status = 'closed' AND updated_at < :cutoff`,
+			)
+			.run({ cutoff });
+		return result.changes as number;
+	}
+
+	pruneClosedOrOrphanedSessions() {
+		const predicate = `status = 'closed' OR NOT EXISTS (SELECT 1 FROM client_leases WHERE client_leases.client_id = sessions.client_id)`;
 		const deletedBatches = this.db
 			.prepare(
 				`DELETE FROM reminder_batches WHERE session_id IN (SELECT session_id FROM sessions WHERE ${predicate})`,
@@ -239,6 +363,47 @@ export class StateStore {
 			sessions: deletedSessions.changes as number,
 			reminderBatches: deletedBatches.changes as number,
 		};
+	}
+
+	/**
+	 * Deletes pr_events and pr_snapshots for (repo, pr_number) pairs that have
+	 * no active (non-closed) sessions referencing them. Once the last active
+	 * session on a PR is gone, its event history can never be delivered, so
+	 * retaining it only wastes space.
+	 *
+	 * Returns the number of event rows deleted.
+	 */
+	pruneOrphanedPrEvents(now = Date.now()): number {
+		// Snapshots first — they're smaller and have no dependents.
+		this.db
+			.prepare(`
+      DELETE FROM pr_snapshots
+      WHERE (repo, pr_number) NOT IN (
+        SELECT repo, pr_number
+        FROM sessions
+        WHERE status != 'closed' AND pr_number IS NOT NULL
+      )
+    `)
+			.run();
+
+		const result = this.db
+			.prepare(`
+      DELETE FROM pr_events
+      WHERE (repo, pr_number) NOT IN (
+        SELECT repo, pr_number
+        FROM sessions
+        WHERE status != 'closed' AND pr_number IS NOT NULL
+      )
+    `)
+			.run();
+		return result.changes as number;
+	}
+
+	countClosedSessions(): number {
+		const row = this.db
+			.prepare(`SELECT COUNT(*) AS count FROM sessions WHERE status = 'closed'`)
+			.get() as { count: number };
+		return row.count;
 	}
 
 	getSession(sessionId: string) {
@@ -298,6 +463,27 @@ export class StateStore {
 			)
 			.run({ status, now, sessionId });
 		return (result.changes as number) > 0;
+	}
+
+	isGloballyDisabled(): boolean {
+		const row = this.db
+			.prepare(`SELECT value FROM settings WHERE key = 'globally_disabled'`)
+			.get() as { value: string } | undefined;
+		return row?.value === "true";
+	}
+
+	setGloballyDisabled(disabled: boolean, now = Date.now()) {
+		this.db
+			.prepare(
+				`
+          INSERT INTO settings (key, value, updated_at)
+          VALUES ('globally_disabled', :value, :now)
+          ON CONFLICT(key) DO UPDATE SET
+            value = excluded.value,
+            updated_at = excluded.updated_at
+        `,
+			)
+			.run({ value: disabled ? "true" : "false", now });
 	}
 
 	countActiveClients(now = Date.now()) {
@@ -366,11 +552,46 @@ export class StateStore {
 			)
 			.run({ repo, branch, prNumber, checkedAt });
 
+		// Find sessions whose pr_number is about to change. For any session that is newly
+		// associated with a PR (or switched to a different PR), fast-forward its delivery
+		// cursor past any pre-existing events for that PR. This prevents replaying history
+		// the user has either already seen (re-attach case) or never saw but wouldn't want
+		// dumped at once (stale event log).
+		const sessionsToUpdate = this.db
+			.prepare(
+				`SELECT session_id, pr_number FROM sessions WHERE repo = :repo AND branch = :branch`,
+			)
+			.all({ repo, branch }) as Array<{
+			session_id: string;
+			pr_number: number | null;
+		}>;
+
+		let freshCursor = 0;
+		if (prNumber !== null) {
+			const row = this.db
+				.prepare(
+					`SELECT MAX(seq) AS maxSeq FROM pr_events WHERE repo = :repo AND pr_number = :prNumber`,
+				)
+				.get({ repo, prNumber }) as { maxSeq: number | null } | undefined;
+			freshCursor = row?.maxSeq ?? 0;
+		}
+
 		this.db
 			.prepare(
 				`UPDATE sessions SET pr_number = :prNumber, updated_at = :checkedAt WHERE repo = :repo AND branch = :branch`,
 			)
 			.run({ repo, branch, prNumber, checkedAt });
+
+		if (prNumber !== null && freshCursor > 0) {
+			const advance = this.db.prepare(
+				`UPDATE sessions SET last_delivered_event_seq = :cursor WHERE session_id = :sessionId`,
+			);
+			for (const session of sessionsToUpdate) {
+				if (session.pr_number !== prNumber) {
+					advance.run({ cursor: freshCursor, sessionId: session.session_id });
+				}
+			}
+		}
 
 		if (prNumber !== null) {
 			this.touchPrWatcher(repo, prNumber, checkedAt);
@@ -385,6 +606,38 @@ export class StateStore {
 			.get(repo, prNumber) as { snapshot_json: string } | undefined;
 		if (!row) return null;
 		return JSON.parse(row.snapshot_json) as PullRequestSnapshot;
+	}
+
+	/**
+	 * ETag cache for conditional GitHub requests. `scope` is a short tag
+	 * (e.g. "pr.snapshot", "branch.pulls"); `key` uniquely identifies the
+	 * resource within that scope (e.g. `${repo}#${prNumber}`).
+	 */
+	getEtag(scope: string, key: string): string | null {
+		const row = this.db
+			.prepare(`SELECT etag FROM etags WHERE scope = ? AND key = ?`)
+			.get(scope, key) as { etag: string } | undefined;
+		return row?.etag ?? null;
+	}
+
+	saveEtag(scope: string, key: string, etag: string | null, now = Date.now()) {
+		if (etag === null) {
+			this.db
+				.prepare(`DELETE FROM etags WHERE scope = ? AND key = ?`)
+				.run(scope, key);
+			return;
+		}
+		this.db
+			.prepare(
+				`
+          INSERT INTO etags (scope, key, etag, updated_at)
+          VALUES (:scope, :key, :etag, :now)
+          ON CONFLICT(scope, key) DO UPDATE SET
+            etag = excluded.etag,
+            updated_at = excluded.updated_at
+        `,
+			)
+			.run({ scope, key, etag, now });
 	}
 
 	saveSnapshot(repo: string, prNumber: number, snapshot: PullRequestSnapshot) {
@@ -417,15 +670,20 @@ export class StateStore {
 	) {
 		const insert = this.db.prepare(
 			`
-        INSERT OR IGNORE INTO pr_events (repo, pr_number, dedupe_key, kind, priority, summary, detail_file_path, payload_json, created_at)
-        VALUES (:repo, :prNumber, :dedupeKey, :kind, :priority, :summary, :detailFilePath, :payloadJson, :now)
+        INSERT OR IGNORE INTO pr_events (repo, pr_number, dedupe_key, kind, priority, summary, reference_link, payload_json, created_at)
+        VALUES (:repo, :prNumber, :dedupeKey, :kind, :priority, :summary, :referenceLink, :payloadJson, :now)
       `,
 		);
 
 		this.db.exec("BEGIN");
 		try {
 			for (const event of events) {
-				const detailFilePath = this.detailFiles.write(repo, prNumber, event);
+				// Prefer the local detail file (rich body content for comments and
+				// reviews). When the writer skips the file (no rich content for this
+				// kind, e.g. check.*), fall back to the GitHub URL the event was
+				// built with so the reminder still carries an actionable link.
+				const localPath = this.detailFiles.write(repo, prNumber, event);
+				const referenceLink = localPath ?? event.referenceLink ?? null;
 				insert.run({
 					repo,
 					prNumber,
@@ -433,7 +691,7 @@ export class StateStore {
 					kind: event.kind,
 					priority: event.priority,
 					summary: event.summary,
-					detailFilePath,
+					referenceLink,
 					payloadJson: JSON.stringify(event.payload),
 					now,
 				});
@@ -491,7 +749,7 @@ export class StateStore {
 		return this.db
 			.prepare(
 				`
-          SELECT seq, kind, priority, summary, detail_file_path
+          SELECT seq, kind, priority, summary, reference_link
           FROM pr_events
           WHERE repo = :repo
             AND pr_number = :prNumber
@@ -624,7 +882,7 @@ export class StateStore {
 			kind: event.kind,
 			priority: event.priority,
 			summary: event.summary,
-			detailFilePath: event.detail_file_path ?? undefined,
+			referenceLink: event.reference_link ?? undefined,
 		}));
 
 		const grouped = new Map<string, GroupedReminderEvent[]>();
@@ -666,7 +924,7 @@ export class StateStore {
 			"Changes:",
 			...condensed.map(
 				(event, index) =>
-					`${index + 1}. ${event.kind} - ${event.summary}${event.detailFilePath ? ` (${event.detailFilePath})` : ""}`,
+					`${index + 1}. ${event.kind} - ${event.summary}${event.referenceLink ? ` (${event.referenceLink})` : ""}`,
 			),
 			"",
 			"Please incorporate only the new information above into your reasoning and continue the current task.",
@@ -781,7 +1039,7 @@ export class StateStore {
         status TEXT NOT NULL,
         busy_state TEXT NOT NULL,
         last_delivered_event_seq INTEGER NOT NULL DEFAULT 0,
-        last_activity_at INTEGER NOT NULL DEFAULT 0,
+        last_activity_at INTEGER NOT NULL,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       );
@@ -837,9 +1095,23 @@ export class StateStore {
         kind TEXT NOT NULL,
         priority TEXT NOT NULL,
         summary TEXT NOT NULL,
-        detail_file_path TEXT,
+        reference_link TEXT,
         payload_json TEXT NOT NULL,
         created_at INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS etags (
+        scope TEXT NOT NULL,
+        key TEXT NOT NULL,
+        etag TEXT NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY(scope, key)
+      );
+
+      CREATE TABLE IF NOT EXISTS settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
       );
     `);
 
@@ -856,18 +1128,29 @@ export class StateStore {
 			);
 		}
 
-		if (!sessionColumns.some((column) => column.name === "last_activity_at")) {
-			this.db.exec(
-				`ALTER TABLE sessions ADD COLUMN last_activity_at INTEGER NOT NULL DEFAULT 0`,
-			);
-		}
-
 		const reminderColumns = this.db
 			.prepare(`PRAGMA table_info(reminder_batches)`)
 			.all() as Array<{ name: string }>;
 		if (!reminderColumns.some((column) => column.name === "max_event_seq")) {
 			this.db.exec(
 				`ALTER TABLE reminder_batches ADD COLUMN max_event_seq INTEGER`,
+			);
+		}
+
+		// Rename pr_events.detail_file_path -> reference_link. The legacy name
+		// implied a local file path, but the column actually stores either a
+		// local detail-file path or a GitHub URL depending on the event kind.
+		// SQLite >= 3.25 supports RENAME COLUMN; this codebase already requires
+		// a Node version that bundles a newer SQLite.
+		const prEventColumns = this.db
+			.prepare(`PRAGMA table_info(pr_events)`)
+			.all() as Array<{ name: string }>;
+		if (
+			prEventColumns.some((column) => column.name === "detail_file_path") &&
+			!prEventColumns.some((column) => column.name === "reference_link")
+		) {
+			this.db.exec(
+				`ALTER TABLE pr_events RENAME COLUMN detail_file_path TO reference_link`,
 			);
 		}
 	}

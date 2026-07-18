@@ -18,9 +18,13 @@ const status: DebugStatusResponse = {
 		leaseTtlMs: 30_000,
 		idleShutdownGraceMs: 15_000,
 	},
+	globallyDisabled: false,
 	activeClients: 1,
 	activeSessions: 1,
+	closedSessions: 0,
 	activeWatchers: 1,
+	lastReapAt: null,
+	lastReapCount: 0,
 	sessions: [
 		{
 			sessionId: "session-1",

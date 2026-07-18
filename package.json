@@ -8,16 +8,16 @@
 	},
 	"main": "./src/plugin/index.ts",
 	"files": [
-		"extensions",
 		"src",
 		"PLAN.md",
+		"extensions",
 		"PI_PLAN.md"
 	],
 	"scripts": {
 		"build": "tsc -p tsconfig.json",
 		"check": "tsc -p tsconfig.json --noEmit",
 		"daemon": "tsx src/daemon/index.ts",
-		"test": "node --import tsx --test src/daemon/github/diff.test.ts src/daemon/persistence/store.test.ts src/daemon/watchers/integration.test.ts src/daemon/watchers/poll-scheduler.test.ts src/daemon/reminders/detail-files.test.ts src/extension/__tests__/index.test.ts src/plugin/__tests__/commands.test.ts src/plugin/__tests__/compatibility.test.ts src/plugin/__tests__/debug-state.test.ts src/plugin/__tests__/idle-delivery.test.ts src/plugin/__tests__/packaging.test.ts",
+		"test": "node --import tsx --test src/shared/config-loader.test.ts src/daemon/github/diff.test.ts src/daemon/github/graphql.test.ts src/daemon/github/http.test.ts src/daemon/github/ratelimit.test.ts src/daemon/persistence/store.test.ts src/daemon/watchers/adaptive-schedule.test.ts src/daemon/watchers/disable-gate.test.ts src/daemon/watchers/integration.test.ts src/daemon/watchers/poll-scheduler.test.ts src/daemon/reminders/detail-files.test.ts src/extension/__tests__/index.test.ts src/plugin/__tests__/commands.test.ts src/plugin/__tests__/compatibility.test.ts src/plugin/__tests__/config-integration.test.ts src/plugin/__tests__/cross-session.test.ts src/plugin/__tests__/debug-state.test.ts src/plugin/__tests__/idle-delivery.test.ts src/plugin/__tests__/packaging.test.ts src/plugin/__tests__/reattach.test.ts src/daemon/logging/logger.test.ts",
 		"test:compat": "node --import tsx --test src/plugin/__tests__/compatibility.test.ts",
 		"test:live": "node --import tsx src/test/live-validation.ts",
 		"test:live:contract": "node --import tsx src/test/live-validation.ts --contract-only"
@@ -33,11 +33,6 @@
 		"review",
 		"notifications"
 	],
-	"pi": {
-		"extensions": [
-			"./extensions/premind.ts"
-		]
-	},
 	"license": "MIT",
 	"dependencies": {
 		"@opencode-ai/plugin": "latest",
@@ -45,13 +40,18 @@
 		"tsx": "^4.20.6",
 		"zod": "^3.25.76"
 	},
+	"devDependencies": {
+		"@types/node": "^24.6.0",
+		"typescript": "^5.9.3"
+	},
+	"pi": {
+		"extensions": [
+			"./extensions/premind.ts"
+		]
+	},
 	"peerDependencies": {
 		"@earendil-works/pi-coding-agent": "*",
 		"@earendil-works/pi-tui": "*",
 		"typebox": "*"
-	},
-	"devDependencies": {
-		"@types/node": "^24.6.0",
-		"typescript": "^5.9.3"
 	}
 }

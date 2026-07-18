@@ -9,9 +9,12 @@ import {
 	type RegisterClientPayload,
 } from "../../shared/schema.ts";
 import type { PremindRequest, PremindResponse } from "../../shared/ipc.ts";
+import { createLogger } from "../logging/logger.ts";
 import { StateStore } from "../persistence/store.ts";
 
 export class Router {
+	private readonly logger = createLogger("daemon.ipc");
+
 	constructor(private readonly store: StateStore) {}
 
 	handle(request: PremindRequest): PremindResponse {
@@ -30,17 +33,41 @@ export class Router {
 			case "releaseClient":
 				this.store.releaseClient(request.payload.clientId);
 				return this.ok({ released: true });
-			case "registerSession":
-				this.store.registerSession(request.payload);
-				return this.ok({ registered: true });
+			case "registerSession": {
+				const { created, superseded } = this.store.registerSession(
+					request.payload,
+				);
+				this.logger.info(
+					created ? "session registered" : "session re-registered",
+					{
+						sessionId: request.payload.sessionId,
+						repo: request.payload.repo,
+						branch: request.payload.branch,
+						reattach: !created,
+						...(superseded > 0 ? { superseded } : {}),
+					},
+				);
+				return this.ok({ registered: true, created });
+			}
 			case "updateSessionState": {
-				const updated = this.store.updateSessionState(request.payload);
-				if (!updated)
+				const result = this.store.updateSessionState(request.payload);
+				if (!result.updated)
 					return this.fail(
 						"SESSION_NOT_FOUND",
 						`Unknown session: ${request.payload.sessionId}`,
 					);
-				return this.ok({ updated: true });
+				if (result.revived) {
+					this.logger.info("session revived from closed to active", {
+						sessionId: request.payload.sessionId,
+						trigger: request.payload.busyState,
+					});
+				} else if (request.payload.busyState) {
+					this.logger.info("session state updated", {
+						sessionId: request.payload.sessionId,
+						busyState: request.payload.busyState,
+					});
+				}
+				return this.ok({ updated: true, revived: result.revived });
 			}
 			case "unregisterSession":
 				this.store.unregisterSession(request.payload.sessionId);
@@ -75,6 +102,11 @@ export class Router {
 				});
 			case "ackReminder":
 				return this.ok(this.handleAckReminder(request.payload));
+			case "setGlobalDisabled":
+				this.store.setGloballyDisabled(request.payload.disabled);
+				return this.ok({ disabled: request.payload.disabled });
+			case "getGlobalDisabled":
+				return this.ok({ disabled: this.store.isGloballyDisabled() });
 			case "debugStatus":
 				return this.ok(
 					debugStatusResponseSchema.parse({
@@ -84,16 +116,18 @@ export class Router {
 							leaseTtlMs: PREMIND_CLIENT_LEASE_TTL_MS,
 							idleShutdownGraceMs: PREMIND_IDLE_SHUTDOWN_GRACE_MS,
 						},
+						globallyDisabled: this.store.isGloballyDisabled(),
 						activeClients: this.store.countActiveClients(),
 						activeSessions: this.store.countActiveSessions(),
+						closedSessions: this.store.countClosedSessions(),
 						activeWatchers: this.store.countActiveWatchers(),
+						lastReapAt: this.store.getLastReapAt(),
+						lastReapCount: this.store.getLastReapCount(),
 						sessions: this.store.listSessionSummaries(),
 					}),
 				);
 			case "pruneClosedSessions":
-				return this.ok(
-					this.store.pruneClosedSessions({ includeOrphaned: true }),
-				);
+				return this.ok(this.store.pruneClosedOrOrphanedSessions());
 		}
 	}
 

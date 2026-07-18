@@ -1,15 +1,7 @@
-import { execFile } from "node:child_process"
-import { promisify } from "node:util"
-import type {
-  PullRequestCheck,
-  PullRequestCore,
-  PullRequestIssueComment,
-  PullRequestReview,
-  PullRequestReviewComment,
-  PullRequestSnapshot,
-} from "./types.ts"
-
-const execFileAsync = promisify(execFile)
+import { GitHubHttpClient } from "./http.ts"
+import { fetchPullRequestSnapshotGraphQL } from "./graphql.ts"
+import { RateLimitTracker } from "./ratelimit.ts"
+import type { PullRequestSnapshot } from "./types.ts"
 
 export type PullRequestSummary = {
   number: number
@@ -20,90 +12,111 @@ export type PullRequestSummary = {
 }
 
 export type GitHubClientLike = {
-  findOpenPullRequestForBranch(repo: string, branch: string): Promise<PullRequestSummary | null>
-  fetchPullRequestSnapshot(repo: string, prNumber: number): Promise<PullRequestSnapshot>
+  findOpenPullRequestForBranch(
+    repo: string,
+    branch: string,
+    context?: FindOpenPullRequestContext,
+  ): Promise<FindOpenPullRequestResult>
+  fetchPullRequestSnapshot(
+    repo: string,
+    prNumber: number,
+    context?: FetchSnapshotContext,
+  ): Promise<PullRequestSnapshotResult>
 }
 
-const execGh = async (args: string[]) => {
-  const { stdout } = await execFileAsync("gh", args)
-  return stdout.trim()
+/**
+ * Optional caller-supplied context for `fetchPullRequestSnapshot`. Used to
+ * opt into conditional GraphQL requests with an existing ETag.
+ */
+export type FetchSnapshotContext = {
+  etag?: string | null
 }
 
-const flatten = <T>(value: unknown): T[] => {
-  if (!Array.isArray(value)) return []
-  const items: T[] = []
-  for (const entry of value) {
-    if (Array.isArray(entry)) items.push(...(entry as T[]))
-    else items.push(entry as T)
-  }
-  return items
+export type PullRequestSnapshotResult =
+  | { kind: "ok"; snapshot: PullRequestSnapshot; etag: string | null }
+  | { kind: "not_modified"; etag: string | null }
+  | { kind: "not_found" }
+
+/** Caller-supplied ETag for conditional branch-discovery polls. */
+export type FindOpenPullRequestContext = {
+  etag?: string | null
 }
 
+export type FindOpenPullRequestResult =
+  | { kind: "ok"; pr: PullRequestSummary | null; etag: string | null }
+  | { kind: "not_modified"; etag: string | null }
+
+export type GitHubClientOptions = {
+  http?: GitHubHttpClient
+}
+
+type PullsListResponse = Array<{
+  number: number
+  title: string
+  html_url: string
+  draft: boolean
+  state: string
+}>
+
+/**
+ * Production GitHub client.
+ *
+ * - Branch discovery still uses REST (`GET /repos/{repo}/pulls`) — cheap
+ *   (one call per 60s) and ETag-friendly.
+ * - PR snapshot uses a single GraphQL query with optional ETag conditional
+ *   request, replacing 5 REST calls per poll.
+ */
 export class GitHubClient implements GitHubClientLike {
-  async findOpenPullRequestForBranch(repo: string, branch: string): Promise<PullRequestSummary | null> {
+  readonly http: GitHubHttpClient
+  readonly rateLimit: RateLimitTracker
+
+  constructor(options: GitHubClientOptions = {}) {
+    this.http = options.http ?? new GitHubHttpClient()
+    this.rateLimit = this.http.rateLimit
+  }
+
+  async findOpenPullRequestForBranch(
+    repo: string,
+    branch: string,
+    context: FindOpenPullRequestContext = {},
+  ): Promise<FindOpenPullRequestResult> {
     const [owner] = repo.split("/")
-    if (!owner || !branch || branch === "HEAD" || branch === "unknown") return null
+    if (!owner || !branch || branch === "HEAD" || branch === "unknown") {
+      return { kind: "ok", pr: null, etag: null }
+    }
 
-    const stdout = await execGh(["api", `repos/${repo}/pulls?head=${owner}:${branch}&state=open&per_page=1`])
+    const path = `repos/${repo}/pulls?head=${encodeURIComponent(`${owner}:${branch}`)}&state=open&per_page=1`
+    const response = await this.http.get<PullsListResponse>(path, {
+      etag: context.etag ?? undefined,
+    })
 
-    const data = JSON.parse(stdout) as Array<{
-      number: number
-      title: string
-      html_url: string
-      draft: boolean
-      state: string
-    }>
+    if (response.kind === "not_modified") {
+      return { kind: "not_modified", etag: response.etag }
+    }
 
-    const first = data[0]
-    if (!first) return null
+    const first = response.data[0]
+    if (!first) return { kind: "ok", pr: null, etag: response.etag }
 
     return {
-      number: first.number,
-      title: first.title,
-      url: first.html_url,
-      draft: first.draft,
-      state: first.state,
+      kind: "ok",
+      pr: {
+        number: first.number,
+        title: first.title,
+        url: first.html_url,
+        draft: first.draft,
+        state: first.state,
+      },
+      etag: response.etag,
     }
   }
 
-  async fetchPullRequestSnapshot(repo: string, prNumber: number): Promise<PullRequestSnapshot> {
-    const [coreText, reviewsText, issueCommentsText, reviewCommentsText, checksText] = await Promise.all([
-      execGh([
-        "pr",
-        "view",
-        String(prNumber),
-        "-R",
-        repo,
-        "--json",
-        "number,title,url,state,isDraft,headRefName,baseRefName,headRefOid,mergeStateStatus,reviewDecision,updatedAt,reviewRequests",
-      ]),
-      execGh(["api", "--paginate", "--slurp", `repos/${repo}/pulls/${prNumber}/reviews?per_page=100`]),
-      execGh(["api", "--paginate", "--slurp", `repos/${repo}/issues/${prNumber}/comments?per_page=100`]),
-      execGh(["api", "--paginate", "--slurp", `repos/${repo}/pulls/${prNumber}/comments?per_page=100`]),
-      execGh([
-        "pr",
-        "checks",
-        String(prNumber),
-        "-R",
-        repo,
-        "--json",
-        "name,state,link,event,workflow",
-      ]).catch(() => "[]"),
-    ])
-
-    const core = JSON.parse(coreText) as PullRequestCore
-    const reviews = flatten<PullRequestReview>(JSON.parse(reviewsText))
-    const issueComments = flatten<PullRequestIssueComment>(JSON.parse(issueCommentsText))
-    const reviewComments = flatten<PullRequestReviewComment>(JSON.parse(reviewCommentsText))
-    const checks = JSON.parse(checksText) as PullRequestCheck[]
-
-    return {
-      core,
-      reviews,
-      issueComments,
-      reviewComments,
-      checks,
-      fetchedAt: Date.now(),
-    }
+  async fetchPullRequestSnapshot(
+    repo: string,
+    prNumber: number,
+    context: FetchSnapshotContext = {},
+  ): Promise<PullRequestSnapshotResult> {
+    return fetchPullRequestSnapshotGraphQL(this.http, repo, prNumber, {
+      previousEtag: context.etag ?? null,
+    })
   }
 }

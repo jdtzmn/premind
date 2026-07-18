@@ -54,15 +54,60 @@ ln -s "$(pwd)/src/plugin/index.ts" .opencode/plugins/premind.ts
 5. When the session becomes idle, premind injects a single `<system-reminder>` message with the incremental changes.
 6. OpenCode processes the reminder like a normal follow-up prompt, and your existing notification setup fires when the model completes.
 
+## Configuration
+
+Premind's config lives in a sibling file next to `opencode.jsonc`:
+
+- **macOS / Linux:** `~/.config/opencode/premind.jsonc`
+
+The file is created with a commented-out template the first time premind starts. Configuration is deliberately **not** put into `opencode.jsonc` — opencode's schema validator rejects unknown top-level keys as a hard startup failure.
+
+### Available settings
+
+| Field | Type | Default | Env var |
+| --- | --- | --- | --- |
+| `idleDeliveryThresholdMs` | integer (ms, min 5000) | `60000` | `PREMIND_IDLE_DELIVERY_THRESHOLD_MS` |
+
+More fields will be added as they become real features.
+
+### Example
+
+```jsonc
+// ~/.config/opencode/premind.jsonc
+{
+  // Wait 15 seconds of idle before delivering PR updates.
+  "idleDeliveryThresholdMs": 15000
+}
+```
+
+### Precedence
+
+Each field's effective value is resolved in this order (highest wins):
+
+1. Environment variable (`PREMIND_<FIELD_IN_UPPER_SNAKE>`)
+2. `~/.config/opencode/premind.jsonc`
+3. Schema default
+
+Malformed files and invalid env values are logged once and ignored — premind will keep running on defaults rather than fail to start.
+
+### Migration note
+
+Earlier versions documented a top-level `premind` key inside `opencode.jsonc`. That location was never actually usable — opencode's schema validator treats unknown top-level keys as a configuration error and refuses to start. If you previously tried to set premind config there and saw an error, this release is the fix: move your settings to `~/.config/opencode/premind.jsonc`.
+
 ## Commands
 
-premind registers three slash commands automatically:
+premind registers these slash commands automatically:
 
 - `/premind-status` — show current daemon state, attached sessions, and pending reminder counts
 - `/premind-pause` — pause reminders for the current session (events still accumulate)
 - `/premind-resume` — resume reminders for the current session
+- `/premind-send-now` — send pending PR updates to the current session immediately, skipping the idle countdown
+- `/premind-disable` — disable premind globally (stops GitHub polling across all sessions and projects — useful if you hit API rate limits)
+- `/premind-enable` — re-enable premind globally; polling resumes on the next scheduler tick
 
-These also work as tools that the model can call directly (e.g., if you ask "show premind status").
+These also work as tools that the model can call directly (e.g., if you ask "show premind status" or "disable premind — I'm hitting rate limits").
+
+`/premind-disable` is a daemon-wide kill switch: the daemon stays up and sessions keep registering, but no GitHub API calls are made until you re-enable. The flag is persisted in SQLite, so it survives daemon restarts. Queued events are preserved and delivered as normal once you re-enable.
 
 premind also exposes a `premind_probe` tool that returns runtime diagnostics. This is useful if you want to verify that the plugin actually initialized even when slash commands are not showing up yet.
 

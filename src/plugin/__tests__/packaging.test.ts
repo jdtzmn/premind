@@ -7,20 +7,10 @@ import { fileURLToPath } from "node:url";
 const THIS_DIR = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(THIS_DIR, "..", "..", "..");
 
-const readPackageJson = () => {
-	const pkgPath = path.join(ROOT, "package.json");
-	try {
-		return JSON.parse(fs.readFileSync(pkgPath, "utf8"));
-	} catch (error) {
-		assert.fail(
-			`failed to read package.json: ${error instanceof Error ? error.message : String(error)}`,
-		);
-	}
-};
-
 describe("plugin packaging", () => {
 	test("package.json exports point at existing entry file", () => {
-		const pkg = readPackageJson();
+		const pkgPath = path.join(ROOT, "package.json");
+		const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
 
 		const mainEntry = path.resolve(ROOT, pkg.main);
 		assert.ok(
@@ -31,7 +21,7 @@ describe("plugin packaging", () => {
 		const exportsEntry = path.resolve(ROOT, pkg.exports["."]);
 		assert.ok(
 			fs.existsSync(exportsEntry),
-			`exports entry ${pkg.exports["."]} does not exist at ${exportsEntry}`,
+			`exports["."] ${pkg.exports["."]} does not exist`,
 		);
 	});
 
@@ -74,7 +64,8 @@ describe("plugin packaging", () => {
 	});
 
 	test("package includes required runtime dependencies", () => {
-		const pkg = readPackageJson();
+		const pkgPath = path.join(ROOT, "package.json");
+		const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
 		const deps = pkg.dependencies ?? {};
 
 		assert.ok("@opencode-ai/plugin" in deps, "missing @opencode-ai/plugin");
@@ -87,7 +78,8 @@ describe("plugin packaging", () => {
 	});
 
 	test("package is not marked private", () => {
-		const pkg = readPackageJson();
+		const pkgPath = path.join(ROOT, "package.json");
+		const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
 		assert.ok(
 			pkg.private !== true,
 			"package.json should not be private for npm publishing",
@@ -95,49 +87,53 @@ describe("plugin packaging", () => {
 	});
 
 	test("package declares Pi extension metadata", () => {
-		const pkg = readPackageJson();
+		const pkgPath = path.join(ROOT, "package.json");
+		const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
 
-		assert.ok(
-			pkg.keywords.includes("pi-package"),
-			"missing pi-package keyword",
-		);
-		assert.ok(
-			pkg.keywords.includes("pi-extension"),
-			"missing pi-extension keyword",
-		);
 		assert.deepEqual(pkg.pi?.extensions, ["./extensions/premind.ts"]);
 		assert.ok(
-			pkg.files.includes("extensions"),
+			pkg.files?.includes("extensions"),
 			"package files should include extensions",
 		);
 		assert.ok(
-			pkg.files.includes("PI_PLAN.md"),
+			pkg.files?.includes("PI_PLAN.md"),
 			"package files should include PI_PLAN.md",
+		);
+		assert.ok(
+			pkg.keywords?.includes("pi-package"),
+			"keywords should include pi-package",
+		);
+		assert.ok(
+			pkg.keywords?.includes("pi-extension"),
+			"keywords should include pi-extension",
 		);
 	});
 
 	test("Pi extension entry exists and exports a factory", async () => {
-		const pkg = readPackageJson();
-		const extensionPath = path.resolve(ROOT, pkg.pi.extensions[0]);
-
+		const entry = path.join(ROOT, "extensions", "premind.ts");
 		assert.ok(
-			fs.existsSync(extensionPath),
-			`Pi extension entry does not exist at ${extensionPath}`,
+			fs.existsSync(entry),
+			`Pi extension entry does not exist at ${entry}`,
 		);
 
-		const mod = await import(extensionPath);
-		assert.equal(
-			typeof mod.default,
-			"function",
-			"Pi extension default export should be a factory function",
-		);
+		const mod = await import("../../../extensions/premind.ts");
+		assert.equal(typeof mod.default, "function");
+		assert.equal(typeof mod.createPremindPiExtension, "function");
 	});
 
 	test("Pi peer dependencies are declared", () => {
-		const pkg = readPackageJson();
+		const pkgPath = path.join(ROOT, "package.json");
+		const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
 		const peers = pkg.peerDependencies ?? {};
 
-		assert.equal(peers["@earendil-works/pi-coding-agent"], "*");
-		assert.equal(peers.typebox, "*");
+		assert.ok(
+			"@earendil-works/pi-coding-agent" in peers,
+			"missing Pi extension API peer dependency",
+		);
+		assert.ok(
+			"@earendil-works/pi-tui" in peers,
+			"missing Pi TUI peer dependency",
+		);
+		assert.ok("typebox" in peers, "missing typebox peer dependency");
 	});
 });

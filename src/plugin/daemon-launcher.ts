@@ -57,10 +57,26 @@ export async function ensureDaemonRunning(socketPath = PREMIND_SOCKET_PATH) {
   let exitCode: number | null = null
   let exitSignal: string | null = null
 
+  // Spawn with an explicit cwd set to the daemon entry's directory.
+  // This avoids CWD-relative module resolution quirks when opencode's process
+  // is in a project that has tsx (or other loaders) in its local node_modules —
+  // those loaders would resolve the daemon entry relative to the wrong base.
+  const spawnCwd = path.dirname(DAEMON_ENTRY)
+  const spawnCommand = [runner.command, ...runner.args, DAEMON_ENTRY].join(" ")
+
+  // Write pre-spawn diagnostics immediately so they're visible even if the
+  // spawn hangs or crashes before we can capture the diagnostics below.
+  writePluginRuntimeState({
+    phase: "daemon-spawning",
+    daemonStarted: false,
+    daemonDiagnostics: { runner: runner.command, daemonEntry: DAEMON_ENTRY, spawnCwd, spawnCommand },
+  })
+
   const child = spawn(runner.command, [...runner.args, DAEMON_ENTRY], {
     detached: true,
     stdio: ["ignore", "pipe", "pipe"],
     env: { ...process.env },
+    cwd: spawnCwd,
   })
 
   child.stdout?.setEncoding("utf8")
@@ -85,6 +101,8 @@ export async function ensureDaemonRunning(socketPath = PREMIND_SOCKET_PATH) {
   const diag = {
     runner: runner.command,
     daemonEntry: DAEMON_ENTRY,
+    spawnCwd,
+    spawnCommand,
     spawnPid: child.pid,
     exitCode,
     exitSignal,
@@ -130,23 +148,25 @@ function findRunner(): Runner | undefined {
 }
 
 function findExecutable(name: string) {
-  // Walk up from the package directory looking for node_modules/.bin.
-  // This handles both direct installs (premind/node_modules/.bin/tsx)
-  // and hoisted installs (~/.cache/opencode/node_modules/.bin/tsx).
+  // Walk up from the package directory all the way to the filesystem root,
+  // looking for node_modules/.bin/<name>. Terminates when path.dirname()
+  // stops changing (i.e. we've reached "/"). This handles both direct installs
+  // and hoisted installs at any ancestor depth — including deeply-encoded
+  // git+https: cache paths that exceed a hardcoded depth limit.
+  //
+  // Deliberately does NOT check process.cwd()/node_modules. That fallback
+  // would pick up tsx from whatever project opencode happens to be open in,
+  // which may be unable to resolve the daemon entry in the opencode cache.
   let searchDir = path.resolve(THIS_DIR, "..", "..")
-  for (let i = 0; i < 5; i++) {
+  while (true) {
     const candidate = path.join(searchDir, "node_modules", ".bin", name)
     if (fs.existsSync(candidate)) return candidate
     const parent = path.dirname(searchDir)
-    if (parent === searchDir) break
+    if (parent === searchDir) break  // reached filesystem root
     searchDir = parent
   }
 
-  // Check project-local node_modules.
-  const localBin = path.resolve("node_modules", ".bin", name)
-  if (fs.existsSync(localBin)) return localBin
-
-  // Fall back to PATH.
+  // Fall back to PATH (global installs via asdf, nvm, homebrew, etc.).
   const pathDirs = (process.env.PATH ?? "").split(path.delimiter)
   for (const dir of pathDirs) {
     const candidate = path.join(dir, name)
@@ -157,10 +177,10 @@ function findExecutable(name: string) {
 }
 
 // Resolve tsx as a Node loader module path (for --import).
-// This finds tsx's dist/esm/index.js which can be used as an import specifier.
+// This finds tsx's dist/esm/index.cjs which can be used as an import specifier.
 function resolveTsxModule(): string | undefined {
   let searchDir = path.resolve(THIS_DIR, "..", "..")
-  for (let i = 0; i < 5; i++) {
+  while (true) {
     const candidate = path.join(searchDir, "node_modules", "tsx", "dist", "esm", "index.cjs")
     if (fs.existsSync(candidate)) return candidate
     const parent = path.dirname(searchDir)

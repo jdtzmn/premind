@@ -26,6 +26,81 @@ const baseSnapshot = (): PullRequestSnapshot => ({
 })
 
 describe("diffSnapshot", () => {
+  test("emits a low-priority initialized event for a clean PR", () => {
+    const next: PullRequestSnapshot = {
+      ...baseSnapshot(),
+      core: { ...baseSnapshot().core, isDraft: false, mergeStateStatus: "CLEAN", reviewDecision: null },
+    }
+
+    const events = diffSnapshot(null, next)
+    assert.equal(events.length, 1)
+    const init = events[0]
+    assert.equal(init.kind, "pr.snapshot.initialized")
+    assert.equal(init.priority, "low")
+    assert.equal(init.summary, "Started tracking 42: Improve reminders")
+    assert.equal(init.payload.mergeStateStatus, "CLEAN")
+    assert.deepEqual(init.payload.failingChecks, [])
+  })
+
+  test("surfaces existing merge conflicts on the initialized event", () => {
+    const next: PullRequestSnapshot = {
+      ...baseSnapshot(),
+      core: { ...baseSnapshot().core, isDraft: false, mergeStateStatus: "DIRTY" },
+    }
+
+    const events = diffSnapshot(null, next)
+    const init = events.find((event) => event.kind === "pr.snapshot.initialized")
+    assert.ok(init)
+    assert.equal(init.priority, "high")
+    assert.match(init.summary, /merge conflict/i)
+    assert.equal(init.payload.mergeStateStatus, "DIRTY")
+  })
+
+  test("surfaces existing failing checks on the initialized event", () => {
+    const next: PullRequestSnapshot = {
+      ...baseSnapshot(),
+      core: { ...baseSnapshot().core, isDraft: false },
+      checks: [
+        { name: "build", state: "fail", link: "https://ci.example/build" },
+        { name: "lint", state: "success" },
+      ],
+    }
+
+    const events = diffSnapshot(null, next)
+    const init = events.find((event) => event.kind === "pr.snapshot.initialized")
+    assert.ok(init)
+    assert.equal(init.priority, "high")
+    assert.match(init.summary, /build/)
+    assert.deepEqual(init.payload.failingChecks, ["build"])
+  })
+
+  test("surfaces an existing changes-requested decision on the initialized event", () => {
+    const next: PullRequestSnapshot = {
+      ...baseSnapshot(),
+      core: { ...baseSnapshot().core, isDraft: false, reviewDecision: "CHANGES_REQUESTED" },
+    }
+
+    const events = diffSnapshot(null, next)
+    const init = events.find((event) => event.kind === "pr.snapshot.initialized")
+    assert.ok(init)
+    assert.equal(init.priority, "high")
+    assert.match(init.summary, /changes requested/i)
+    assert.equal(init.payload.reviewDecision, "CHANGES_REQUESTED")
+  })
+
+  test("does not flag UNKNOWN merge state as a conflict on initialization", () => {
+    const next: PullRequestSnapshot = {
+      ...baseSnapshot(),
+      core: { ...baseSnapshot().core, isDraft: false, mergeStateStatus: "UNKNOWN" },
+    }
+
+    const events = diffSnapshot(null, next)
+    const init = events.find((event) => event.kind === "pr.snapshot.initialized")
+    assert.ok(init)
+    assert.equal(init.priority, "low")
+    assert.doesNotMatch(init.summary, /merge conflict/i)
+  })
+
   test("detects high-signal PR events", () => {
     const previous = baseSnapshot()
     const next: PullRequestSnapshot = {
