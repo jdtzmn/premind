@@ -284,12 +284,29 @@ describe("premind Pi extension", () => {
 				],
 			}),
 			[
-				"🔔 4 new PR changes",
+				"[premind] 4 PR updates",
 				"",
 				"- CI failed: npm run check",
 				"- alice commented on src/extension/index.ts",
 				"- branch synchronized",
-				"- 1 more change queued",
+				"- 1 more update queued",
+			].join("\n"),
+		);
+	});
+
+	test("renders reminder messages with themed notification colors", () => {
+		const theme = {
+			fg(color: string, text: string) {
+				return `<${color}>${text}</${color}>`;
+			},
+		};
+
+		assert.equal(
+			renderPremindReminderText(reminderBatch, theme as never),
+			[
+				"<warning>[premind]</warning> <accent>1 PR update</accent>",
+				"",
+				"<dim>- New PR comment</dim>",
 			].join("\n"),
 		);
 	});

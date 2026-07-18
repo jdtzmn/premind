@@ -1,6 +1,7 @@
 import {
 	CONFIG_DIR_NAME,
 	type ExtensionAPI,
+	type Theme,
 } from "@earendil-works/pi-coding-agent";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -172,23 +173,43 @@ export const renderPremindPiStatus = (status: DebugStatusResponse) => {
 	].join("\n");
 };
 
-export const renderPremindReminderText = (batch: ReminderBatch | undefined) => {
+type ReminderTheme = Pick<Theme, "fg">;
+type ThemeColor = Parameters<Theme["fg"]>[0];
+
+const themed = (
+	theme: ReminderTheme | undefined,
+	color: ThemeColor,
+	text: string,
+) => (theme ? theme.fg(color, text) : text);
+
+export const renderPremindReminderText = (
+	batch: ReminderBatch | undefined,
+	theme?: ReminderTheme,
+) => {
 	const events = batch?.events ?? [];
 	const count = events.length;
-	const title = `🔔 ${count} new PR change${count === 1 ? "" : "s"}`;
+	const title = `${themed(theme, "warning", "[premind]")} ${themed(
+		theme,
+		"accent",
+		`${count} PR update${count === 1 ? "" : "s"}`,
+	)}`;
 	const visibleEvents = [...events]
 		.sort(
 			(left, right) =>
 				priorityRank[left.priority] - priorityRank[right.priority],
 		)
 		.slice(0, REMINDER_VISIBLE_EVENT_LIMIT);
-	const bullets = visibleEvents.map(
-		(event) => `- ${event.summary.replace(/\s+/g, " ").trim()}`,
+	const bullets = visibleEvents.map((event) =>
+		themed(theme, "dim", `- ${event.summary.replace(/\s+/g, " ").trim()}`),
 	);
 	const remaining = count - visibleEvents.length;
 	if (remaining > 0)
 		bullets.push(
-			`- ${remaining} more change${remaining === 1 ? "" : "s"} queued`,
+			themed(
+				theme,
+				"dim",
+				`- ${remaining} more update${remaining === 1 ? "" : "s"} queued`,
+			),
 		);
 	return [title, ...(bullets.length > 0 ? ["", ...bullets] : [])].join("\n");
 };
@@ -379,7 +400,8 @@ export const createPremindPiExtension = (
 
 		pi.registerMessageRenderer<ReminderBatch>(
 			"premind-reminder",
-			(message) => new Text(renderPremindReminderText(message.details), 0, 0),
+			(message, _options, theme) =>
+				new Text(renderPremindReminderText(message.details, theme), 0, 0),
 		);
 
 		pi.on("session_start", async (_event, ctx) => {
