@@ -4,6 +4,7 @@ import { createPremindPiExtension } from "../index.ts";
 import type {
 	DebugStatusResponse,
 	RegisterSessionPayload,
+	ReminderBatch,
 } from "../../shared/schema.ts";
 
 const status: DebugStatusResponse = {
@@ -29,7 +30,23 @@ const status: DebugStatusResponse = {
 	],
 };
 
+const reminderBatch: ReminderBatch = {
+	batchId: "batch-1",
+	sessionId: "/tmp/session.jsonl",
+	reminderText: "<premind-reminder>new PR context</premind-reminder>",
+	events: [
+		{
+			eventId: "event-1",
+			kind: "issue_comment.created",
+			priority: "high",
+			summary: "New PR comment",
+		},
+	],
+};
+
 type CommandContext = {
+	cwd?: string;
+	sessionManager?: { getSessionFile: () => string | undefined };
 	ui: { notify: (message: string, level: string) => void };
 };
 
@@ -62,14 +79,21 @@ type EventContext = {
 
 type EventHandler = (event: unknown, ctx: EventContext) => Promise<void>;
 
+type SentMessage = {
+	message: unknown;
+	options: unknown;
+};
+
 const createMockPi = () => {
 	const commands = new Map<string, CommandDefinition>();
 	const tools = new Map<string, ToolDefinition>();
 	const events = new Map<string, EventHandler>();
+	const sentMessages: SentMessage[] = [];
 	return {
 		commands,
 		tools,
 		events,
+		sentMessages,
 		pi: {
 			on(name: string, handler: EventHandler) {
 				events.set(name, handler);
@@ -79,6 +103,9 @@ const createMockPi = () => {
 			},
 			registerTool(definition: ToolDefinition) {
 				tools.set(definition.name, definition);
+			},
+			sendMessage(message: unknown, options: unknown) {
+				sentMessages.push({ message, options });
 			},
 		},
 	};
@@ -103,8 +130,23 @@ const createEventContext = () => {
 	return { ctx, notifications, statuses };
 };
 
+const createCommandContext = (
+	notifications: Array<{ message: string; level: string }> = [],
+): CommandContext => ({
+	cwd: "/tmp/project",
+	sessionManager: { getSessionFile: () => "/tmp/session.jsonl" },
+	ui: {
+		notify(message: string, level: string) {
+			notifications.push({ message, level });
+		},
+	},
+});
+
 const createClient = (
-	options: { pruneResult?: { sessions: number; reminderBatches: number } } = {},
+	options: {
+		pruneResult?: { sessions: number; reminderBatches: number };
+		pendingBatch?: ReminderBatch | null;
+	} = {},
 ) => {
 	const operations: string[] = [];
 	const registeredSessions: Array<Omit<RegisterSessionPayload, "clientId">> =
@@ -136,6 +178,19 @@ const createClient = (
 			unregisterSession: async (sessionId: string) => {
 				operations.push(`unregisterSession:${sessionId}`);
 			},
+			getPendingReminder: async (sessionId: string) => {
+				operations.push(`getPendingReminder:${sessionId}`);
+				return { batch: options.pendingBatch ?? null };
+			},
+			ackReminder: async (payload: {
+				batchId: string;
+				sessionId: string;
+				state: string;
+			}) => {
+				operations.push(
+					`ackReminder:${payload.batchId}:${payload.sessionId}:${payload.state}`,
+				);
+			},
 			debugStatus: async () => status,
 			pruneClosedSessions: async () =>
 				options.pruneResult ?? { sessions: 0, reminderBatches: 0 },
@@ -155,6 +210,7 @@ describe("premind Pi extension", () => {
 		assert.ok(mock.events.has("session_shutdown"));
 		assert.ok(mock.commands.has("premind:status"));
 		assert.ok(mock.commands.has("premind:prune"));
+		assert.ok(mock.commands.has("premind:flush"));
 		assert.ok(mock.tools.has("premind_status"));
 	});
 
@@ -225,13 +281,7 @@ describe("premind Pi extension", () => {
 
 		const command = mock.commands.get("premind:status");
 		assert.ok(command);
-		await command.handler("", {
-			ui: {
-				notify(message: string, level: string) {
-					notifications.push({ message, level });
-				},
-			},
-		});
+		await command.handler("", createCommandContext(notifications));
 
 		assert.equal(notifications.length, 1);
 		assert.equal(notifications[0]?.level, "info");
@@ -254,19 +304,69 @@ describe("premind Pi extension", () => {
 
 		const command = mock.commands.get("premind:prune");
 		assert.ok(command);
-		await command.handler("", {
-			ui: {
-				notify(message: string, level: string) {
-					notifications.push({ message, level });
-				},
-			},
-		});
+		await command.handler("", createCommandContext(notifications));
 
 		assert.equal(notifications.length, 1);
 		assert.equal(notifications[0]?.level, "info");
 		assert.match(
 			notifications[0]?.message ?? "",
 			/premind pruned 401 closed sessions and 17 reminder batches\./,
+		);
+	});
+
+	test("/premind:flush reports when there is no pending reminder", async () => {
+		const mock = createMockPi();
+		const client = createClient();
+		const notifications: Array<{ message: string; level: string }> = [];
+		createPremindPiExtension({
+			createDaemonClient: () => client.client,
+		})(mock.pi as never);
+
+		const command = mock.commands.get("premind:flush");
+		assert.ok(command);
+		await command.handler("", createCommandContext(notifications));
+
+		assert.deepEqual(client.operations, [
+			"getPendingReminder:/tmp/session.jsonl",
+		]);
+		assert.deepEqual(mock.sentMessages, []);
+		assert.equal(
+			notifications[0]?.message,
+			"premind has no pending reminders for this session.",
+		);
+	});
+
+	test("/premind:flush sends a follow-up message and confirms the batch", async () => {
+		const mock = createMockPi();
+		const client = createClient({ pendingBatch: reminderBatch });
+		const notifications: Array<{ message: string; level: string }> = [];
+		createPremindPiExtension({
+			createDaemonClient: () => client.client,
+		})(mock.pi as never);
+
+		const command = mock.commands.get("premind:flush");
+		assert.ok(command);
+		await command.handler("", createCommandContext(notifications));
+
+		assert.deepEqual(client.operations, [
+			"getPendingReminder:/tmp/session.jsonl",
+			"ackReminder:batch-1:/tmp/session.jsonl:handed_off",
+			"ackReminder:batch-1:/tmp/session.jsonl:confirmed",
+		]);
+		assert.deepEqual(mock.sentMessages, [
+			{
+				message: {
+					customType: "premind-reminder",
+					content: reminderBatch.reminderText,
+					display: true,
+					details: reminderBatch,
+				},
+				options: { deliverAs: "followUp", triggerTurn: true },
+			},
+		]);
+		assert.equal(
+			notifications[0]?.message,
+			"premind delivered reminder batch batch-1.",
 		);
 	});
 

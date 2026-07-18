@@ -4,8 +4,10 @@ import { renderPremindStatus } from "../plugin/commands.ts";
 import { PremindDaemonClient } from "../plugin/daemon-client.ts";
 import { detectGitContext } from "../plugin/git-context.ts";
 import type {
+	AckReminderPayload,
 	DebugStatusResponse,
 	RegisterSessionPayload,
+	ReminderBatch,
 } from "../shared/schema.ts";
 
 type PruneClosedSessionsResult = {
@@ -28,6 +30,10 @@ type DaemonClientLike = {
 		payload: Omit<RegisterSessionPayload, "clientId">,
 	) => Promise<unknown>;
 	unregisterSession: (sessionId: string) => Promise<unknown>;
+	getPendingReminder: (
+		sessionId: string,
+	) => Promise<{ batch: ReminderBatch | null }>;
+	ackReminder: (payload: AckReminderPayload) => Promise<unknown>;
 	debugStatus: () => Promise<DebugStatusResponse>;
 	pruneClosedSessions: () => Promise<unknown>;
 };
@@ -44,6 +50,7 @@ export type PremindPiExtensionDependencies = {
 
 const STATUS_ERROR_PREFIX = "premind status failed";
 const PRUNE_ERROR_PREFIX = "premind prune failed";
+const FLUSH_ERROR_PREFIX = "premind flush failed";
 const SESSION_SOURCE = "pi-extension";
 const DEFAULT_HEARTBEAT_MS = 10_000;
 
@@ -72,6 +79,8 @@ export const createPremindPiExtension = (
 			heartbeatTimer = undefined;
 		};
 
+		const getClient = () => sessionClient ?? createDaemonClient();
+
 		const getStatusText = async () => {
 			const status = await createDaemonClient().debugStatus();
 			return renderPremindStatus(status);
@@ -91,6 +100,44 @@ export const createPremindPiExtension = (
 		) => {
 			if (!ctx.hasUI) return;
 			ctx.ui?.setStatus?.("premind", value);
+		};
+
+		const deliverPendingReminder = async (sessionId: string) => {
+			const client = getClient();
+			const { batch } = await client.getPendingReminder(sessionId);
+			if (!batch) return { delivered: false as const };
+
+			await client.ackReminder({
+				batchId: batch.batchId,
+				sessionId,
+				state: "handed_off",
+			});
+
+			try {
+				pi.sendMessage(
+					{
+						customType: "premind-reminder",
+						content: batch.reminderText,
+						display: true,
+						details: batch,
+					},
+					{ deliverAs: "followUp", triggerTurn: true },
+				);
+				await client.ackReminder({
+					batchId: batch.batchId,
+					sessionId,
+					state: "confirmed",
+				});
+				return { delivered: true as const, batch };
+			} catch (error) {
+				await client.ackReminder({
+					batchId: batch.batchId,
+					sessionId,
+					state: "failed",
+					error: error instanceof Error ? error.message : String(error),
+				});
+				throw error;
+			}
 		};
 
 		pi.on("session_start", async (_event, ctx) => {
@@ -169,6 +216,28 @@ export const createPremindPiExtension = (
 				} catch (error) {
 					ctx.ui.notify(
 						`${PRUNE_ERROR_PREFIX}: ${error instanceof Error ? error.message : String(error)}`,
+						"error",
+					);
+				}
+			},
+		});
+
+		pi.registerCommand("premind:flush", {
+			description:
+				"Deliver one pending premind reminder for the current session, if any",
+			handler: async (_args, ctx) => {
+				const sessionId = currentSessionId ?? getPiSessionId(ctx);
+				try {
+					const result = await deliverPendingReminder(sessionId);
+					ctx.ui.notify(
+						result.delivered
+							? `premind delivered reminder batch ${result.batch.batchId}.`
+							: "premind has no pending reminders for this session.",
+						"info",
+					);
+				} catch (error) {
+					ctx.ui.notify(
+						`${FLUSH_ERROR_PREFIX}: ${error instanceof Error ? error.message : String(error)}`,
 						"error",
 					);
 				}
