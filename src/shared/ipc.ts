@@ -32,6 +32,7 @@ export const requestSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("getPendingReminder"), protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION), payload: getPendingReminderPayloadSchema }),
   z.object({ type: z.literal("ackReminder"), protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION), payload: ackReminderPayloadSchema }),
   z.object({ type: z.literal("debugStatus"), protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION), payload: debugStatusPayloadSchema }),
+  z.object({ type: z.literal("pruneClosedSessions"), protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION), payload: debugStatusPayloadSchema }),
 ])
 
 export const successResponseSchema = z.object({

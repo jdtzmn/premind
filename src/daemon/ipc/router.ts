@@ -58,6 +58,8 @@ export class Router {
             sessions: this.store.listSessionSummaries(),
           }),
         )
+      case "pruneClosedSessions":
+        return this.ok(this.store.pruneClosedSessions())
     }
   }
 

@@ -125,6 +125,14 @@ export class PremindDaemonClient {
     return debugStatusResponseSchema.parse(response)
   }
 
+  async pruneClosedSessions() {
+    return await this.requestWithRetry({
+      type: "pruneClosedSessions",
+      protocolVersion: PREMIND_PROTOCOL_VERSION,
+      payload: {},
+    })
+  }
+
   private async requestWithRetry(message: unknown, attempt = 0): Promise<unknown> {
     try {
       return await this.request(message)
