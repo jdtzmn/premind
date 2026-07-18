@@ -211,7 +211,7 @@ export const renderPremindReminderText = (
 				`- ${remaining} more update${remaining === 1 ? "" : "s"} queued`,
 			),
 		);
-	return [title, ...(bullets.length > 0 ? ["", ...bullets] : [])].join("\n");
+	return [title, ...bullets].join("\n");
 };
 
 const formatStatusbar = (

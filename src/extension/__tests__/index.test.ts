@@ -285,7 +285,6 @@ describe("premind Pi extension", () => {
 			}),
 			[
 				"[premind] 4 PR updates",
-				"",
 				"- CI failed: npm run check",
 				"- alice commented on src/extension/index.ts",
 				"- branch synchronized",
@@ -305,7 +304,6 @@ describe("premind Pi extension", () => {
 			renderPremindReminderText(reminderBatch, theme as never),
 			[
 				"<warning>[premind]</warning> <accent>1 PR update</accent>",
-				"",
 				"<dim>- New PR comment</dim>",
 			].join("\n"),
 		);
