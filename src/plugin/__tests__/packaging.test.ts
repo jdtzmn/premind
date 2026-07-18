@@ -7,10 +7,18 @@ import { fileURLToPath } from "node:url"
 const THIS_DIR = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.resolve(THIS_DIR, "..", "..", "..")
 
+const readPackageJson = () => {
+  const pkgPath = path.join(ROOT, "package.json")
+  try {
+    return JSON.parse(fs.readFileSync(pkgPath, "utf8"))
+  } catch (error) {
+    assert.fail(`failed to read package.json: ${error instanceof Error ? error.message : String(error)}`)
+  }
+}
+
 describe("plugin packaging", () => {
   test("package.json exports point at existing entry file", () => {
-    const pkgPath = path.join(ROOT, "package.json")
-    const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"))
+    const pkg = readPackageJson()
 
     const mainEntry = path.resolve(ROOT, pkg.main)
     assert.ok(fs.existsSync(mainEntry), `main entry ${pkg.main} does not exist at ${mainEntry}`)
@@ -35,8 +43,7 @@ describe("plugin packaging", () => {
   })
 
   test("package includes required runtime dependencies", () => {
-    const pkgPath = path.join(ROOT, "package.json")
-    const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"))
+    const pkg = readPackageJson()
     const deps = pkg.dependencies ?? {}
 
     assert.ok("@opencode-ai/plugin" in deps, "missing @opencode-ai/plugin")
@@ -46,8 +53,35 @@ describe("plugin packaging", () => {
   })
 
   test("package is not marked private", () => {
-    const pkgPath = path.join(ROOT, "package.json")
-    const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"))
+    const pkg = readPackageJson()
     assert.ok(pkg.private !== true, "package.json should not be private for npm publishing")
+  })
+
+  test("package declares Pi extension metadata", () => {
+    const pkg = readPackageJson()
+
+    assert.ok(pkg.keywords.includes("pi-package"), "missing pi-package keyword")
+    assert.ok(pkg.keywords.includes("pi-extension"), "missing pi-extension keyword")
+    assert.deepEqual(pkg.pi?.extensions, ["./extensions/premind.ts"])
+    assert.ok(pkg.files.includes("extensions"), "package files should include extensions")
+    assert.ok(pkg.files.includes("PI_PLAN.md"), "package files should include PI_PLAN.md")
+  })
+
+  test("Pi extension entry exists and exports a factory", async () => {
+    const pkg = readPackageJson()
+    const extensionPath = path.resolve(ROOT, pkg.pi.extensions[0])
+
+    assert.ok(fs.existsSync(extensionPath), `Pi extension entry does not exist at ${extensionPath}`)
+
+    const mod = await import(extensionPath)
+    assert.equal(typeof mod.default, "function", "Pi extension default export should be a factory function")
+  })
+
+  test("Pi peer dependencies are declared", () => {
+    const pkg = readPackageJson()
+    const peers = pkg.peerDependencies ?? {}
+
+    assert.equal(peers["@earendil-works/pi-coding-agent"], "*")
+    assert.equal(peers.typebox, "*")
   })
 })
