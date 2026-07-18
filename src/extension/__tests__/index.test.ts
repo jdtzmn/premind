@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { createPremindPiExtension } from "../index.ts";
+import {
+	createPremindPiExtension,
+	renderPremindReminderText,
+} from "../index.ts";
 import type {
 	DebugStatusResponse,
 	RegisterSessionPayload,
@@ -85,11 +88,16 @@ type SentMessage = {
 };
 
 const createMockPi = () => {
+	const renderers = new Map<
+		string,
+		(message: { details?: ReminderBatch }) => unknown
+	>();
 	const commands = new Map<string, CommandDefinition>();
 	const tools = new Map<string, ToolDefinition>();
 	const events = new Map<string, EventHandler>();
 	const sentMessages: SentMessage[] = [];
 	return {
+		renderers,
 		commands,
 		tools,
 		events,
@@ -97,6 +105,12 @@ const createMockPi = () => {
 		pi: {
 			on(name: string, handler: EventHandler) {
 				events.set(name, handler);
+			},
+			registerMessageRenderer(
+				name: string,
+				renderer: (message: { details?: ReminderBatch }) => unknown,
+			) {
+				renderers.set(name, renderer);
 			},
 			registerCommand(name: string, definition: CommandDefinition) {
 				commands.set(name, definition);
@@ -218,10 +232,53 @@ describe("premind Pi extension", () => {
 		assert.ok(mock.events.has("session_shutdown"));
 		assert.ok(mock.events.has("agent_start"));
 		assert.ok(mock.events.has("agent_end"));
+		assert.ok(mock.renderers.has("premind-reminder"));
 		assert.ok(mock.commands.has("premind:status"));
 		assert.ok(mock.commands.has("premind:prune"));
 		assert.ok(mock.commands.has("premind:flush"));
 		assert.ok(mock.tools.has("premind_status"));
+	});
+
+	test("renders reminder messages as concise PR change bullets", () => {
+		assert.equal(
+			renderPremindReminderText({
+				...reminderBatch,
+				events: [
+					{
+						eventId: "low",
+						kind: "label.added",
+						priority: "low",
+						summary: "labels changed",
+					},
+					{
+						eventId: "high",
+						kind: "check.failed",
+						priority: "high",
+						summary: "CI failed: npm run check",
+					},
+					{
+						eventId: "medium",
+						kind: "pr.synchronized",
+						priority: "medium",
+						summary: "branch synchronized",
+					},
+					{
+						eventId: "high-2",
+						kind: "review_comment.created",
+						priority: "high",
+						summary: "alice commented on src/extension/index.ts",
+					},
+				],
+			}),
+			[
+				"🔔 4 new PR changes",
+				"",
+				"- CI failed: npm run check",
+				"- alice commented on src/extension/index.ts",
+				"- branch synchronized",
+				"- 1 more change queued",
+			].join("\n"),
+		);
 	});
 
 	test("session_start registers the Pi session with repo and branch", async () => {

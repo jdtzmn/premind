@@ -1,4 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { renderPremindStatus } from "../plugin/commands.ts";
 import { PremindDaemonClient } from "../plugin/daemon-client.ts";
@@ -57,9 +58,40 @@ const PRUNE_ERROR_PREFIX = "premind prune failed";
 const FLUSH_ERROR_PREFIX = "premind flush failed";
 const SESSION_SOURCE = "pi-extension";
 const DEFAULT_HEARTBEAT_MS = 10_000;
+const REMINDER_VISIBLE_EVENT_LIMIT = 3;
+
+const priorityRank: Record<
+	ReminderBatch["events"][number]["priority"],
+	number
+> = {
+	high: 0,
+	medium: 1,
+	low: 2,
+};
 
 const formatPruneResult = (result: PruneClosedSessionsResult) =>
 	`premind pruned ${result.sessions} closed session${result.sessions === 1 ? "" : "s"} and ${result.reminderBatches} reminder batch${result.reminderBatches === 1 ? "" : "es"}.`;
+
+export const renderPremindReminderText = (batch: ReminderBatch | undefined) => {
+	const events = batch?.events ?? [];
+	const count = events.length;
+	const title = `🔔 ${count} new PR change${count === 1 ? "" : "s"}`;
+	const visibleEvents = [...events]
+		.sort(
+			(left, right) =>
+				priorityRank[left.priority] - priorityRank[right.priority],
+		)
+		.slice(0, REMINDER_VISIBLE_EVENT_LIMIT);
+	const bullets = visibleEvents.map(
+		(event) => `- ${event.summary.replace(/\s+/g, " ").trim()}`,
+	);
+	const remaining = count - visibleEvents.length;
+	if (remaining > 0)
+		bullets.push(
+			`- ${remaining} more change${remaining === 1 ? "" : "s"} queued`,
+		);
+	return [title, ...(bullets.length > 0 ? ["", ...bullets] : [])].join("\n");
+};
 
 const getPiSessionId = (ctx: {
 	cwd: string;
@@ -151,6 +183,11 @@ export const createPremindPiExtension = (
 				busyState,
 			});
 		};
+
+		pi.registerMessageRenderer<ReminderBatch>(
+			"premind-reminder",
+			(message) => new Text(renderPremindReminderText(message.details), 0, 0),
+		);
 
 		pi.on("session_start", async (_event, ctx) => {
 			clearHeartbeat();
