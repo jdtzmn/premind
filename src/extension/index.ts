@@ -242,6 +242,7 @@ export const createPremindPiExtension = (
 		let statusPollTimer: NodeJS.Timeout | undefined;
 		let statusPollInFlight = false;
 		let deliveryInFlight = false;
+		let sessionGeneration = 0;
 		let config = normalizePremindPiConfig(dependencies.config);
 		let currentSessionId: string | undefined;
 
@@ -286,16 +287,21 @@ export const createPremindPiExtension = (
 			ctx.ui?.setStatus?.("premind", config.showStatusbar ? value : undefined);
 		};
 
-		const refreshStatusbar = async (ctx: {
-			hasUI?: boolean;
-			ui?: { setStatus?: (key: string, value?: string) => void };
-		}) => {
+		const refreshStatusbar = async (
+			ctx: {
+				hasUI?: boolean;
+				ui?: { setStatus?: (key: string, value?: string) => void };
+			},
+			generation?: number,
+		) => {
+			if (generation !== undefined && generation !== sessionGeneration) return;
 			if (!config.enabled) {
 				setStatus(ctx, `${PR_ICON} disabled`);
 				return;
 			}
 			if (!currentSessionId) return;
 			const status = await getClient().debugStatus();
+			if (generation !== undefined && generation !== sessionGeneration) return;
 			setStatus(
 				ctx,
 				formatStatusbar(
@@ -309,28 +315,44 @@ export const createPremindPiExtension = (
 		const deliverPendingReminder = async (
 			sessionId: string,
 			options: { force?: boolean } = {},
+			generation?: number,
 		) => {
 			if (
 				!config.enabled ||
 				(!options.force && !config.autoDeliver) ||
-				deliveryInFlight
+				deliveryInFlight ||
+				(generation !== undefined && generation !== sessionGeneration)
 			)
 				return { delivered: false as const };
 			deliveryInFlight = true;
 			const client = getClient();
-			const { batch } = await client.getPendingReminder(sessionId);
-			if (!batch) {
-				deliveryInFlight = false;
-				return { delivered: false as const };
-			}
-
-			await client.ackReminder({
-				batchId: batch.batchId,
-				sessionId,
-				state: "handed_off",
-			});
-
+			let batch: ReminderBatch | null = null;
+			let handedOff = false;
 			try {
+				const pending = await client.getPendingReminder(sessionId);
+				if (generation !== undefined && generation !== sessionGeneration)
+					return { delivered: false as const };
+				batch = pending.batch;
+				if (!batch) return { delivered: false as const };
+
+				await client.ackReminder({
+					batchId: batch.batchId,
+					sessionId,
+					state: "handed_off",
+				});
+				handedOff = true;
+
+				if (generation !== undefined && generation !== sessionGeneration) {
+					await client.ackReminder({
+						batchId: batch.batchId,
+						sessionId,
+						state: "failed",
+						error: "Pi session ended before reminder delivery",
+					});
+					handedOff = false;
+					return { delivered: false as const };
+				}
+
 				pi.sendMessage(
 					{
 						customType: "premind-reminder",
@@ -345,17 +367,24 @@ export const createPremindPiExtension = (
 					sessionId,
 					state: "confirmed",
 				});
-				deliveryInFlight = false;
+				handedOff = false;
 				return { delivered: true as const, batch };
 			} catch (error) {
-				await client.ackReminder({
-					batchId: batch.batchId,
-					sessionId,
-					state: "failed",
-					error: error instanceof Error ? error.message : String(error),
-				});
-				deliveryInFlight = false;
+				if (batch && handedOff) {
+					try {
+						await client.ackReminder({
+							batchId: batch.batchId,
+							sessionId,
+							state: "failed",
+							error: error instanceof Error ? error.message : String(error),
+						});
+					} catch {
+						// Preserve the original delivery failure.
+					}
+				}
 				throw error;
+			} finally {
+				deliveryInFlight = false;
 			}
 		};
 
@@ -367,33 +396,46 @@ export const createPremindPiExtension = (
 			});
 		};
 
-		const pollStatus = async (ctx: {
-			hasUI?: boolean;
-			ui?: { setStatus?: (key: string, value?: string) => void };
-		}) => {
-			if (statusPollInFlight) return;
+		const pollStatus = async (
+			ctx: {
+				hasUI?: boolean;
+				ui?: { setStatus?: (key: string, value?: string) => void };
+			},
+			generation: number,
+		) => {
+			if (generation !== sessionGeneration || statusPollInFlight) return;
 			statusPollInFlight = true;
 			try {
-				await refreshStatusbar(ctx);
+				await refreshStatusbar(ctx, generation);
+				if (generation !== sessionGeneration) return;
 				if (currentSessionId) {
-					const result = await deliverPendingReminder(currentSessionId);
+					const result = await deliverPendingReminder(
+						currentSessionId,
+						{},
+						generation,
+					);
+					if (generation !== sessionGeneration) return;
 					if (result.delivered) setStatus(ctx, undefined);
 				}
 			} catch {
-				setStatus(ctx, `${PR_ICON} error`);
+				if (generation === sessionGeneration)
+					setStatus(ctx, `${PR_ICON} error`);
 			} finally {
 				statusPollInFlight = false;
 			}
 		};
 
-		const startStatusPoll = (ctx: {
-			hasUI?: boolean;
-			ui?: { setStatus?: (key: string, value?: string) => void };
-		}) => {
+		const startStatusPoll = (
+			ctx: {
+				hasUI?: boolean;
+				ui?: { setStatus?: (key: string, value?: string) => void };
+			},
+			generation: number,
+		) => {
 			clearStatusPoll();
 			if (!config.enabled || config.statusPollIntervalMs <= 0) return;
 			statusPollTimer = setInterval(() => {
-				void pollStatus(ctx);
+				void pollStatus(ctx, generation);
 			}, config.statusPollIntervalMs);
 			statusPollTimer.unref?.();
 		};
@@ -405,6 +447,7 @@ export const createPremindPiExtension = (
 		);
 
 		pi.on("session_start", async (_event, ctx) => {
+			const generation = ++sessionGeneration;
 			clearHeartbeat();
 			clearStatusPoll();
 			config = normalizePremindPiConfig({
@@ -436,9 +479,11 @@ export const createPremindPiExtension = (
 					status: "active",
 					busyState: "idle",
 				});
-				await refreshStatusbar(ctx);
-				startStatusPoll(ctx);
+				await refreshStatusbar(ctx, generation);
+				if (generation !== sessionGeneration) return;
+				startStatusPoll(ctx, generation);
 			} catch (error) {
+				if (generation !== sessionGeneration) return;
 				setStatus(ctx, `${PR_ICON} error`);
 				if (ctx.hasUI) {
 					ctx.ui.notify(
@@ -477,6 +522,7 @@ export const createPremindPiExtension = (
 		});
 
 		pi.on("session_shutdown", async (_event, ctx) => {
+			sessionGeneration++;
 			clearHeartbeat();
 			clearStatusPoll();
 			const client = sessionClient;

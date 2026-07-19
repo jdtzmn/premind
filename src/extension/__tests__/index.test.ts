@@ -422,6 +422,63 @@ describe("premind Pi extension", () => {
 		assert.deepEqual(statuses.at(-1), { key: "premind", value: undefined });
 	});
 
+	test(
+		"in-flight status polling ignores a context after session shutdown",
+		async (t) => {
+			t.mock.timers.enable({ apis: ["setInterval"] });
+			const mock = createMockPi();
+			const client = createClient();
+			const { ctx, statuses } = createEventContext();
+			let statusCalls = 0;
+			let markPollStarted!: () => void;
+			let resolvePoll!: (value: DebugStatusResponse) => void;
+			const pollStarted = new Promise<void>((resolve) => {
+				markPollStarted = resolve;
+			});
+			const pollResult = new Promise<DebugStatusResponse>((resolve) => {
+				resolvePoll = resolve;
+			});
+			client.client.debugStatus = async () => {
+				statusCalls++;
+				if (statusCalls === 1) return status;
+				markPollStarted();
+				return pollResult;
+			};
+
+			let contextIsStale = false;
+			let staleContextReads = 0;
+			Object.defineProperty(ctx, "hasUI", {
+				get() {
+					if (contextIsStale) staleContextReads++;
+					return true;
+				},
+			});
+			createPremindPiExtension({
+				createDaemonClient: () => client.client,
+				config: { statusPollIntervalMs: 5_000 },
+				detectGit: async () => ({ repo: "owner/repo", branch: "feature/pi" }),
+			})(mock.pi as never);
+
+			const start = mock.events.get("session_start");
+			const shutdown = mock.events.get("session_shutdown");
+			assert.ok(start);
+			assert.ok(shutdown);
+			await start({}, ctx);
+			t.mock.timers.tick(5_000);
+			await pollStarted;
+			await shutdown({}, ctx);
+			contextIsStale = true;
+			resolvePoll(status);
+			await new Promise<void>((resolve) => setImmediate(resolve));
+
+			assert.equal(staleContextReads, 0);
+			assert.deepEqual(statuses.at(-1), {
+				key: "premind",
+				value: undefined,
+			});
+		},
+	);
+
 	test("agent lifecycle updates busy state and auto-delivers pending reminders on idle", async () => {
 		const mock = createMockPi();
 		const client = createClient({ pendingBatch: reminderBatch });
