@@ -79,6 +79,11 @@ const DEFAULT_STATUS_POLL_INTERVAL_MS = 15_000;
 const MIN_STATUS_POLL_INTERVAL_MS = 5_000;
 const REMINDER_VISIBLE_EVENT_LIMIT = 3;
 const PR_ICON = ""; // nf-oct-git_pull_request
+const STALE_EXTENSION_CONTEXT_PREFIX = "This extension ctx is stale";
+
+const isStaleExtensionContextError = (error: unknown): boolean =>
+	error instanceof Error &&
+	error.message.startsWith(STALE_EXTENSION_CONTEXT_PREFIX);
 
 const priorityRank: Record<
 	ReminderBatch["events"][number]["priority"],
@@ -283,8 +288,36 @@ export const createPremindPiExtension = (
 			},
 			value?: string,
 		) => {
-			if (!ctx.hasUI) return;
-			ctx.ui?.setStatus?.("premind", config.showStatusbar ? value : undefined);
+			try {
+				if (!ctx.hasUI) return;
+				ctx.ui?.setStatus?.(
+					"premind",
+					config.showStatusbar ? value : undefined,
+				);
+			} catch (error) {
+				if (!isStaleExtensionContextError(error)) throw error;
+			}
+		};
+
+		const notify = (
+			ctx: {
+				hasUI?: boolean;
+				ui?: {
+					notify?: (
+						message: string,
+						level: "info" | "warning" | "error",
+					) => void;
+				};
+			},
+			message: string,
+			level: "info" | "warning" | "error",
+		) => {
+			try {
+				if (ctx.hasUI === false) return;
+				ctx.ui?.notify?.(message, level);
+			} catch (error) {
+				if (!isStaleExtensionContextError(error)) throw error;
+			}
 		};
 
 		const refreshStatusbar = async (
@@ -417,8 +450,11 @@ export const createPremindPiExtension = (
 					if (generation !== sessionGeneration) return;
 					if (result.delivered) setStatus(ctx, undefined);
 				}
-			} catch {
-				if (generation === sessionGeneration)
+			} catch (error) {
+				if (
+					generation === sessionGeneration &&
+					!isStaleExtensionContextError(error)
+				)
 					setStatus(ctx, `${PR_ICON} error`);
 			} finally {
 				statusPollInFlight = false;
@@ -485,12 +521,11 @@ export const createPremindPiExtension = (
 			} catch (error) {
 				if (generation !== sessionGeneration) return;
 				setStatus(ctx, `${PR_ICON} error`);
-				if (ctx.hasUI) {
-					ctx.ui.notify(
-						`premind session registration failed: ${error instanceof Error ? error.message : String(error)}`,
-						"error",
-					);
-				}
+				notify(
+					ctx,
+					`premind session registration failed: ${error instanceof Error ? error.message : String(error)}`,
+					"error",
+				);
 			}
 		});
 
@@ -512,12 +547,11 @@ export const createPremindPiExtension = (
 				}
 			} catch (error) {
 				setStatus(ctx, `${PR_ICON} error`);
-				if (ctx.hasUI) {
-					ctx.ui.notify(
-						`premind automatic delivery failed: ${error instanceof Error ? error.message : String(error)}`,
-						"error",
-					);
-				}
+				notify(
+					ctx,
+					`premind automatic delivery failed: ${error instanceof Error ? error.message : String(error)}`,
+					"error",
+				);
 			}
 		});
 
