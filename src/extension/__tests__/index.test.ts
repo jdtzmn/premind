@@ -423,7 +423,7 @@ describe("premind Pi extension", () => {
 	});
 
 	test(
-		"in-flight status polling ignores a context after session shutdown",
+		"in-flight status polling tolerates a context invalidated before shutdown",
 		async (t) => {
 			t.mock.timers.enable({ apis: ["setInterval"] });
 			const mock = createMockPi();
@@ -446,10 +446,13 @@ describe("premind Pi extension", () => {
 			};
 
 			let contextIsStale = false;
-			let staleContextReads = 0;
 			Object.defineProperty(ctx, "hasUI", {
 				get() {
-					if (contextIsStale) staleContextReads++;
+					if (contextIsStale) {
+						throw new Error(
+							"This extension ctx is stale after session replacement or reload.",
+						);
+					}
 					return true;
 				},
 			});
@@ -466,18 +469,49 @@ describe("premind Pi extension", () => {
 			await start({}, ctx);
 			t.mock.timers.tick(5_000);
 			await pollStarted;
-			await shutdown({}, ctx);
+			const statusCountBeforeInvalidation = statuses.length;
 			contextIsStale = true;
 			resolvePoll(status);
 			await new Promise<void>((resolve) => setImmediate(resolve));
 
-			assert.equal(staleContextReads, 0);
-			assert.deepEqual(statuses.at(-1), {
-				key: "premind",
-				value: undefined,
-			});
+			assert.equal(statuses.length, statusCountBeforeInvalidation);
+			await shutdown({}, ctx);
 		},
 	);
+
+	test("status polling treats a stale extension API as cancellation", async (t) => {
+		t.mock.timers.enable({ apis: ["setInterval"] });
+		const mock = createMockPi();
+		const client = createClient({ pendingBatch: reminderBatch });
+		const { ctx, statuses } = createEventContext();
+		mock.pi.sendMessage = () => {
+			throw new Error(
+				"This extension ctx is stale after session replacement or reload.",
+			);
+		};
+		createPremindPiExtension({
+			createDaemonClient: () => client.client,
+			config: { statusPollIntervalMs: 5_000 },
+			detectGit: async () => ({ repo: "owner/repo", branch: "feature/pi" }),
+		})(mock.pi as never);
+
+		const start = mock.events.get("session_start");
+		const shutdown = mock.events.get("session_shutdown");
+		assert.ok(start);
+		assert.ok(shutdown);
+		await start({}, ctx);
+		statuses.length = 0;
+		t.mock.timers.tick(5_000);
+		await new Promise<void>((resolve) => setImmediate(resolve));
+
+		assert.deepEqual(statuses, [{ key: "premind", value: undefined }]);
+		assert.ok(
+			client.operations.includes(
+				"ackReminder:batch-1:/tmp/session.jsonl:failed",
+			),
+		);
+		await shutdown({}, ctx);
+	});
 
 	test("agent lifecycle updates busy state and auto-delivers pending reminders on idle", async () => {
 		const mock = createMockPi();
