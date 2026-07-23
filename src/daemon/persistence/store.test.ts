@@ -80,6 +80,10 @@ describe("StateStore", () => {
     const batch = store.buildReminderBatch("session-1")
     assert.ok(batch)
     assert.equal(batch.events.length, 2)
+    assert.match(
+      batch.reminderText,
+      /Action required: investigate and address the failing checks or merge conflicts above/,
+    )
 
     const pending = store.getPendingReminder("session-1")
     assert.equal(pending?.batchId, batch.batchId)
@@ -122,6 +126,7 @@ describe("StateStore", () => {
 
     const batch = store.buildReminderBatch("session-2")
     assert.ok(batch)
+    assert.doesNotMatch(batch.reminderText, /Action required:/)
 
     store.ackReminder({
       batchId: batch!.batchId,

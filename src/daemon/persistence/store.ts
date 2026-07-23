@@ -916,21 +916,30 @@ export class StateStore {
 			if (priorityDelta !== 0) return priorityDelta;
 			return Number(left.eventId) - Number(right.eventId);
 		});
-
+		const hasActionableBlocker = condensed.some((event) =>
+			["check.failed", "merge_conflict.detected"].includes(event.kind),
+		);
 		const reminderText = [
 			"<system-reminder>",
 			"New pull request context was detected since the last reminder.",
 			"",
 			"Changes:",
 			...condensed.map(
+
 				(event, index) =>
 					`${index + 1}. ${event.kind} - ${event.summary}${event.referenceLink ? ` (${event.referenceLink})` : ""}`,
 			),
+			...(hasActionableBlocker
+
+				? [
+						"",
+						"Action required: investigate and address the failing checks or merge conflicts above before continuing the current task. If you cannot resolve them, explain why.",
+					]
+				: []),
 			"",
 			"Please incorporate only the new information above into your reasoning and continue the current task.",
 			"</system-reminder>",
 		].join("\n");
-
 		const batchId = this.createOrReplaceReminder(
 			sessionId,
 			reminderText,
