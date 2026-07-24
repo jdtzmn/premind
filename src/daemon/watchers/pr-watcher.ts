@@ -1,4 +1,4 @@
-import { diffSnapshot } from "../github/diff.ts"
+import { diffSnapshot, stableMergeStateStatus } from "../github/diff.ts"
 import type { GitHubClientLike } from "../github/client.ts"
 import { createLogger } from "../logging/logger.ts"
 import { StateStore } from "../persistence/store.ts"
@@ -58,7 +58,17 @@ export class PullRequestWatcher {
           continue
         }
 
-        const next = result.snapshot
+        const stableMergeState = stableMergeStateStatus(result.snapshot.core.mergeStateStatus)
+        const next = {
+          ...result.snapshot,
+          core: {
+            ...result.snapshot.core,
+            lastStableMergeStateStatus:
+              stableMergeState ??
+              previous?.core.lastStableMergeStateStatus ??
+              stableMergeStateStatus(previous?.core.mergeStateStatus),
+          },
+        }
         const events = diffSnapshot(previous, next)
 
         this.store.saveSnapshot(target.repo, target.pr_number, next)

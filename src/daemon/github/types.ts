@@ -8,6 +8,8 @@ export type PullRequestCore = {
   baseRefName: string
   headRefOid: string
   mergeStateStatus?: string
+  /** Most recent non-transient merge state, retained across GitHub UNKNOWN responses. */
+  lastStableMergeStateStatus?: string
   reviewDecision?: string | null
   updatedAt?: string
   reviewRequests?: Array<{ login: string }>

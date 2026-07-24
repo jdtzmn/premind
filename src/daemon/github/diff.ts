@@ -1,5 +1,9 @@
 import type { NormalizedPrEvent, PullRequestCheck, PullRequestSnapshot } from "./types.ts"
 
+export const stableMergeStateStatus = (state?: string) => {
+  const normalized = (state ?? "").toUpperCase()
+  return normalized && normalized !== "UNKNOWN" ? normalized : undefined
+}
 const compact = (value: string | null | undefined, max = 160) => {
   const text = (value ?? "").replace(/\s+/g, " ").trim()
   if (!text) return ""
@@ -142,15 +146,15 @@ export function diffSnapshot(previous: PullRequestSnapshot | null, next: PullReq
     })
   }
 
-  if (previous.core.mergeStateStatus !== next.core.mergeStateStatus) {
-    const previousState = (previous.core.mergeStateStatus ?? "").toUpperCase()
-    const nextState = (next.core.mergeStateStatus ?? "").toUpperCase()
-
-    // Debounce: do not emit merge events when either side is UNKNOWN or empty.
-    // GitHub transiently reports UNKNOWN while computing mergeability.
-    const isStable = previousState !== "UNKNOWN" && previousState !== "" && nextState !== "UNKNOWN" && nextState !== ""
-
-    if (isStable && nextState === "DIRTY") {
+  const previousStableMergeState =
+    previous.core.lastStableMergeStateStatus ?? stableMergeStateStatus(previous.core.mergeStateStatus)
+  const nextStableMergeState = stableMergeStateStatus(next.core.mergeStateStatus)
+  if (
+    previousStableMergeState !== undefined &&
+    nextStableMergeState !== undefined &&
+    previousStableMergeState !== nextStableMergeState
+  ) {
+    if (nextStableMergeState === "DIRTY") {
       events.push({
         dedupeKey: `merge_conflict.detected:${next.core.number}:${next.core.headRefOid}`,
         kind: "merge_conflict.detected",
@@ -160,7 +164,7 @@ export function diffSnapshot(previous: PullRequestSnapshot | null, next: PullReq
         payload: { mergeStateStatus: next.core.mergeStateStatus ?? null },
       })
     }
-    if (isStable && nextState === "CLEAN") {
+    if (nextStableMergeState === "CLEAN") {
       events.push({
         dedupeKey: `merge_conflict.cleared:${next.core.number}:${next.core.headRefOid}`,
         kind: "merge_conflict.cleared",

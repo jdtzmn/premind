@@ -328,54 +328,36 @@ describe("diffSnapshot", () => {
     assert.equal(decisionEvent.payload.reviewDecision, "CHANGES_REQUESTED")
   })
 
-  test("debounces merge conflict events when state is UNKNOWN", () => {
+  test("suppresses UNKNOWN merge states while retaining the last stable baseline", () => {
+    const clean = { ...baseSnapshot().core, isDraft: false, mergeStateStatus: "CLEAN" }
+    const unknown = { ...clean, mergeStateStatus: "UNKNOWN", lastStableMergeStateStatus: "CLEAN" }
+
     // Transition from CLEAN to UNKNOWN should not emit.
-    const previous1: PullRequestSnapshot = {
-      ...baseSnapshot(),
-      core: { ...baseSnapshot().core, isDraft: false, mergeStateStatus: "CLEAN" },
-    }
-    const next1: PullRequestSnapshot = {
-      ...previous1,
-      core: { ...previous1.core, mergeStateStatus: "UNKNOWN" },
-    }
-    const events1 = diffSnapshot(previous1, next1)
-    assert.ok(!events1.some((e) => e.kind === "merge_conflict.detected"))
-    assert.ok(!events1.some((e) => e.kind === "merge_conflict.cleared"))
+    const events1 = diffSnapshot(
+      { ...baseSnapshot(), core: clean },
+      { ...baseSnapshot(), core: unknown },
+    )
+    assert.ok(!events1.some((event) => event.kind === "merge_conflict.detected"))
+    assert.ok(!events1.some((event) => event.kind === "merge_conflict.cleared"))
 
-    // Transition from UNKNOWN to DIRTY should not emit.
-    const previous2: PullRequestSnapshot = {
-      ...baseSnapshot(),
-      core: { ...baseSnapshot().core, isDraft: false, mergeStateStatus: "UNKNOWN" },
-    }
-    const next2: PullRequestSnapshot = {
-      ...previous2,
-      core: { ...previous2.core, mergeStateStatus: "DIRTY" },
-    }
-    const events2 = diffSnapshot(previous2, next2)
-    assert.ok(!events2.some((e) => e.kind === "merge_conflict.detected"))
+    // A stable outcome after UNKNOWN compares against the retained CLEAN baseline.
+    const events2 = diffSnapshot(
+      { ...baseSnapshot(), core: unknown },
+      { ...baseSnapshot(), core: { ...unknown, mergeStateStatus: "DIRTY" } },
+    )
+    assert.ok(events2.some((event) => event.kind === "merge_conflict.detected"))
 
-    // Transition from CLEAN to DIRTY should emit.
-    const previous3: PullRequestSnapshot = {
-      ...baseSnapshot(),
-      core: { ...baseSnapshot().core, isDraft: false, mergeStateStatus: "CLEAN" },
-    }
-    const next3: PullRequestSnapshot = {
-      ...previous3,
-      core: { ...previous3.core, mergeStateStatus: "DIRTY" },
-    }
-    const events3 = diffSnapshot(previous3, next3)
-    assert.ok(events3.some((e) => e.kind === "merge_conflict.detected"))
+    // A stable direct transition still emits as before.
+    const events3 = diffSnapshot(
+      { ...baseSnapshot(), core: clean },
+      { ...baseSnapshot(), core: { ...clean, mergeStateStatus: "DIRTY" } },
+    )
+    assert.ok(events3.some((event) => event.kind === "merge_conflict.detected"))
 
-    // Transition from DIRTY to CLEAN should emit.
-    const previous4: PullRequestSnapshot = {
-      ...baseSnapshot(),
-      core: { ...baseSnapshot().core, isDraft: false, mergeStateStatus: "DIRTY" },
-    }
-    const next4: PullRequestSnapshot = {
-      ...previous4,
-      core: { ...previous4.core, mergeStateStatus: "CLEAN" },
-    }
-    const events4 = diffSnapshot(previous4, next4)
-    assert.ok(events4.some((e) => e.kind === "merge_conflict.cleared"))
+    const events4 = diffSnapshot(
+      { ...baseSnapshot(), core: { ...clean, mergeStateStatus: "DIRTY" } },
+      { ...baseSnapshot(), core: clean },
+    )
+    assert.ok(events4.some((event) => event.kind === "merge_conflict.cleared"))
   })
 })

@@ -189,6 +189,42 @@ describe("watcher integration", () => {
     store.close()
   })
 
+  test("PR watcher detects conflicts after GitHub transiently reports UNKNOWN", async () => {
+    const store = createStore()
+    const github = new FixtureGitHubClient()
+    const prWatcher = new PullRequestWatcher(store, github)
+
+    store.registerClient("client-conflict", { pid: 3, projectRoot: "/tmp" })
+    store.registerSession({
+      clientId: "client-conflict",
+      sessionId: "session-conflict",
+      repo: "acme/repo",
+      branch: "feature/conflict",
+      isPrimary: true,
+      status: "active",
+      busyState: "idle",
+    })
+    store.recordBranchAssociation("acme/repo", "feature/conflict", 42)
+
+    const snapshotWithMergeState = (mergeStateStatus: string) => {
+      const snapshot = makeSnapshot()
+      return { ...snapshot, core: { ...snapshot.core, mergeStateStatus } }
+    }
+    github.pushSnapshot(snapshotWithMergeState("CLEAN"))
+    github.pushSnapshot(snapshotWithMergeState("UNKNOWN"))
+    github.pushSnapshot(snapshotWithMergeState("DIRTY"))
+
+    await prWatcher.tick()
+    await prWatcher.tick()
+    await prWatcher.tick()
+
+    const events = store.listUndeliveredEvents("session-conflict")
+    assert.ok(events.some((event) => event.kind === "merge_conflict.detected"))
+    assert.equal(store.getSnapshot("acme/repo", 42)?.core.lastStableMergeStateStatus, "DIRTY")
+
+    store.close()
+  })
+
   test("two sessions on same PR get independent delivery cursors", async () => {
     const store = createStore()
     const github = new FixtureGitHubClient()
