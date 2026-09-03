@@ -35,6 +35,31 @@ type SessionRow = {
 	last_activity_at: number;
 };
 
+export type SubscriptionSource = "automatic" | "manual";
+export type SubscriptionState = "active" | "unsubscribed";
+
+export type WorktreeBinding = {
+	sessionId: string;
+	root: string;
+	gitDir: string;
+	repo: string;
+	branch: string | null;
+	headSha: string;
+	state: string;
+	updatedAt: number;
+};
+
+export type SessionSubscription = {
+	subscriptionId: string;
+	sessionId: string;
+	repo: string;
+	prNumber: number;
+	source: SubscriptionSource;
+	state: SubscriptionState;
+	lastDeliveredEventSeq: number;
+	updatedAt: number;
+};
+
 type ReminderRow = {
 	batch_id: string;
 	session_id: string;
@@ -401,6 +426,153 @@ export class StateStore {
 		this.db
 			.prepare(`DELETE FROM reminder_batches WHERE session_id = ?`)
 			.run(sessionId);
+	}
+
+	upsertWorktreeBinding(
+		binding: Omit<WorktreeBinding, "updatedAt">,
+		now = Date.now(),
+	): WorktreeBinding {
+		if (!this.getSession(binding.sessionId)) {
+			throw new Error(`Unknown session: ${binding.sessionId}`);
+		}
+		this.db
+			.prepare(
+				`
+				INSERT INTO worktree_bindings (session_id, root, git_dir, repo, branch, head_sha, state, created_at, updated_at)
+				VALUES (:sessionId, :root, :gitDir, :repo, :branch, :headSha, :state, :now, :now)
+				ON CONFLICT(session_id) DO UPDATE SET
+					root = excluded.root,
+					git_dir = excluded.git_dir,
+					repo = excluded.repo,
+					branch = excluded.branch,
+					head_sha = excluded.head_sha,
+					state = excluded.state,
+					updated_at = excluded.updated_at
+				`,
+			)
+			.run({ ...binding, now });
+		return this.getWorktreeBinding(binding.sessionId)!;
+	}
+
+	getWorktreeBinding(sessionId: string): WorktreeBinding | null {
+		const row = this.db
+			.prepare(`SELECT * FROM worktree_bindings WHERE session_id = ?`)
+			.get(sessionId) as {
+				session_id: string;
+				root: string;
+				git_dir: string;
+				repo: string;
+				branch: string | null;
+				head_sha: string;
+				state: string;
+				updated_at: number;
+			} | undefined;
+		if (!row) return null;
+		return {
+			sessionId: row.session_id,
+			root: row.root,
+			gitDir: row.git_dir,
+			repo: row.repo,
+			branch: row.branch,
+			headSha: row.head_sha,
+			state: row.state,
+			updatedAt: row.updated_at,
+		};
+	}
+
+	upsertSubscription(
+		input: { sessionId: string; repo: string; prNumber: number; source: SubscriptionSource },
+		now = Date.now(),
+	): SessionSubscription {
+		if (!this.getSession(input.sessionId)) {
+			throw new Error(`Unknown session: ${input.sessionId}`);
+		}
+		this.db
+			.prepare(
+				`
+				INSERT INTO session_subscriptions (subscription_id, session_id, repo, pr_number, source, state, last_delivered_event_seq, created_at, updated_at)
+				VALUES (:subscriptionId, :sessionId, :repo, :prNumber, :source, 'active', 0, :now, :now)
+				ON CONFLICT(session_id, repo, pr_number) DO UPDATE SET
+					source = CASE WHEN session_subscriptions.source = 'manual' OR excluded.source = 'manual' THEN 'manual' ELSE 'automatic' END,
+					state = 'active',
+					updated_at = excluded.updated_at
+				`,
+			)
+			.run({ ...input, subscriptionId: randomUUID(), now });
+		return this.getSubscription(input.sessionId, input.repo, input.prNumber)!;
+	}
+
+	getSubscription(sessionId: string, repo: string, prNumber: number): SessionSubscription | null {
+		const row = this.db
+			.prepare(`SELECT * FROM session_subscriptions WHERE session_id = ? AND repo = ? AND pr_number = ?`)
+			.get(sessionId, repo, prNumber) as {
+				subscription_id: string;
+				session_id: string;
+				repo: string;
+				pr_number: number;
+				source: SubscriptionSource;
+				state: SubscriptionState;
+				last_delivered_event_seq: number;
+				updated_at: number;
+			} | undefined;
+		if (!row) return null;
+		return {
+			subscriptionId: row.subscription_id,
+			sessionId: row.session_id,
+			repo: row.repo,
+			prNumber: row.pr_number,
+			source: row.source,
+			state: row.state,
+			lastDeliveredEventSeq: row.last_delivered_event_seq,
+			updatedAt: row.updated_at,
+		};
+	}
+
+	listSessionSubscriptions(sessionId: string, state?: SubscriptionState): SessionSubscription[] {
+		const statement = state
+			? this.db.prepare(`SELECT * FROM session_subscriptions WHERE session_id = :sessionId AND state = :state ORDER BY created_at ASC`)
+			: this.db.prepare(`SELECT * FROM session_subscriptions WHERE session_id = :sessionId ORDER BY created_at ASC`);
+		const rows = (state
+			? statement.all({ sessionId, state })
+			: statement.all({ sessionId })) as Array<{
+			subscription_id: string; session_id: string; repo: string; pr_number: number; source: SubscriptionSource; state: SubscriptionState; last_delivered_event_seq: number; updated_at: number;
+		}>;
+		return rows.map((row) => ({
+			subscriptionId: row.subscription_id, sessionId: row.session_id, repo: row.repo, prNumber: row.pr_number, source: row.source, state: row.state, lastDeliveredEventSeq: row.last_delivered_event_seq, updatedAt: row.updated_at,
+		}));
+	}
+
+	unsubscribe(sessionId: string, repo: string, prNumber: number, now = Date.now()): boolean {
+		const result = this.db
+			.prepare(`UPDATE session_subscriptions SET state = 'unsubscribed', updated_at = :now WHERE session_id = :sessionId AND repo = :repo AND pr_number = :prNumber AND state = 'active'`)
+			.run({ sessionId, repo, prNumber, now });
+		return (result.changes as number) > 0;
+	}
+
+	deactivateAutomaticSubscriptions(sessionId: string, now = Date.now()) {
+		this.db
+			.prepare(`UPDATE session_subscriptions SET state = 'unsubscribed', updated_at = :now WHERE session_id = :sessionId AND source = 'automatic' AND state = 'active'`)
+			.run({ sessionId, now });
+	}
+
+	recordAutomaticSubscriptionOptOut(
+		input: { sessionId: string; gitDir: string; repo: string; branch: string; prNumber: number },
+		now = Date.now(),
+	) {
+		this.db
+			.prepare(
+				`INSERT OR IGNORE INTO automatic_subscription_opt_outs (session_id, git_dir, repo, branch, pr_number, created_at)
+				 VALUES (:sessionId, :gitDir, :repo, :branch, :prNumber, :now)`,
+			)
+			.run({ ...input, now });
+	}
+
+	hasAutomaticSubscriptionOptOut(input: { sessionId: string; gitDir: string; repo: string; branch: string; prNumber: number }): boolean {
+		return Boolean(
+			this.db
+				.prepare(`SELECT 1 FROM automatic_subscription_opt_outs WHERE session_id = :sessionId AND git_dir = :gitDir AND repo = :repo AND branch = :branch AND pr_number = :prNumber`)
+				.get(input),
+		);
 	}
 
 	/**
@@ -1203,6 +1375,47 @@ export class StateStore {
         last_activity_at INTEGER NOT NULL,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS worktree_bindings (
+        session_id TEXT PRIMARY KEY,
+        root TEXT NOT NULL,
+        git_dir TEXT NOT NULL,
+        repo TEXT NOT NULL,
+        branch TEXT,
+        head_sha TEXT NOT NULL,
+        state TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        FOREIGN KEY(session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS session_subscriptions (
+        subscription_id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        repo TEXT NOT NULL,
+        pr_number INTEGER NOT NULL,
+        source TEXT NOT NULL CHECK(source IN ('automatic', 'manual')),
+        state TEXT NOT NULL CHECK(state IN ('active', 'unsubscribed')),
+        last_delivered_event_seq INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        UNIQUE(session_id, repo, pr_number),
+        FOREIGN KEY(session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS session_subscriptions_active_pr
+      ON session_subscriptions(repo, pr_number, state);
+
+      CREATE TABLE IF NOT EXISTS automatic_subscription_opt_outs (
+        session_id TEXT NOT NULL,
+        git_dir TEXT NOT NULL,
+        repo TEXT NOT NULL,
+        branch TEXT NOT NULL,
+        pr_number INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY(session_id, git_dir, repo, branch, pr_number),
+        FOREIGN KEY(session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
       );
 
       CREATE TABLE IF NOT EXISTS reminder_batches (

@@ -1516,4 +1516,67 @@ describe("StateStore", () => {
 
     store.close()
   })
+
+  test("persists a worktree binding independently from the legacy session branch", () => {
+    const store = createStore()
+    store.registerClient("client-worktree", { pid: 1, projectRoot: "/repo" })
+    store.registerSession({
+      clientId: "client-worktree", sessionId: "session-worktree", repo: "acme/repo",
+      branch: "main", isPrimary: true, status: "active", busyState: "idle",
+    })
+
+    const binding = store.upsertWorktreeBinding({
+      sessionId: "session-worktree",
+      root: "/repo/.trees/asdf",
+      gitDir: "/repo/.git/worktrees/asdf",
+      repo: "acme/repo",
+      branch: "feature/asdf",
+      headSha: "abc123",
+      state: "waiting_for_pr",
+    }, 1_000)
+
+    assert.equal(binding.root, "/repo/.trees/asdf")
+    assert.equal(binding.branch, "feature/asdf")
+    assert.equal(binding.updatedAt, 1_000)
+    assert.equal(store.getSession("session-worktree")?.branch, "main")
+
+    store.close()
+  })
+
+  test("keeps manual subscriptions across automatic worktree changes", () => {
+    const store = createStore()
+    store.registerClient("client-subscriptions", { pid: 1, projectRoot: "/repo" })
+    store.registerSession({
+      clientId: "client-subscriptions", sessionId: "session-subscriptions", repo: "acme/repo",
+      branch: "feature/asdf", isPrimary: true, status: "active", busyState: "idle",
+    })
+
+    store.upsertSubscription({
+      sessionId: "session-subscriptions", repo: "acme/repo", prNumber: 13, source: "automatic",
+    })
+    const upgraded = store.upsertSubscription({
+      sessionId: "session-subscriptions", repo: "acme/repo", prNumber: 13, source: "manual",
+    })
+    store.upsertSubscription({
+      sessionId: "session-subscriptions", repo: "other/repo", prNumber: 42, source: "manual",
+    })
+
+    assert.equal(upgraded.source, "manual")
+    assert.equal(store.listSessionSubscriptions("session-subscriptions", "active").length, 2)
+
+    store.deactivateAutomaticSubscriptions("session-subscriptions")
+    assert.equal(store.getSubscription("session-subscriptions", "acme/repo", 13)?.state, "active")
+    assert.equal(store.getSubscription("session-subscriptions", "other/repo", 42)?.state, "active")
+
+    assert.equal(store.unsubscribe("session-subscriptions", "other/repo", 42), true)
+    assert.equal(store.getSubscription("session-subscriptions", "other/repo", 42)?.state, "unsubscribed")
+
+    const optOut = {
+      sessionId: "session-subscriptions", gitDir: "/repo/.git/worktrees/asdf",
+      repo: "acme/repo", branch: "feature/asdf", prNumber: 13,
+    }
+    store.recordAutomaticSubscriptionOptOut(optOut)
+    assert.equal(store.hasAutomaticSubscriptionOptOut(optOut), true)
+    store.close()
+  })
 })
