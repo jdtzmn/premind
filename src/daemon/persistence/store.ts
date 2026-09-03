@@ -10,6 +10,7 @@ import {
 import type {
 	AckReminderPayload,
 	ClientMetadata,
+	EnsureSessionControlPayload,
 	RegisterSessionPayload,
 	ReminderBatch,
 	ReminderEvent,
@@ -218,6 +219,98 @@ export class StateStore {
 		);
 
 		return { created: !existing, superseded };
+	}
+
+	/**
+	 * Atomically attaches a live client session and applies its paused state.
+	 * Existing sessions retain their delivery cursor; recreated sessions begin at
+	 * the branch's current PR-event high-water mark to avoid replaying history.
+	 */
+	ensureSessionControl(
+		payload: EnsureSessionControlPayload,
+		now = Date.now(),
+	): { created: boolean; superseded: number } {
+		this.db.exec("BEGIN IMMEDIATE");
+		try {
+			const existing = this.getSession(payload.sessionId);
+			const status = payload.paused ? "paused" : "active";
+			if (existing) {
+				this.db
+					.prepare(
+						`UPDATE sessions
+						 SET client_id = :clientId,
+						     repo = :repo,
+						     branch = :branch,
+						     is_primary = :isPrimary,
+						     status = :status,
+						     busy_state = :busyState,
+						     last_activity_at = :now,
+						     updated_at = :now
+						 WHERE session_id = :sessionId`,
+					)
+					.run({
+						clientId: payload.clientId,
+						sessionId: payload.sessionId,
+						repo: payload.repo,
+						branch: payload.branch,
+						busyState: payload.busyState,
+						isPrimary: payload.isPrimary ? 1 : 0,
+						status,
+						now,
+					});
+			} else {
+				const watcher = this.db
+					.prepare(
+						`SELECT pr_number FROM branch_watchers WHERE repo = :repo AND branch = :branch`,
+					)
+					.get({ repo: payload.repo, branch: payload.branch }) as {
+						pr_number: number | null;
+					} | undefined;
+				const prNumber = watcher?.pr_number ?? null;
+				const cursor =
+					prNumber === null
+						? 0
+						: (this.db
+								.prepare(
+									`SELECT MAX(seq) AS maxSeq FROM pr_events WHERE repo = :repo AND pr_number = :prNumber`,
+								)
+								.get({
+									repo: payload.repo,
+									prNumber,
+								}) as { maxSeq: number | null })
+								.maxSeq ?? 0;
+				this.db
+					.prepare(
+						`INSERT INTO sessions (session_id, client_id, repo, branch, pr_number, is_primary, status, busy_state, last_delivered_event_seq, last_activity_at, created_at, updated_at)
+						 VALUES (:sessionId, :clientId, :repo, :branch, :prNumber, :isPrimary, :status, :busyState, :cursor, :now, :now, :now)`,
+					)
+					.run({
+						clientId: payload.clientId,
+						sessionId: payload.sessionId,
+						repo: payload.repo,
+						branch: payload.branch,
+						busyState: payload.busyState,
+						prNumber,
+						isPrimary: payload.isPrimary ? 1 : 0,
+						status,
+						cursor,
+						now,
+					});
+			}
+
+			this.touchBranchWatcher(payload.repo, payload.branch, now);
+			const superseded = this.closeSupersededSessions(
+				payload.repo,
+				payload.branch,
+				payload.sessionId,
+				now,
+			);
+			this.db.exec("COMMIT");
+			return { created: !existing, superseded };
+		} catch (error) {
+			this.db.exec("ROLLBACK");
+			throw error;
+		}
 	}
 
 	/**

@@ -10,6 +10,7 @@ import {
 } from "../shared/ipc.ts"
 import type {
   AckReminderPayload,
+  EnsureSessionControlPayload,
   RegisterSessionPayload,
   UpdateSessionStatePayload,
 } from "../shared/schema.ts"
@@ -63,6 +64,16 @@ export class PremindDaemonClient {
   async registerSession(payload: Omit<RegisterSessionPayload, "clientId">) {
     await this.requestWithRetry({
       type: "registerSession",
+      protocolVersion: PREMIND_PROTOCOL_VERSION,
+      payload: { ...payload, clientId: this.clientId },
+    })
+  }
+
+  async ensureSessionControl(
+    payload: Omit<EnsureSessionControlPayload, "clientId">,
+  ) {
+    await this.requestWithRetry({
+      type: "ensureSessionControl",
       protocolVersion: PREMIND_PROTOCOL_VERSION,
       payload: { ...payload, clientId: this.clientId },
     })

@@ -49,6 +49,22 @@ export class Router {
 				);
 				return this.ok({ registered: true, created });
 			}
+			case "ensureSessionControl": {
+				const { created, superseded } = this.store.ensureSessionControl(
+					request.payload,
+				);
+				this.logger.info(
+					created ? "session control attached" : "session control refreshed",
+					{
+						sessionId: request.payload.sessionId,
+						repo: request.payload.repo,
+						branch: request.payload.branch,
+						paused: request.payload.paused,
+						...(superseded > 0 ? { superseded } : {}),
+					},
+				);
+				return this.ok({ attached: true, created, superseded });
+			}
 			case "updateSessionState": {
 				const result = this.store.updateSessionState(request.payload);
 				if (!result.updated)
