@@ -60,6 +60,24 @@ const groupKinds = new Set([
   "review_comment.deleted",
 ])
 
+
+const mergedEvent = (next: PullRequestSnapshot, previousState: string | null): NormalizedPrEvent => ({
+  dedupeKey: `pr.merged:${next.core.url}`,
+  kind: "pr.merged",
+  priority: "high",
+  summary: `Branch ${next.core.headRefName} was merged via PR #${next.core.number}: ${next.core.title}`,
+  referenceLink: next.core.url,
+  payload: {
+    prNumber: next.core.number,
+    title: next.core.title,
+    url: next.core.url,
+    branch: next.core.headRefName,
+    baseBranch: next.core.baseRefName,
+    headSha: next.core.headRefOid,
+    previousState,
+    state: next.core.state,
+  },
+})
 const sampleSummaries = (bucket: NormalizedPrEvent[], max = 2) => bucket.slice(0, max).map((event) => event.summary)
 
 export function diffSnapshot(previous: PullRequestSnapshot | null, next: PullRequestSnapshot): NormalizedPrEvent[] {
@@ -94,23 +112,7 @@ export function diffSnapshot(previous: PullRequestSnapshot | null, next: PullReq
     return [
       ...(next.core.state === "MERGED"
         ? [
-            {
-              dedupeKey: `pr.merged:${next.core.url}`,
-              kind: "pr.merged",
-              priority: "high" as const,
-              summary: `Branch ${next.core.headRefName} was merged via PR #${next.core.number}: ${next.core.title}`,
-              referenceLink: next.core.url,
-              payload: {
-                prNumber: next.core.number,
-                title: next.core.title,
-                url: next.core.url,
-                branch: next.core.headRefName,
-                baseBranch: next.core.baseRefName,
-                headSha: next.core.headRefOid,
-                previousState: null,
-                state: next.core.state,
-              },
-            },
+            mergedEvent(next, null),
           ]
         : []),
       {
@@ -135,23 +137,7 @@ export function diffSnapshot(previous: PullRequestSnapshot | null, next: PullReq
   const events: NormalizedPrEvent[] = []
 
   if (previous.core.state !== "MERGED" && next.core.state === "MERGED") {
-    events.push({
-      dedupeKey: `pr.merged:${next.core.url}`,
-      kind: "pr.merged",
-      priority: "high",
-      summary: `Branch ${next.core.headRefName} was merged via PR #${next.core.number}: ${next.core.title}`,
-      referenceLink: next.core.url,
-      payload: {
-        prNumber: next.core.number,
-        title: next.core.title,
-        url: next.core.url,
-        branch: next.core.headRefName,
-        baseBranch: next.core.baseRefName,
-        headSha: next.core.headRefOid,
-        previousState: previous.core.state,
-        state: next.core.state,
-      },
-    })
+    events.push(mergedEvent(next, previous.core.state))
   }
 
   if (previous.core.isDraft && !next.core.isDraft) {
