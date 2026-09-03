@@ -1,7 +1,7 @@
 import { assign, createActor, setup } from "xstate"
 
 export type DaemonLifecycleState =
-  | "startup"
+  | "starting"
   | "running"
   | "shutdown_grace"
   | "stopping"
@@ -39,7 +39,7 @@ export const daemonLifecycleMachine = setup({
   },
 }).createMachine({
   id: "daemonLifecycle",
-  initial: "startup",
+  initial: "starting",
   context: { stopReason: null },
   on: {
     STOP_REQUESTED: {
@@ -48,7 +48,7 @@ export const daemonLifecycleMachine = setup({
     },
   },
   states: {
-    startup: {
+    starting: {
       on: {
         STARTUP_COMPLETE: [
           { guard: "startupHasDemand", target: "running" },

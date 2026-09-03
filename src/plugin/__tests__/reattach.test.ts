@@ -42,7 +42,9 @@ const makeReattachingDaemon = (knownSessionIds: Set<string> = new Set()) => {
     activateWorktree: async ({ sessionId }: { sessionId: string }) => {
       requireKnown(sessionId, "activate")
     },
-    subscribe: async () => undefined,
+    subscribe: async ({ sessionId }: { sessionId: string }) => {
+		requireKnown(sessionId, "subscribe")
+	},
     unsubscribe: async () => undefined,
     getPendingReminder: async (_sessionId: string) => ({ batch: null }),
     ackReminder: async () => undefined,
@@ -190,20 +192,21 @@ describe("reactive session re-attach", () => {
     assert.equal(daemon._knownSessionIds.size, 0, "child session must not be registered")
   })
 
-  test("/premind-pause on unknown session re-attaches and pauses", async () => {
+  test("premind_subscribe on an unknown session re-attaches before subscribing", async () => {
     const daemon = makeReattachingDaemon(new Set())
     const runtime = await makePlugin(daemon)
 
-    // Invoke the pause command via the tool to bypass the chat.message marker flow.
-    const result = await runtime.tool.premind_pause.execute({}, { sessionID: "resumed-session" })
-    assert.match(result, /premind paused/)
+    const result = await runtime.tool.premind_subscribe.execute(
+      { prNumber: 13, repo: "acme/repo" },
+      { sessionID: "resumed-session" },
+    )
+    assert.match(result, /subscribed to acme\/repo#13/)
 
-    // Sequence: pause fails, re-attach activates its worktree, then pause retries.
     assert.deepEqual(daemon._operations, [
-      "pause:resumed-session",
+      "subscribe:resumed-session",
       "register:resumed-session",
       "activate:resumed-session",
-      "pause:resumed-session",
+      "subscribe:resumed-session",
     ])
   })
 

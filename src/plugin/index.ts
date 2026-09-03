@@ -10,8 +10,6 @@ import { ensureDaemonRunning } from "./daemon-launcher.ts"
 
 const COMMAND_MARKERS = {
   status: "[PREMIND_STATUS]",
-  pause: "[PREMIND_PAUSE]",
-  resume: "[PREMIND_RESUME]",
   sendNow: "[PREMIND_SEND_NOW]",
   disable: "[PREMIND_DISABLE]",
   enable: "[PREMIND_ENABLE]",
@@ -705,15 +703,6 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
     await injectResponse(sessionID, renderPremindStatus(status), inputRef)
   }
 
-  const handlePauseCommand = async (sessionID: string, inputRef?: { agent?: string; model?: { providerID: string; modelID: string } }) => {
-    await withReattach(sessionID, () => daemon.pauseSession(sessionID))
-    await injectResponse(sessionID, `premind paused for session ${sessionID}`, inputRef)
-  }
-
-  const handleResumeCommand = async (sessionID: string, inputRef?: { agent?: string; model?: { providerID: string; modelID: string } }) => {
-    await withReattach(sessionID, () => daemon.resumeSession(sessionID))
-    await injectResponse(sessionID, `premind resumed for session ${sessionID}`, inputRef)
-  }
 
   const handleSendNowCommand = async (sessionID: string, inputRef?: { agent?: string; model?: { providerID: string; modelID: string } }) => {
     const pending = await daemon.getPendingReminder(sessionID)
@@ -760,14 +749,6 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
         template: COMMAND_MARKERS.status,
         description: "Show premind daemon status, attached sessions, and pending reminders",
       }
-      configInput.command["premind-pause"] = {
-        template: COMMAND_MARKERS.pause,
-        description: "Pause premind reminders for this session (events still accumulate)",
-      }
-      configInput.command["premind-resume"] = {
-        template: COMMAND_MARKERS.resume,
-        description: "Resume premind reminders for this session",
-      }
       configInput.command["premind-send-now"] = {
         template: COMMAND_MARKERS.sendNow,
         description: "Send pending PR updates to this session immediately without waiting for the idle countdown",
@@ -801,30 +782,8 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
           return renderPremindStatus(status)
         },
       }),
-      premind_pause: tool({
-        description: "Pause premind PR reminders for the current session. Events still accumulate and will be delivered when resumed.",
-        args: {},
-        async execute(_args, ctx) {
-          const sessionId = ctx.sessionID ?? lastPrimarySessionId
-          if (!sessionId) return "premind pause failed: no active session"
-          ownedSessions.add(sessionId)
-          await withReattach(sessionId, () => daemon.pauseSession(sessionId))
-          return `premind paused for session ${sessionId}`
-        },
-      }),
-      premind_resume: tool({
-        description: "Resume premind PR reminders for the current session",
-        args: {},
-        async execute(_args, ctx) {
-          const sessionId = ctx.sessionID ?? lastPrimarySessionId
-          if (!sessionId) return "premind resume failed: no active session"
-          ownedSessions.add(sessionId)
-          await withReattach(sessionId, () => daemon.resumeSession(sessionId))
-          return `premind resumed for session ${sessionId}`
-        },
-      }),
       premind_activate_worktree: tool({
-        description: "Activate a Git worktree for the current premind session.",
+        description: "Activate the Git worktree currently used by this session. Call this whenever work moves away from the startup directory into a linked or nested worktree, even before its branch has a pull request.",
         args: {
           path: tool.schema.string().min(1).describe("Absolute or project-relative path to the Git worktree"),
         },
@@ -1029,12 +988,6 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
       // Handle slash command markers injected via config.
       if (outputText.includes(COMMAND_MARKERS.status)) {
         await handleStatusCommand(input.sessionID, inputRef)
-      }
-      if (outputText.includes(COMMAND_MARKERS.pause)) {
-        await handlePauseCommand(input.sessionID, inputRef)
-      }
-      if (outputText.includes(COMMAND_MARKERS.resume)) {
-        await handleResumeCommand(input.sessionID, inputRef)
       }
       if (outputText.includes(COMMAND_MARKERS.sendNow)) {
         await handleSendNowCommand(input.sessionID, inputRef)

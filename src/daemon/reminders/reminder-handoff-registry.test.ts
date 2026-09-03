@@ -51,6 +51,11 @@ describe("ReminderHandoffRegistry", () => {
     const registry = new ReminderHandoffRegistry(store)
     const batch = registry.getPendingReminder("session")
     assert.ok(batch)
+    assert.equal(batch.repo, "acme/repo")
+    assert.equal(batch.prNumber, 13)
+    assert.equal(batch.subscriptionId, subscription.subscriptionId)
+    assert.equal(batch.source, "manual")
+    assert.match(batch.reminderText, /acme\/repo#13/)
 
     const illegal = registry.acknowledge({ batchId: batch.batchId, sessionId: "session", state: "confirmed" })
     assert.equal(illegal.acknowledged, false)
@@ -82,6 +87,31 @@ describe("ReminderHandoffRegistry", () => {
     assert.equal(registry.acknowledge({ batchId: batch.batchId, sessionId: "session", state: "handed_off" }).acknowledged, true)
     assert.equal(registry.acknowledge({ batchId: batch.batchId, sessionId: "session", state: "failed" }).acknowledged, true)
     assert.equal(store.getReminderBatchRecord(batch.batchId)?.state, "failed")
+    registry.close()
+    store.close()
+  })
+
+  test("drains cross-repository subscriptions sequentially with qualified identity", () => {
+    const store = createStore()
+    seed(store)
+    store.upsertSubscription({
+      sessionId: "session", repo: "other/repo", prNumber: 42, source: "manual",
+    }, 200)
+    store.insertEvents("other/repo", 42, [{
+      dedupeKey: "review:1", kind: "review.approved", priority: "high",
+      summary: "Approved", payload: {},
+    }], 200)
+    const registry = new ReminderHandoffRegistry(store)
+    const first = registry.getPendingReminder("session")
+    assert.ok(first?.repo && first.prNumber)
+    assert.match(first.reminderText, new RegExp(`${first.repo}#${first.prNumber}`))
+    assert.equal(registry.acknowledge({ batchId: first.batchId, sessionId: "session", state: "handed_off" }).acknowledged, true)
+    assert.equal(registry.acknowledge({ batchId: first.batchId, sessionId: "session", state: "confirmed" }).acknowledged, true)
+
+    const second = registry.getPendingReminder("session")
+    assert.ok(second?.repo && second.prNumber)
+    assert.notEqual(`${second.repo}#${second.prNumber}`, `${first.repo}#${first.prNumber}`)
+    assert.match(second.reminderText, new RegExp(`${second.repo}#${second.prNumber}`))
     registry.close()
     store.close()
   })

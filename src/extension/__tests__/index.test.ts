@@ -277,11 +277,11 @@ describe("premind Pi extension", () => {
 		assert.ok(mock.commands.has("premind:activate-worktree"));
 		assert.ok(mock.commands.has("premind:subscribe"));
 		assert.ok(mock.commands.has("premind:unsubscribe"));
-		assert.ok(mock.commands.has("premind:pause"));
-		assert.ok(mock.commands.has("premind:resume"));
+		assert.equal(mock.commands.has("premind:pause"), false);
+		assert.equal(mock.commands.has("premind:resume"), false);
 		assert.ok(mock.commands.has("premind:flush"));
-		assert.ok(mock.tools.has("premind_pause"));
-		assert.ok(mock.tools.has("premind_resume"));
+		assert.equal(mock.tools.has("premind_pause"), false);
+		assert.equal(mock.tools.has("premind_resume"), false);
 		assert.ok(mock.tools.has("premind_activate_worktree"));
 		assert.ok(mock.tools.has("premind_subscribe"));
 		assert.ok(mock.tools.has("premind_unsubscribe"));
@@ -666,68 +666,6 @@ describe("premind Pi extension", () => {
 		);
 	});
 
-	test("/premind:pause and /premind:resume control the current session", async () => {
-		const mock = createMockPi();
-		const client = createClient();
-		const notifications: Array<{ message: string; level: string }> = [];
-		createPremindPiExtension({
-			createDaemonClient: () => client.client,
-			config: { statusPollIntervalMs: 0 },
-		})(mock.pi as never);
-
-		const pause = mock.commands.get("premind:pause");
-		const resume = mock.commands.get("premind:resume");
-		assert.ok(pause);
-		assert.ok(resume);
-		await pause.handler("", createCommandContext(notifications));
-		await resume.handler("", createCommandContext(notifications));
-
-		assert.deepEqual(client.operations, [
-			"registerClient:/tmp/project:pi-extension",
-			"ensureSessionControl:/tmp/session.jsonl:true",
-			"registerClient:/tmp/project:pi-extension",
-			"ensureSessionControl:/tmp/session.jsonl:false",
-		]);
-		assert.deepEqual(
-			notifications.map((notification) => notification.message),
-			["premind paused for this session.", "premind resumed for this session."],
-		);
-	});
-
-	test("premind_pause and premind_resume tools control the current session", async () => {
-		const mock = createMockPi();
-		const client = createClient();
-		createPremindPiExtension({
-			createDaemonClient: () => client.client,
-			config: { statusPollIntervalMs: 0 },
-		})(mock.pi as never);
-
-		const pause = mock.tools.get("premind_pause");
-		const resume = mock.tools.get("premind_resume");
-		assert.ok(pause);
-		assert.ok(resume);
-		await pause.execute(
-			"tool-call-1",
-			{},
-			undefined,
-			undefined,
-			createCommandContext(),
-		);
-		await resume.execute(
-			"tool-call-2",
-			{},
-			undefined,
-			undefined,
-			createCommandContext(),
-		);
-
-		assert.deepEqual(client.operations, [
-			"registerClient:/tmp/project:pi-extension",
-			"ensureSessionControl:/tmp/session.jsonl:true",
-			"registerClient:/tmp/project:pi-extension",
-			"ensureSessionControl:/tmp/session.jsonl:false",
-		]);
-	});
 
 	test("worktree and subscription commands and tools target the current session", async () => {
 		const mock = createMockPi();

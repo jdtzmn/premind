@@ -128,6 +128,10 @@ export const reminderBatchSchema = z
   .object({
     batchId: z.string().min(1),
     sessionId: z.string().min(1),
+    repo: z.string().min(1).optional(),
+    prNumber: z.number().int().positive().optional(),
+    subscriptionId: z.string().min(1).optional(),
+    source: z.enum(["automatic", "manual"]).optional(),
     reminderText: z.string().min(1),
     events: z.array(reminderEventSchema),
   })

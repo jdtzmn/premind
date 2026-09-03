@@ -81,8 +81,6 @@ export type PremindPiExtensionDependencies = {
 const STATUS_ERROR_PREFIX = "premind status failed";
 const PRUNE_ERROR_PREFIX = "premind prune failed";
 const FLUSH_ERROR_PREFIX = "premind flush failed";
-const PAUSE_ERROR_PREFIX = "premind pause failed";
-const RESUME_ERROR_PREFIX = "premind resume failed";
 const WORKTREE_ERROR_PREFIX = "premind worktree activation failed";
 const SUBSCRIPTION_ERROR_PREFIX = "premind subscription update failed";
 const SESSION_SOURCE = "pi-extension";
@@ -311,35 +309,6 @@ export const createPremindPiExtension = (
 			return result as PruneClosedSessionsResult;
 		};
 
-		const controlCurrentSession = async (
-			ctx: {
-				cwd: string;
-				sessionManager?: { getSessionFile?: () => string | undefined };
-			},
-			paused: boolean,
-		) => {
-			const generation = sessionGeneration;
-			const sessionId = currentSessionId ?? getPiSessionId(ctx);
-			const client = sessionClient ?? createDaemonClient();
-			const git = await detectGit(ctx.cwd);
-			await client.registerClient(ctx.cwd, SESSION_SOURCE);
-			if (generation !== sessionGeneration) {
-				throw new Error("Pi session changed before premind session control completed");
-			}
-			await client.ensureSessionControl({
-				sessionId,
-				repo: git.repo,
-				branch: git.branch,
-				isPrimary: true,
-				busyState: "idle",
-				paused,
-			});
-			if (generation !== sessionGeneration) {
-				throw new Error("Pi session changed before premind session control completed");
-			}
-			sessionClient = client;
-			currentSessionId = sessionId;
-		};
 
 		const setStatus = (
 			ctx: {
@@ -735,37 +704,6 @@ export const createPremindPiExtension = (
 			},
 		});
 
-		pi.registerCommand("premind:pause", {
-			description: "Pause premind reminders for the current session",
-			handler: async (_args, ctx) => {
-				try {
-					await controlCurrentSession(ctx, true);
-					setStatus(ctx, `${PR_ICON} paused`);
-					ctx.ui.notify("premind paused for this session.", "info");
-				} catch (error) {
-					ctx.ui.notify(
-						`${PAUSE_ERROR_PREFIX}: ${error instanceof Error ? error.message : String(error)}`,
-						"error",
-					);
-				}
-			},
-		});
-
-		pi.registerCommand("premind:resume", {
-			description: "Resume premind reminders for the current session",
-			handler: async (_args, ctx) => {
-				try {
-					await controlCurrentSession(ctx, false);
-					await refreshStatusbar(ctx);
-					ctx.ui.notify("premind resumed for this session.", "info");
-				} catch (error) {
-					ctx.ui.notify(
-						`${RESUME_ERROR_PREFIX}: ${error instanceof Error ? error.message : String(error)}`,
-						"error",
-					);
-				}
-			},
-		});
 
 		pi.registerCommand("premind:flush", {
 			description:
@@ -793,46 +731,15 @@ export const createPremindPiExtension = (
 			},
 		});
 
-		pi.registerTool({
-			name: "premind_pause",
-			label: "Premind Pause",
-			description:
-				"Pause premind PR reminders for the current session. Events still accumulate while paused.",
-			parameters: Type.Object({}),
-			async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
-				await controlCurrentSession(ctx, true);
-				return {
-					content: [
-						{ type: "text" as const, text: "premind paused for this session." },
-					],
-					details: {},
-				};
-			},
-		});
-
-		pi.registerTool({
-			name: "premind_resume",
-			label: "Premind Resume",
-			description: "Resume premind PR reminders for the current session.",
-			parameters: Type.Object({}),
-			async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
-				await controlCurrentSession(ctx, false);
-				return {
-					content: [
-						{
-							type: "text" as const,
-							text: "premind resumed for this session.",
-						},
-					],
-					details: {},
-				};
-			},
-		});
 
 		pi.registerTool({
 			name: "premind_activate_worktree",
 			label: "Premind Activate Worktree",
 			description: "Activate a Git worktree for the current premind session.",
+			promptSnippet: "Tell premind which Git worktree this session is actively using.",
+			promptGuidelines: [
+				"Call premind_activate_worktree whenever you begin working in a different linked or nested Git worktree than the session's startup directory, including before that branch has a pull request.",
+			],
 			parameters: Type.Object({ path: Type.String({ minLength: 1 }) }),
 			async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 				const sessionId = currentSessionId ?? getPiSessionId(ctx);

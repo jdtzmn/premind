@@ -96,9 +96,12 @@ type ReminderRow = {
 	events_json: string;
 	state: ReminderHandoffState;
 	max_event_seq: number | null;
+	repo?: string | null;
+	pr_number?: number | null;
+	source?: SubscriptionSource | null;
 };
 
-export type ReminderBatchRecord = ReminderBatch & {
+export type ReminderBatchRecord = Omit<ReminderBatch, "subscriptionId"> & {
 	state: ReminderHandoffState;
 	subscriptionId: string | null;
 	maxEventSeq: number | null;
@@ -1542,7 +1545,8 @@ export class StateStore {
 			.prepare(
 				`SELECT reminder_batches.batch_id, reminder_batches.session_id, reminder_batches.subscription_id,
 				        reminder_batches.reminder_text, reminder_batches.events_json, reminder_batches.state,
-				        reminder_batches.max_event_seq
+				        reminder_batches.max_event_seq, session_subscriptions.repo,
+				        session_subscriptions.pr_number, session_subscriptions.source
 				 FROM reminder_batches
 				 LEFT JOIN session_subscriptions
 				   ON session_subscriptions.subscription_id = reminder_batches.subscription_id
@@ -1562,14 +1566,20 @@ export class StateStore {
 		const row = (sessionId
 			? this.db
 					.prepare(
-						`SELECT batch_id, session_id, subscription_id, reminder_text, events_json, state, max_event_seq
-						 FROM reminder_batches WHERE batch_id = :batchId AND session_id = :sessionId`,
+						`SELECT reminder_batches.batch_id, reminder_batches.session_id, reminder_batches.subscription_id,
+						        reminder_batches.reminder_text, reminder_batches.events_json, reminder_batches.state, reminder_batches.max_event_seq,
+						        session_subscriptions.repo, session_subscriptions.pr_number, session_subscriptions.source
+						 FROM reminder_batches LEFT JOIN session_subscriptions USING (subscription_id)
+						 WHERE batch_id = :batchId AND reminder_batches.session_id = :sessionId`,
 					)
 					.get({ batchId, sessionId })
 			: this.db
 					.prepare(
-						`SELECT batch_id, session_id, subscription_id, reminder_text, events_json, state, max_event_seq
-						 FROM reminder_batches WHERE batch_id = :batchId`,
+						`SELECT reminder_batches.batch_id, reminder_batches.session_id, reminder_batches.subscription_id,
+						        reminder_batches.reminder_text, reminder_batches.events_json, reminder_batches.state, reminder_batches.max_event_seq,
+						        session_subscriptions.repo, session_subscriptions.pr_number, session_subscriptions.source
+						 FROM reminder_batches LEFT JOIN session_subscriptions USING (subscription_id)
+						 WHERE batch_id = :batchId`,
 					)
 					.get({ batchId })) as ReminderRow | undefined;
 		return this.toReminderBatchRecord(row);
@@ -1578,8 +1588,11 @@ export class StateStore {
 	listPendingReminderBatchRecords(): ReminderBatchRecord[] {
 		const rows = this.db
 			.prepare(
-				`SELECT batch_id, session_id, subscription_id, reminder_text, events_json, state, max_event_seq
-				 FROM reminder_batches WHERE state != 'confirmed' ORDER BY created_at ASC`,
+				`SELECT reminder_batches.batch_id, reminder_batches.session_id, reminder_batches.subscription_id,
+				        reminder_batches.reminder_text, reminder_batches.events_json, reminder_batches.state, reminder_batches.max_event_seq,
+				        session_subscriptions.repo, session_subscriptions.pr_number, session_subscriptions.source
+				 FROM reminder_batches LEFT JOIN session_subscriptions USING (subscription_id)
+				 WHERE reminder_batches.state != 'confirmed' ORDER BY reminder_batches.created_at ASC`,
 			)
 			.all() as ReminderRow[];
 		return rows.flatMap((row) => {
@@ -1593,7 +1606,8 @@ export class StateStore {
 			.prepare(
 				`SELECT reminder_batches.batch_id, reminder_batches.session_id, reminder_batches.subscription_id,
 				        reminder_batches.reminder_text, reminder_batches.events_json, reminder_batches.state,
-				        reminder_batches.max_event_seq
+				        reminder_batches.max_event_seq, session_subscriptions.repo,
+				        session_subscriptions.pr_number, session_subscriptions.source
 				 FROM reminder_batches
 				 INNER JOIN session_subscriptions
 				   ON session_subscriptions.subscription_id = reminder_batches.subscription_id
@@ -1610,6 +1624,10 @@ export class StateStore {
 		return {
 			batchId: record.batchId,
 			sessionId: record.sessionId,
+			...(record.repo ? { repo: record.repo } : {}),
+			...(record.prNumber ? { prNumber: record.prNumber } : {}),
+			...(record.subscriptionId ? { subscriptionId: record.subscriptionId } : {}),
+			...(record.source ? { source: record.source } : {}),
 			reminderText: record.reminderText,
 			events: record.events,
 		};
@@ -1622,6 +1640,9 @@ export class StateStore {
 				batchId: row.batch_id,
 				sessionId: row.session_id,
 				subscriptionId: row.subscription_id,
+				repo: row.repo ?? undefined,
+				prNumber: row.pr_number ?? undefined,
+				source: row.source ?? undefined,
 				reminderText: row.reminder_text,
 				events: JSON.parse(row.events_json) as ReminderEvent[],
 				state: row.state,
@@ -1815,9 +1836,12 @@ export class StateStore {
 		const hasActionableBlocker = condensed.some((event) =>
 			["check.failed", "merge_conflict.detected"].includes(event.kind),
 		);
+		const targetRepo = subscription?.repo ?? session.repo;
+		const targetPrNumber = subscription?.prNumber ?? session.pr_number;
+		const qualifiedTarget = targetPrNumber ? `${targetRepo}#${targetPrNumber}` : targetRepo;
 		const reminderText = [
 			"<system-reminder>",
-			"New pull request context was detected since the last reminder.",
+			`New pull request context was detected for ${qualifiedTarget} since the last reminder.`,
 			"",
 			"Changes:",
 			...condensed.map(
@@ -1847,6 +1871,9 @@ export class StateStore {
 		return {
 			batchId,
 			sessionId,
+			repo: targetRepo,
+			...(targetPrNumber ? { prNumber: targetPrNumber } : {}),
+			...(subscription ? { subscriptionId: subscription.subscriptionId, source: subscription.source } : {}),
 			reminderText,
 			events: condensed,
 		};

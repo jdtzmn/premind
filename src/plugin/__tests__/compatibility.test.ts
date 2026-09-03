@@ -112,8 +112,8 @@ describe("premind plugin compatibility harness", () => {
     assert.ok(registeredConfig.command, "config hook should register commands")
     const commands = registeredConfig.command as Record<string, { template: string; description: string }>
     assert.ok(commands["premind-status"], "should register premind-status command")
-    assert.ok(commands["premind-pause"], "should register premind-pause command")
-    assert.ok(commands["premind-resume"], "should register premind-resume command")
+    assert.equal(commands["premind-pause"], undefined)
+    assert.equal(commands["premind-resume"], undefined)
     assert.ok(commands["premind-disable"], "should register premind-disable command")
     assert.ok(commands["premind-enable"], "should register premind-enable command")
 
@@ -151,31 +151,6 @@ describe("premind plugin compatibility harness", () => {
     assert.ok(statusPrompt, "should have injected status response")
     assert.equal(statusPrompt.noReply, true, "status response should be noReply")
 
-    // 6. Slash command via chat.message: premind-pause.
-    const pauseMarker = commands["premind-pause"].template
-    try {
-      await runtime["chat.message"](
-        { sessionID: "session-1" },
-        { message: { parts: [{ type: "text", text: pauseMarker }] }, parts: [{ type: "text", text: pauseMarker }] },
-      )
-      assert.fail("expected throw for handled command")
-    } catch (error) {
-      assert.match((error as Error).message, /PREMIND_HANDLED/)
-    }
-    assert.ok(operations.includes("pause:session-1"))
-
-    // 7. Slash command via chat.message: premind-resume.
-    const resumeMarker = commands["premind-resume"].template
-    try {
-      await runtime["chat.message"](
-        { sessionID: "session-1" },
-        { message: { parts: [{ type: "text", text: resumeMarker }] }, parts: [{ type: "text", text: resumeMarker }] },
-      )
-      assert.fail("expected throw for handled command")
-    } catch (error) {
-      assert.match((error as Error).message, /PREMIND_HANDLED/)
-    }
-    assert.ok(operations.includes("resume:session-1"))
 
     // 7a. Slash command via chat.message: premind-disable.
     const disableMarker = commands["premind-disable"].template
@@ -205,8 +180,8 @@ describe("premind plugin compatibility harness", () => {
 
     // 8. Tools are registered and callable.
     assert.ok(runtime.tool.premind_status, "premind_status tool should exist")
-    assert.ok(runtime.tool.premind_pause, "premind_pause tool should exist")
-    assert.ok(runtime.tool.premind_resume, "premind_resume tool should exist")
+    assert.equal(runtime.tool.premind_pause, undefined)
+    assert.equal(runtime.tool.premind_resume, undefined)
     assert.ok(runtime.tool.premind_activate_worktree, "premind_activate_worktree tool should exist")
     assert.ok(runtime.tool.premind_subscribe, "premind_subscribe tool should exist")
     assert.ok(runtime.tool.premind_unsubscribe, "premind_unsubscribe tool should exist")
@@ -217,11 +192,6 @@ describe("premind plugin compatibility harness", () => {
     const toolStatusResult = await runtime.tool.premind_status.execute({}, { sessionID: "session-1" })
     assert.match(toolStatusResult, /premind status/)
 
-    const toolPauseResult = await runtime.tool.premind_pause.execute({}, { sessionID: "session-1" })
-    assert.match(toolPauseResult, /premind paused/)
-
-    const toolResumeResult = await runtime.tool.premind_resume.execute({}, { sessionID: "session-1" })
-    assert.match(toolResumeResult, /premind resumed/)
 
     const toolActivateResult = await runtime.tool.premind_activate_worktree.execute(
       { path: "/tmp/other-worktree" },

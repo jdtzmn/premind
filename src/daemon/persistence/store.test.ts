@@ -1688,4 +1688,23 @@ describe("StateStore", () => {
     assert.deepEqual(store.listPrWatchTargets(), [])
     store.close()
   })
+
+  test("daemon demand follows durable subscriptions instead of stale session rows", () => {
+    const store = createStore()
+    store.registerClient("client-demand", { pid: 1, projectRoot: "/repo" })
+    store.registerSession({
+      clientId: "client-demand", sessionId: "session-demand", repo: "acme/repo",
+      branch: "feature/demand", isPrimary: true, status: "active", busyState: "idle",
+    })
+    store.upsertSubscription({
+      sessionId: "session-demand", repo: "external/repo", prNumber: 99, source: "manual",
+    })
+    store.releaseClient("client-demand")
+    assert.equal(store.hasDaemonDemand(), true)
+
+    store.unregisterSession("session-demand")
+    store.unsubscribe("session-demand", "external/repo", 99)
+    assert.equal(store.hasDaemonDemand(), false)
+    store.close()
+  })
 })
