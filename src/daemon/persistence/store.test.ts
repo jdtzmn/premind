@@ -296,6 +296,70 @@ describe("StateStore", () => {
     store.close()
   })
 
+  test("ensureSessionControl resets PR state when a session changes branches", () => {
+    const store = createStore()
+    store.registerSession({
+      clientId: "client-branch-change",
+      sessionId: "session-branch-change",
+      repo: "acme/repo",
+      branch: "feature/old",
+      isPrimary: true,
+      status: "active",
+      busyState: "idle",
+    })
+    store.recordBranchAssociation("acme/repo", "feature/old", 13)
+    store.insertEvents("acme/repo", 13, [
+      {
+        dedupeKey: "issue_comment.created:old",
+        kind: "issue_comment.created",
+        priority: "high",
+        summary: "Old branch comment",
+        payload: { commentId: 13 },
+      },
+    ])
+    assert.ok(store.buildReminderBatch("session-branch-change"))
+
+    store.recordBranchAssociation("acme/repo", "feature/new", 14)
+    store.insertEvents("acme/repo", 14, [
+      {
+        dedupeKey: "issue_comment.created:historical-new",
+        kind: "issue_comment.created",
+        priority: "high",
+        summary: "Historical new branch comment",
+        payload: { commentId: 14 },
+      },
+    ])
+
+    store.ensureSessionControl({
+      clientId: "client-branch-change",
+      sessionId: "session-branch-change",
+      repo: "acme/repo",
+      branch: "feature/new",
+      isPrimary: true,
+      busyState: "idle",
+      paused: false,
+    })
+
+    const session = store.getSession("session-branch-change")
+    assert.equal(session?.pr_number, 14)
+    assert.equal(session?.last_delivered_event_seq, 2)
+    assert.equal(store.getPendingReminder("session-branch-change"), null)
+
+    store.insertEvents("acme/repo", 14, [
+      {
+        dedupeKey: "check.failed:new:sha-14",
+        kind: "check.failed",
+        priority: "high",
+        summary: "New branch check failed",
+        payload: { name: "build" },
+      },
+    ])
+    const batch = store.buildReminderBatch("session-branch-change")
+    assert.ok(batch)
+    assert.deepEqual(batch.events.map((event) => event.eventId), ["3"])
+    store.close()
+  })
+
   test("global disable flag defaults to false and persists when toggled", () => {
     const store = createStore()
 

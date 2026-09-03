@@ -50,6 +50,12 @@ export class Router {
 				return this.ok({ registered: true, created });
 			}
 			case "ensureSessionControl": {
+				if (!this.store.hasActiveClient(request.payload.clientId)) {
+					return this.fail(
+						"CLIENT_NOT_FOUND",
+						`Unknown client: ${request.payload.clientId}`,
+					);
+				}
 				const { created, superseded } = this.store.ensureSessionControl(
 					request.payload,
 				);

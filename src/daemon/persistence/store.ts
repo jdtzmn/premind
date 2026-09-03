@@ -170,6 +170,11 @@ export class StateStore {
 		return (result.changes as number) > 0;
 	}
 
+	hasActiveClient(clientId: string, now = Date.now()) {
+		this.pruneExpiredClients(now);
+		return this.db.prepare(`SELECT 1 FROM client_leases WHERE client_id = ?`).get(clientId) !== undefined;
+	}
+
 	releaseClient(clientId: string) {
 		this.db
 			.prepare(`DELETE FROM client_leases WHERE client_id = ?`)
@@ -234,16 +239,53 @@ export class StateStore {
 		try {
 			const existing = this.getSession(payload.sessionId);
 			const status = payload.paused ? "paused" : "active";
+			const contextChanged =
+				existing !== undefined &&
+				(existing.repo !== payload.repo || existing.branch !== payload.branch);
+			const watcher = this.db
+				.prepare(
+					`SELECT pr_number FROM branch_watchers WHERE repo = :repo AND branch = :branch`,
+				)
+				.get({ repo: payload.repo, branch: payload.branch }) as {
+				pr_number: number | null;
+			} | undefined;
+			const attachedPrNumber = watcher?.pr_number ?? null;
+			const highWaterCursor =
+				attachedPrNumber === null
+					? 0
+					: ((this.db
+							.prepare(
+								`SELECT MAX(seq) AS maxSeq FROM pr_events WHERE repo = :repo AND pr_number = :prNumber`,
+							)
+							.get({
+								repo: payload.repo,
+								prNumber: attachedPrNumber,
+							}) as { maxSeq: number | null }).maxSeq ?? 0);
+			const prNumber =
+				existing && !contextChanged ? existing.pr_number : attachedPrNumber;
+			const cursor =
+				existing && !contextChanged
+					? existing.last_delivered_event_seq
+					: highWaterCursor;
+
 			if (existing) {
+				if (contextChanged) {
+					// Reminder batches belong to the prior PR and must not cross branches.
+					this.db
+						.prepare(`DELETE FROM reminder_batches WHERE session_id = ?`)
+						.run(payload.sessionId);
+				}
 				this.db
 					.prepare(
 						`UPDATE sessions
 						 SET client_id = :clientId,
 						     repo = :repo,
 						     branch = :branch,
+						     pr_number = :prNumber,
 						     is_primary = :isPrimary,
 						     status = :status,
 						     busy_state = :busyState,
+						     last_delivered_event_seq = :cursor,
 						     last_activity_at = :now,
 						     updated_at = :now
 						 WHERE session_id = :sessionId`,
@@ -253,32 +295,14 @@ export class StateStore {
 						sessionId: payload.sessionId,
 						repo: payload.repo,
 						branch: payload.branch,
+						prNumber,
 						busyState: payload.busyState,
 						isPrimary: payload.isPrimary ? 1 : 0,
 						status,
+						cursor,
 						now,
 					});
 			} else {
-				const watcher = this.db
-					.prepare(
-						`SELECT pr_number FROM branch_watchers WHERE repo = :repo AND branch = :branch`,
-					)
-					.get({ repo: payload.repo, branch: payload.branch }) as {
-						pr_number: number | null;
-					} | undefined;
-				const prNumber = watcher?.pr_number ?? null;
-				const cursor =
-					prNumber === null
-						? 0
-						: (this.db
-								.prepare(
-									`SELECT MAX(seq) AS maxSeq FROM pr_events WHERE repo = :repo AND pr_number = :prNumber`,
-								)
-								.get({
-									repo: payload.repo,
-									prNumber,
-								}) as { maxSeq: number | null })
-								.maxSeq ?? 0;
 				this.db
 					.prepare(
 						`INSERT INTO sessions (session_id, client_id, repo, branch, pr_number, is_primary, status, busy_state, last_delivered_event_seq, last_activity_at, created_at, updated_at)
@@ -289,8 +313,8 @@ export class StateStore {
 						sessionId: payload.sessionId,
 						repo: payload.repo,
 						branch: payload.branch,
-						busyState: payload.busyState,
 						prNumber,
+						busyState: payload.busyState,
 						isPrimary: payload.isPrimary ? 1 : 0,
 						status,
 						cursor,
