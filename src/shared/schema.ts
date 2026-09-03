@@ -95,6 +95,25 @@ export const sessionControlPayloadSchema = z
     sessionId: z.string().min(1),
   })
   .strict()
+
+export const activateWorktreePayloadSchema = z
+  .object({
+    sessionId: z.string().min(1),
+    path: z.string().min(1),
+  })
+  .strict()
+
+const subscriptionControlPayloadSchema = z
+  .object({
+    sessionId: z.string().min(1),
+    prNumber: z.number().int().positive(),
+    repo: z.string().min(1).optional(),
+  })
+  .strict()
+
+export const subscribePayloadSchema = subscriptionControlPayloadSchema
+export const unsubscribePayloadSchema = subscriptionControlPayloadSchema
+
 export const reminderEventSchema = z
   .object({
     eventId: z.string().min(1),
@@ -109,6 +128,10 @@ export const reminderBatchSchema = z
   .object({
     batchId: z.string().min(1),
     sessionId: z.string().min(1),
+    repo: z.string().min(1).optional(),
+    prNumber: z.number().int().positive().optional(),
+    subscriptionId: z.string().min(1).optional(),
+    source: z.enum(["automatic", "manual"]).optional(),
     reminderText: z.string().min(1),
     events: z.array(reminderEventSchema),
   })
@@ -168,6 +191,32 @@ export const debugStatusResponseSchema = z
           status: sessionStatusSchema,
           busyState: busyStateSchema,
           pendingReminderCount: z.number().int().nonnegative(),
+          worktreeBinding: z
+            .object({
+              root: z.string().min(1),
+              gitDir: z.string().min(1),
+              repo: z.string().min(1),
+              branch: z.string().min(1).nullable(),
+              headSha: z.string().min(1),
+              state: z.string().min(1),
+              updatedAt: z.number().int(),
+            })
+            .strict()
+            .nullable()
+            .optional(),
+          subscriptions: z
+            .array(
+              z
+                .object({
+                  repo: z.string().min(1),
+                  prNumber: z.number().int().positive(),
+                  source: z.enum(["automatic", "manual"]),
+                  state: z.enum(["active", "unsubscribed"]),
+                  pendingEventCount: z.number().int().nonnegative(),
+                })
+                .strict(),
+            )
+            .optional(),
         })
         .strict(),
     ),
@@ -186,6 +235,9 @@ export type EnsureSessionControlPayload = z.infer<
 export type UpdateSessionStatePayload = z.infer<typeof updateSessionStatePayloadSchema>
 export type UnregisterSessionPayload = z.infer<typeof unregisterSessionPayloadSchema>
 export type SessionControlPayload = z.infer<typeof sessionControlPayloadSchema>
+export type ActivateWorktreePayload = z.infer<typeof activateWorktreePayloadSchema>
+export type SubscribePayload = z.infer<typeof subscribePayloadSchema>
+export type UnsubscribePayload = z.infer<typeof unsubscribePayloadSchema>
 export type ReminderEvent = z.infer<typeof reminderEventSchema>
 export type ReminderBatch = z.infer<typeof reminderBatchSchema>
 export type AckReminderPayload = z.infer<typeof ackReminderPayloadSchema>

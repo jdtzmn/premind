@@ -8,6 +8,7 @@ import { AdaptiveSchedule } from "./watchers/adaptive-schedule.ts"
 import { PollScheduler } from "./watchers/poll-scheduler.ts"
 import { createDisableGatedTick } from "./watchers/disable-gate.ts"
 import { DetailFileWriter } from "./reminders/detail-files.ts"
+import { DaemonLifecycleRuntime } from "./lifecycle/daemon-lifecycle-runtime.ts"
 
 const logger = createLogger("daemon")
 
@@ -17,11 +18,7 @@ async function main() {
   logger.info("daemon starting", { pid: process.pid, logFile: PREMIND_DAEMON_LOG_PATH })
   const server = new IpcServer()
   const github = new GitHubClient()
-  const discoveryWatcher = new BranchDiscoveryWatcher(server.store, github)
-  // Adaptive per-PR scheduling: active PRs poll every 20s; quiet PRs stretch to
-  // 5 minutes. Default tiers in AdaptiveSchedule match the documented cadence.
-  const prSchedule = new AdaptiveSchedule()
-  const pullRequestWatcher = new PullRequestWatcher(server.store, github, { schedule: prSchedule })
+  const discoveryWatcher = new BranchDiscoveryWatcher(server.store, github, server.worktreeBindings)
 
   const recovery = server.store.recoverFromRestart()
   logger.info("startup recovery", {
@@ -33,10 +30,16 @@ async function main() {
     recoveredPrWatchers: recovery.recoveredPrWatchers,
   })
 
+  // Adaptive per-PR scheduling: active PRs poll every 20s; quiet PRs stretch to
+  // 5 minutes. The registry reconstructs canonical actors from SQLite here.
+  const prSchedule = new AdaptiveSchedule()
+  const pullRequestWatcher = new PullRequestWatcher(server.store, github, { schedule: prSchedule })
+
   // Reap sessions whose last_activity_at is older than the staleness threshold.
   // Runs once at startup to clean up any backlog carried across daemon restarts,
   // and periodically while the daemon is up.
   const startupReap = server.store.reapStaleSessions(PREMIND_SESSION_STALE_MS)
+  server.worktreeBindings.closeInactiveSessions()
   if (startupReap.reaped > 0 || startupReap.oldestAgeMs !== null) {
     logger.info("startup reap", {
       reaped: startupReap.reaped,
@@ -92,6 +95,7 @@ async function main() {
         resetAtMs: snapshot.resetAtMs,
       })
     } else if (snapshot.resource === "graphql") {
+      pullRequestWatcher.setRateLimitReset(snapshot.resetAtMs)
       prScheduler.setRateLimitReset(snapshot.resetAtMs)
       logger.warn("rate limit throttled; deferring pr poll", {
         resource: snapshot.resource,
@@ -106,6 +110,7 @@ async function main() {
 
   const reapInterval = setInterval(() => {
     const result = server.store.reapStaleSessions(PREMIND_SESSION_STALE_MS)
+    server.worktreeBindings.closeInactiveSessions()
     if (result.reaped > 0) {
       logger.info("reaped stale sessions", {
         reaped: result.reaped,
@@ -124,26 +129,29 @@ async function main() {
   }, STALENESS_SWEEP_INTERVAL_MS)
   if (typeof reapInterval.unref === "function") reapInterval.unref()
 
-  const shutdownCheck = setInterval(async () => {
-    if (!server.shouldShutdown()) return
-    clearInterval(shutdownCheck)
-    clearInterval(reapInterval)
-    discoveryScheduler.stop()
-    prScheduler.stop()
-    logger.info("graceful shutdown", { reason: "no_active_clients_or_sessions" })
-    await server.close()
-    process.exit(0)
-  }, PREMIND_IDLE_SHUTDOWN_GRACE_MS)
+  const lifecycle = new DaemonLifecycleRuntime({
+    hasDemand: () => server.hasDemand(),
+    graceMs: PREMIND_IDLE_SHUTDOWN_GRACE_MS,
+    onStopping: async (reason) => {
+      clearInterval(reapInterval)
+      discoveryScheduler.stop()
+      prScheduler.stop()
+      pullRequestWatcher.close()
+      logger.info("graceful shutdown", { reason })
+      await server.close()
+    },
+    onStopped: () => process.exit(0),
+    onError: (error) => {
+      logger.error("graceful shutdown failed", {
+        error: error instanceof Error ? error.message : String(error),
+      })
+      process.exit(1)
+    },
+  })
+  server.setDemandChangeListener(() => lifecycle.evaluateDemand())
+  lifecycle.start()
 
-  const cleanup = async () => {
-    clearInterval(shutdownCheck)
-    clearInterval(reapInterval)
-    discoveryScheduler.stop()
-    prScheduler.stop()
-    await server.close()
-    process.exit(0)
-  }
-
+  const cleanup = () => lifecycle.requestStop("signal")
   process.on("SIGINT", cleanup)
   process.on("SIGTERM", cleanup)
 }

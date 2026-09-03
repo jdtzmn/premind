@@ -96,8 +96,8 @@ describe("plugin packaging", () => {
 			"package files should include extensions",
 		);
 		assert.ok(
-			pkg.files?.includes("PI_PLAN.md"),
-			"package files should include PI_PLAN.md",
+			pkg.files?.includes("docs"),
+			"package files should include documentation",
 		);
 		assert.ok(
 			pkg.keywords?.includes("pi-package"),

@@ -68,7 +68,7 @@ type ToolDefinition = {
 	name: string;
 	execute: (
 		toolCallId: string,
-		params: Record<string, never>,
+		params: Record<string, unknown>,
 		signal?: AbortSignal,
 		onUpdate?: unknown,
 		ctx?: unknown,
@@ -213,6 +213,23 @@ const createClient = (
 			resumeSession: async (sessionId: string) => {
 				operations.push(`resumeSession:${sessionId}`);
 			},
+			activateWorktree: async (payload: { sessionId: string; path: string }) => {
+				operations.push(`activateWorktree:${payload.sessionId}:${payload.path}`);
+			},
+			subscribe: async (payload: {
+				sessionId: string;
+				prNumber: number;
+				repo?: string;
+			}) => {
+				operations.push(`subscribe:${payload.sessionId}:${payload.repo ?? "default"}:${payload.prNumber}`);
+			},
+			unsubscribe: async (payload: {
+				sessionId: string;
+				prNumber: number;
+				repo?: string;
+			}) => {
+				operations.push(`unsubscribe:${payload.sessionId}:${payload.repo ?? "default"}:${payload.prNumber}`);
+			},
 			updateSessionState: async (payload: {
 				sessionId: string;
 				busyState: string;
@@ -257,11 +274,17 @@ describe("premind Pi extension", () => {
 		assert.ok(mock.renderers.has("premind-reminder"));
 		assert.ok(mock.commands.has("premind:status"));
 		assert.ok(mock.commands.has("premind:prune"));
-		assert.ok(mock.commands.has("premind:pause"));
-		assert.ok(mock.commands.has("premind:resume"));
+		assert.ok(mock.commands.has("premind:activate-worktree"));
+		assert.ok(mock.commands.has("premind:subscribe"));
+		assert.ok(mock.commands.has("premind:unsubscribe"));
+		assert.equal(mock.commands.has("premind:pause"), false);
+		assert.equal(mock.commands.has("premind:resume"), false);
 		assert.ok(mock.commands.has("premind:flush"));
-		assert.ok(mock.tools.has("premind_pause"));
-		assert.ok(mock.tools.has("premind_resume"));
+		assert.equal(mock.tools.has("premind_pause"), false);
+		assert.equal(mock.tools.has("premind_resume"), false);
+		assert.ok(mock.tools.has("premind_activate_worktree"));
+		assert.ok(mock.tools.has("premind_subscribe"));
+		assert.ok(mock.tools.has("premind_unsubscribe"));
 		assert.ok(mock.tools.has("premind_status"));
 	});
 
@@ -342,6 +365,35 @@ describe("premind Pi extension", () => {
 		);
 	});
 
+	test("renders Pi status worktree and qualified subscriptions", () => {
+		assert.match(
+
+			renderPremindPiStatus({
+				...status,
+				sessions: [{
+					...status.sessions[0],
+					worktreeBinding: {
+						root: "/repo/.trees/pi",
+						gitDir: "/repo/.git/worktrees/pi",
+						repo: "owner/repo",
+						branch: "feature/pi",
+						headSha: "abc123",
+						state: "watching",
+						updatedAt: 1,
+					},
+					subscriptions: [{
+						repo: "other/repo",
+						prNumber: 456,
+						source: "manual",
+						state: "active",
+						pendingEventCount: 4,
+					}],
+				}],
+			}),
+			/worktree owner\/repo @ feature\/pi \(watching\) \| subscriptions other\/repo#456 \(manual\/active, pending 4\)/,
+		);
+	});
+
 	test("session_start registers the Pi session with repo and branch", async () => {
 		const mock = createMockPi();
 		const client = createClient();
@@ -369,6 +421,7 @@ describe("premind Pi extension", () => {
 		assert.deepEqual(client.operations, [
 			"registerClient:/tmp/project:pi-extension",
 			"registerSession:/tmp/session.jsonl:owner/repo:feature/pi",
+			"activateWorktree:/tmp/session.jsonl:/tmp/project",
 		]);
 		assert.deepEqual(statuses, [{ key: "premind", value: undefined }]);
 	});
@@ -425,6 +478,7 @@ describe("premind Pi extension", () => {
 		assert.deepEqual(client.operations, [
 			"registerClient:/tmp/project:pi-extension",
 			"registerSession:/tmp/session.jsonl:owner/repo:feature/pi",
+			"activateWorktree:/tmp/session.jsonl:/tmp/project",
 			"unregisterSession:/tmp/session.jsonl",
 			"release",
 		]);
@@ -546,6 +600,7 @@ describe("premind Pi extension", () => {
 		assert.deepEqual(client.operations, [
 			"registerClient:/tmp/project:pi-extension",
 			"registerSession:/tmp/session.jsonl:owner/repo:feature/pi",
+			"activateWorktree:/tmp/session.jsonl:/tmp/project",
 			"updateSessionState:/tmp/session.jsonl:busy",
 			"updateSessionState:/tmp/session.jsonl:idle",
 			"getPendingReminder:/tmp/session.jsonl",
@@ -611,7 +666,8 @@ describe("premind Pi extension", () => {
 		);
 	});
 
-	test("/premind:pause and /premind:resume control the current session", async () => {
+
+	test("worktree and subscription commands and tools target the current session", async () => {
 		const mock = createMockPi();
 		const client = createClient();
 		const notifications: Array<{ message: string; level: string }> = [];
@@ -620,58 +676,43 @@ describe("premind Pi extension", () => {
 			config: { statusPollIntervalMs: 0 },
 		})(mock.pi as never);
 
-		const pause = mock.commands.get("premind:pause");
-		const resume = mock.commands.get("premind:resume");
-		assert.ok(pause);
-		assert.ok(resume);
-		await pause.handler("", createCommandContext(notifications));
-		await resume.handler("", createCommandContext(notifications));
+		const activate = mock.commands.get("premind:activate-worktree");
+		const subscribe = mock.commands.get("premind:subscribe");
+		const unsubscribe = mock.commands.get("premind:unsubscribe");
+		const activateTool = mock.tools.get("premind_activate_worktree");
+		const subscribeTool = mock.tools.get("premind_subscribe");
+		const unsubscribeTool = mock.tools.get("premind_unsubscribe");
+		assert.ok(activate);
+		assert.ok(subscribe);
+		assert.ok(unsubscribe);
+		assert.ok(activateTool);
+		assert.ok(subscribeTool);
+		assert.ok(unsubscribeTool);
+
+		const ctx = createCommandContext(notifications);
+		await activate.handler("/tmp/other-worktree", ctx);
+		await subscribe.handler("42 owner/repo", ctx);
+		await unsubscribe.handler("42 owner/repo", ctx);
+		await activateTool.execute("tool-call-1", { path: "/tmp/tool-worktree" }, undefined, undefined, ctx);
+		await subscribeTool.execute("tool-call-2", { prNumber: 13 }, undefined, undefined, ctx);
+		await unsubscribeTool.execute("tool-call-3", { prNumber: 13 }, undefined, undefined, ctx);
 
 		assert.deepEqual(client.operations, [
-			"registerClient:/tmp/project:pi-extension",
-			"ensureSessionControl:/tmp/session.jsonl:true",
-			"registerClient:/tmp/project:pi-extension",
-			"ensureSessionControl:/tmp/session.jsonl:false",
+			"activateWorktree:/tmp/session.jsonl:/tmp/other-worktree",
+			"subscribe:/tmp/session.jsonl:owner/repo:42",
+			"unsubscribe:/tmp/session.jsonl:owner/repo:42",
+			"activateWorktree:/tmp/session.jsonl:/tmp/tool-worktree",
+			"subscribe:/tmp/session.jsonl:default:13",
+			"unsubscribe:/tmp/session.jsonl:default:13",
 		]);
 		assert.deepEqual(
 			notifications.map((notification) => notification.message),
-			["premind paused for this session.", "premind resumed for this session."],
+			[
+				"premind activated worktree /tmp/other-worktree.",
+				"premind subscribed to owner/repo#42.",
+				"premind unsubscribed from owner/repo#42.",
+			],
 		);
-	});
-
-	test("premind_pause and premind_resume tools control the current session", async () => {
-		const mock = createMockPi();
-		const client = createClient();
-		createPremindPiExtension({
-			createDaemonClient: () => client.client,
-			config: { statusPollIntervalMs: 0 },
-		})(mock.pi as never);
-
-		const pause = mock.tools.get("premind_pause");
-		const resume = mock.tools.get("premind_resume");
-		assert.ok(pause);
-		assert.ok(resume);
-		await pause.execute(
-			"tool-call-1",
-			{},
-			undefined,
-			undefined,
-			createCommandContext(),
-		);
-		await resume.execute(
-			"tool-call-2",
-			{},
-			undefined,
-			undefined,
-			createCommandContext(),
-		);
-
-		assert.deepEqual(client.operations, [
-			"registerClient:/tmp/project:pi-extension",
-			"ensureSessionControl:/tmp/session.jsonl:true",
-			"registerClient:/tmp/project:pi-extension",
-			"ensureSessionControl:/tmp/session.jsonl:false",
-		]);
 	});
 
 	test("/premind:flush reports when there is no pending reminder", async () => {

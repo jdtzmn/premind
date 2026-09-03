@@ -28,6 +28,15 @@ describe("premind plugin compatibility harness", () => {
       resumeSession: async (sessionId: string) => {
         operations.push(`resume:${sessionId}`)
       },
+      activateWorktree: async ({ sessionId, path }: { sessionId: string; path: string }) => {
+        operations.push(`activate:${sessionId}:${path}`)
+      },
+      subscribe: async ({ sessionId, prNumber, repo }: { sessionId: string; prNumber: number; repo?: string }) => {
+        operations.push(`subscribe:${sessionId}:${repo ?? "default"}:${prNumber}`)
+      },
+      unsubscribe: async ({ sessionId, prNumber, repo }: { sessionId: string; prNumber: number; repo?: string }) => {
+        operations.push(`unsubscribe:${sessionId}:${repo ?? "default"}:${prNumber}`)
+      },
       getPendingReminder: async (sessionId: string) => ({
         batch: {
           batchId: "batch-1",
@@ -103,14 +112,15 @@ describe("premind plugin compatibility harness", () => {
     assert.ok(registeredConfig.command, "config hook should register commands")
     const commands = registeredConfig.command as Record<string, { template: string; description: string }>
     assert.ok(commands["premind-status"], "should register premind-status command")
-    assert.ok(commands["premind-pause"], "should register premind-pause command")
-    assert.ok(commands["premind-resume"], "should register premind-resume command")
+    assert.equal(commands["premind-pause"], undefined)
+    assert.equal(commands["premind-resume"], undefined)
     assert.ok(commands["premind-disable"], "should register premind-disable command")
     assert.ok(commands["premind-enable"], "should register premind-enable command")
 
     // 2. Session creation triggers registration.
     await runtime.event({ event: { type: "session.created", properties: { sessionID: "session-1" } } })
     assert.ok(operations.includes("register:session-1"))
+    assert.ok(operations.includes("activate:session-1:/tmp/project"))
 
     // 3. session.idle event triggers reminder injection with immediate auto-confirm.
     await runtime.event({ event: { type: "session.idle", properties: { sessionID: "session-1" } } })
@@ -141,31 +151,6 @@ describe("premind plugin compatibility harness", () => {
     assert.ok(statusPrompt, "should have injected status response")
     assert.equal(statusPrompt.noReply, true, "status response should be noReply")
 
-    // 6. Slash command via chat.message: premind-pause.
-    const pauseMarker = commands["premind-pause"].template
-    try {
-      await runtime["chat.message"](
-        { sessionID: "session-1" },
-        { message: { parts: [{ type: "text", text: pauseMarker }] }, parts: [{ type: "text", text: pauseMarker }] },
-      )
-      assert.fail("expected throw for handled command")
-    } catch (error) {
-      assert.match((error as Error).message, /PREMIND_HANDLED/)
-    }
-    assert.ok(operations.includes("pause:session-1"))
-
-    // 7. Slash command via chat.message: premind-resume.
-    const resumeMarker = commands["premind-resume"].template
-    try {
-      await runtime["chat.message"](
-        { sessionID: "session-1" },
-        { message: { parts: [{ type: "text", text: resumeMarker }] }, parts: [{ type: "text", text: resumeMarker }] },
-      )
-      assert.fail("expected throw for handled command")
-    } catch (error) {
-      assert.match((error as Error).message, /PREMIND_HANDLED/)
-    }
-    assert.ok(operations.includes("resume:session-1"))
 
     // 7a. Slash command via chat.message: premind-disable.
     const disableMarker = commands["premind-disable"].template
@@ -195,8 +180,11 @@ describe("premind plugin compatibility harness", () => {
 
     // 8. Tools are registered and callable.
     assert.ok(runtime.tool.premind_status, "premind_status tool should exist")
-    assert.ok(runtime.tool.premind_pause, "premind_pause tool should exist")
-    assert.ok(runtime.tool.premind_resume, "premind_resume tool should exist")
+    assert.equal(runtime.tool.premind_pause, undefined)
+    assert.equal(runtime.tool.premind_resume, undefined)
+    assert.ok(runtime.tool.premind_activate_worktree, "premind_activate_worktree tool should exist")
+    assert.ok(runtime.tool.premind_subscribe, "premind_subscribe tool should exist")
+    assert.ok(runtime.tool.premind_unsubscribe, "premind_unsubscribe tool should exist")
     assert.ok(runtime.tool.premind_disable, "premind_disable tool should exist")
     assert.ok(runtime.tool.premind_enable, "premind_enable tool should exist")
     assert.ok(runtime.tool.premind_probe, "premind_probe tool should exist")
@@ -204,11 +192,27 @@ describe("premind plugin compatibility harness", () => {
     const toolStatusResult = await runtime.tool.premind_status.execute({}, { sessionID: "session-1" })
     assert.match(toolStatusResult, /premind status/)
 
-    const toolPauseResult = await runtime.tool.premind_pause.execute({}, { sessionID: "session-1" })
-    assert.match(toolPauseResult, /premind paused/)
 
-    const toolResumeResult = await runtime.tool.premind_resume.execute({}, { sessionID: "session-1" })
-    assert.match(toolResumeResult, /premind resumed/)
+    const toolActivateResult = await runtime.tool.premind_activate_worktree.execute(
+      { path: "/tmp/other-worktree" },
+      { sessionID: "session-1" },
+    )
+    assert.match(toolActivateResult, /activated worktree \/tmp\/other-worktree/)
+
+    const toolSubscribeResult = await runtime.tool.premind_subscribe.execute(
+      { prNumber: 13, repo: "acme/repo" },
+      { sessionID: "session-1" },
+    )
+    assert.match(toolSubscribeResult, /subscribed to acme\/repo#13/)
+
+    const toolUnsubscribeResult = await runtime.tool.premind_unsubscribe.execute(
+      { prNumber: 13, repo: "acme/repo" },
+      { sessionID: "session-1" },
+    )
+    assert.match(toolUnsubscribeResult, /unsubscribed from acme\/repo#13/)
+    assert.ok(operations.includes("activate:session-1:/tmp/other-worktree"))
+    assert.ok(operations.includes("subscribe:session-1:acme/repo:13"))
+    assert.ok(operations.includes("unsubscribe:session-1:acme/repo:13"))
 
     const toolDisableResult = await runtime.tool.premind_disable.execute({}, { sessionID: "session-1" })
     assert.match(toolDisableResult, /premind disabled globally/)

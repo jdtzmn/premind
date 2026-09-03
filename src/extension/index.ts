@@ -11,10 +11,13 @@ import { PremindDaemonClient } from "../plugin/daemon-client.ts";
 import { detectGitContext } from "../plugin/git-context.ts";
 import type {
 	AckReminderPayload,
+	ActivateWorktreePayload,
 	DebugStatusResponse,
 	EnsureSessionControlPayload,
 	RegisterSessionPayload,
 	ReminderBatch,
+	SubscribePayload,
+	UnsubscribePayload,
 } from "../shared/schema.ts";
 
 type PruneClosedSessionsResult = {
@@ -40,6 +43,11 @@ type DaemonClientLike = {
 	ensureSessionControl: (
 		payload: Omit<EnsureSessionControlPayload, "clientId">,
 	) => Promise<unknown>;
+	pauseSession: (sessionId: string) => Promise<unknown>;
+	resumeSession: (sessionId: string) => Promise<unknown>;
+	activateWorktree: (payload: ActivateWorktreePayload) => Promise<unknown>;
+	subscribe: (payload: SubscribePayload) => Promise<unknown>;
+	unsubscribe: (payload: UnsubscribePayload) => Promise<unknown>;
 	updateSessionState: (payload: {
 		sessionId: string;
 		busyState: "busy" | "idle";
@@ -73,8 +81,8 @@ export type PremindPiExtensionDependencies = {
 const STATUS_ERROR_PREFIX = "premind status failed";
 const PRUNE_ERROR_PREFIX = "premind prune failed";
 const FLUSH_ERROR_PREFIX = "premind flush failed";
-const PAUSE_ERROR_PREFIX = "premind pause failed";
-const RESUME_ERROR_PREFIX = "premind resume failed";
+const WORKTREE_ERROR_PREFIX = "premind worktree activation failed";
+const SUBSCRIPTION_ERROR_PREFIX = "premind subscription update failed";
 const SESSION_SOURCE = "pi-extension";
 const DEFAULT_HEARTBEAT_MS = 10_000;
 const DEFAULT_STATUS_POLL_INTERVAL_MS = 15_000;
@@ -171,7 +179,19 @@ export const renderPremindPiStatus = (status: DebugStatusResponse) => {
 	const header = `premind: ${activeLabel}`;
 	const sessions = status.sessions.map((session) => {
 		const pr = session.prNumber ? ` (PR #${session.prNumber})` : "";
-		return `- ${session.repo} @ ${session.branch}${pr} | ${session.status}/${session.busyState} | pending ${session.pendingReminderCount} | session ${formatSessionId(session.sessionId)}`;
+		const worktree = session.worktreeBinding
+			? ` | worktree ${session.worktreeBinding.repo} @ ${session.worktreeBinding.branch ?? "detached"} (${session.worktreeBinding.state})`
+			: "";
+		const subscriptions = (session.subscriptions ?? [])
+			.map(
+				(subscription) =>
+					`${subscription.repo}#${subscription.prNumber} (${subscription.source}/${subscription.state}, pending ${subscription.pendingEventCount})`,
+			)
+			.join(", ");
+		const subscriptionSummary = subscriptions
+			? ` | subscriptions ${subscriptions}`
+			: "";
+		return `- ${session.repo} @ ${session.branch}${pr} | ${session.status}/${session.busyState} | pending ${session.pendingReminderCount}${worktree}${subscriptionSummary} | session ${formatSessionId(session.sessionId)}`;
 	});
 	return [
 		header,
@@ -236,6 +256,20 @@ const getPiSessionId = (ctx: {
 	sessionManager?: { getSessionFile?: () => string | undefined };
 }) => ctx.sessionManager?.getSessionFile?.() ?? `pi:${ctx.cwd}`;
 
+const parseSubscriptionArguments = (args: string) => {
+	const [prNumberArg, repo, ...extra] = args.trim().split(/\s+/).filter(Boolean);
+	const prNumber = Number(prNumberArg);
+	if (
+		!prNumberArg ||
+		extra.length > 0 ||
+		!Number.isSafeInteger(prNumber) ||
+		prNumber < 1
+	) {
+		throw new Error("expected: <pr-number> [owner/repo]");
+	}
+	return { prNumber, ...(repo ? { repo } : {}) };
+};
+
 export const createPremindPiExtension = (
 	dependencies: PremindPiExtensionDependencies = {},
 ) => {
@@ -275,35 +309,6 @@ export const createPremindPiExtension = (
 			return result as PruneClosedSessionsResult;
 		};
 
-		const controlCurrentSession = async (
-			ctx: {
-				cwd: string;
-				sessionManager?: { getSessionFile?: () => string | undefined };
-			},
-			paused: boolean,
-		) => {
-			const generation = sessionGeneration;
-			const sessionId = currentSessionId ?? getPiSessionId(ctx);
-			const client = sessionClient ?? createDaemonClient();
-			const git = await detectGit(ctx.cwd);
-			await client.registerClient(ctx.cwd, SESSION_SOURCE);
-			if (generation !== sessionGeneration) {
-				throw new Error("Pi session changed before premind session control completed");
-			}
-			await client.ensureSessionControl({
-				sessionId,
-				repo: git.repo,
-				branch: git.branch,
-				isPrimary: true,
-				busyState: "idle",
-				paused,
-			});
-			if (generation !== sessionGeneration) {
-				throw new Error("Pi session changed before premind session control completed");
-			}
-			sessionClient = client;
-			currentSessionId = sessionId;
-		};
 
 		const setStatus = (
 			ctx: {
@@ -539,6 +544,10 @@ export const createPremindPiExtension = (
 					status: "active",
 					busyState: "idle",
 				});
+				await client.activateWorktree({
+					sessionId: currentSessionId,
+					path: ctx.cwd,
+				});
 				await refreshStatusbar(ctx, generation);
 				if (generation !== sessionGeneration) return;
 				startStatusPoll(ctx, generation);
@@ -628,37 +637,73 @@ export const createPremindPiExtension = (
 			},
 		});
 
-		pi.registerCommand("premind:pause", {
-			description: "Pause premind reminders for the current session",
-			handler: async (_args, ctx) => {
+		pi.registerCommand("premind:activate-worktree", {
+			description: "Activate a Git worktree for the current premind session",
+			handler: async (args, ctx) => {
+				const path = args.trim();
+				if (!path) {
+					ctx.ui.notify(`${WORKTREE_ERROR_PREFIX}: expected: <path>`, "error");
+					return;
+				}
 				try {
-					await controlCurrentSession(ctx, true);
-					setStatus(ctx, `${PR_ICON} paused`);
-					ctx.ui.notify("premind paused for this session.", "info");
+					await getClient().activateWorktree({
+						sessionId: currentSessionId ?? getPiSessionId(ctx),
+						path,
+					});
+					ctx.ui.notify(`premind activated worktree ${path}.`, "info");
 				} catch (error) {
 					ctx.ui.notify(
-						`${PAUSE_ERROR_PREFIX}: ${error instanceof Error ? error.message : String(error)}`,
+						`${WORKTREE_ERROR_PREFIX}: ${error instanceof Error ? error.message : String(error)}`,
 						"error",
 					);
 				}
 			},
 		});
 
-		pi.registerCommand("premind:resume", {
-			description: "Resume premind reminders for the current session",
-			handler: async (_args, ctx) => {
+		pi.registerCommand("premind:subscribe", {
+			description: "Subscribe to a pull request: <pr-number> [owner/repo]",
+			handler: async (args, ctx) => {
 				try {
-					await controlCurrentSession(ctx, false);
-					await refreshStatusbar(ctx);
-					ctx.ui.notify("premind resumed for this session.", "info");
+					const subscription = parseSubscriptionArguments(args);
+					await getClient().subscribe({
+						sessionId: currentSessionId ?? getPiSessionId(ctx),
+						...subscription,
+					});
+					ctx.ui.notify(
+						`premind subscribed to ${(subscription.repo ?? "active worktree")}#${subscription.prNumber}.`,
+						"info",
+					);
 				} catch (error) {
 					ctx.ui.notify(
-						`${RESUME_ERROR_PREFIX}: ${error instanceof Error ? error.message : String(error)}`,
+						`${SUBSCRIPTION_ERROR_PREFIX}: ${error instanceof Error ? error.message : String(error)}`,
 						"error",
 					);
 				}
 			},
 		});
+
+		pi.registerCommand("premind:unsubscribe", {
+			description: "Unsubscribe from a pull request: <pr-number> [owner/repo]",
+			handler: async (args, ctx) => {
+				try {
+					const subscription = parseSubscriptionArguments(args);
+					await getClient().unsubscribe({
+						sessionId: currentSessionId ?? getPiSessionId(ctx),
+						...subscription,
+					});
+					ctx.ui.notify(
+						`premind unsubscribed from ${(subscription.repo ?? "active worktree")}#${subscription.prNumber}.`,
+						"info",
+					);
+				} catch (error) {
+					ctx.ui.notify(
+						`${SUBSCRIPTION_ERROR_PREFIX}: ${error instanceof Error ? error.message : String(error)}`,
+						"error",
+					);
+				}
+			},
+		});
+
 
 		pi.registerCommand("premind:flush", {
 			description:
@@ -686,37 +731,59 @@ export const createPremindPiExtension = (
 			},
 		});
 
+
 		pi.registerTool({
-			name: "premind_pause",
-			label: "Premind Pause",
-			description:
-				"Pause premind PR reminders for the current session. Events still accumulate while paused.",
-			parameters: Type.Object({}),
-			async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
-				await controlCurrentSession(ctx, true);
+			name: "premind_activate_worktree",
+			label: "Premind Activate Worktree",
+			description: "Activate a Git worktree for the current premind session.",
+			promptSnippet: "Tell premind which Git worktree this session is actively using.",
+			promptGuidelines: [
+				"Call premind_activate_worktree whenever you begin working in a different linked or nested Git worktree than the session's startup directory, including before that branch has a pull request.",
+			],
+			parameters: Type.Object({ path: Type.String({ minLength: 1 }) }),
+			async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+				const sessionId = currentSessionId ?? getPiSessionId(ctx);
+				await getClient().activateWorktree({ sessionId, path: params.path });
 				return {
-					content: [
-						{ type: "text" as const, text: "premind paused for this session." },
-					],
+					content: [{ type: "text" as const, text: `premind activated worktree ${params.path}.` }],
 					details: {},
 				};
 			},
 		});
 
 		pi.registerTool({
-			name: "premind_resume",
-			label: "Premind Resume",
-			description: "Resume premind PR reminders for the current session.",
-			parameters: Type.Object({}),
-			async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
-				await controlCurrentSession(ctx, false);
+			name: "premind_subscribe",
+			label: "Premind Subscribe",
+			description: "Subscribe the current session to a pull request.",
+			parameters: Type.Object({
+				prNumber: Type.Integer({ minimum: 1 }),
+				repo: Type.Optional(Type.String({ minLength: 1 })),
+			}),
+			async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+				const sessionId = currentSessionId ?? getPiSessionId(ctx);
+				await getClient().subscribe({ sessionId, ...params });
+				const target = `${params.repo ?? "active worktree"}#${params.prNumber}`;
 				return {
-					content: [
-						{
-							type: "text" as const,
-							text: "premind resumed for this session.",
-						},
-					],
+					content: [{ type: "text" as const, text: `premind subscribed to ${target}.` }],
+					details: {},
+				};
+			},
+		});
+
+		pi.registerTool({
+			name: "premind_unsubscribe",
+			label: "Premind Unsubscribe",
+			description: "Unsubscribe the current session from a pull request.",
+			parameters: Type.Object({
+				prNumber: Type.Integer({ minimum: 1 }),
+				repo: Type.Optional(Type.String({ minLength: 1 })),
+			}),
+			async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+				const sessionId = currentSessionId ?? getPiSessionId(ctx);
+				await getClient().unsubscribe({ sessionId, ...params });
+				const target = `${params.repo ?? "active worktree"}#${params.prNumber}`;
+				return {
+					content: [{ type: "text" as const, text: `premind unsubscribed from ${target}.` }],
 					details: {},
 				};
 			},

@@ -6,11 +6,16 @@ import type { PremindResponse } from "../../shared/ipc.ts";
 import { PREMIND_SOCKET_PATH } from "../../shared/constants.ts";
 import { Router } from "./router.ts";
 import { StateStore } from "../persistence/store.ts";
+import { ReminderHandoffRegistry } from "../reminders/reminder-handoff-registry.ts";
+import { WorktreeBindingRegistry } from "../worktrees/worktree-binding-registry.ts";
 
 export class IpcServer {
 	private readonly logger = createLogger("daemon.ipc");
 	readonly store: StateStore;
+	readonly worktreeBindings: WorktreeBindingRegistry;
+	readonly reminderHandoffs: ReminderHandoffRegistry;
 	private readonly router: Router;
+	private demandChangeListener: () => void = () => {};
 	private readonly server = net.createServer((socket) => {
 		let buffer = "";
 
@@ -22,17 +27,30 @@ export class IpcServer {
 				const line = buffer.slice(0, newlineIndex).trim();
 				buffer = buffer.slice(newlineIndex + 1);
 				if (line.length > 0) {
-					const response = this.handleLine(line);
-					socket.write(`${JSON.stringify(response)}\n`);
+					void this.handleLine(line).then((response) => {
+						socket.write(`${JSON.stringify(response)}\n`);
+					});
 				}
 				newlineIndex = buffer.indexOf("\n");
 			}
 		});
 	});
 
-	constructor(store = new StateStore()) {
+	constructor(
+		store = new StateStore(),
+		worktreeBindings = new WorktreeBindingRegistry(store),
+		reminderHandoffs = new ReminderHandoffRegistry(store),
+	) {
 		this.store = store;
-		this.router = new Router(store);
+		this.worktreeBindings = worktreeBindings;
+		this.reminderHandoffs = reminderHandoffs;
+		this.router = new Router(
+			store,
+			undefined,
+			worktreeBindings,
+			reminderHandoffs,
+			() => this.demandChangeListener(),
+		);
 	}
 
 	async listen(socketPath = PREMIND_SOCKET_PATH) {
@@ -52,16 +70,26 @@ export class IpcServer {
 			});
 		});
 		if (fs.existsSync(socketPath)) fs.rmSync(socketPath);
+		this.reminderHandoffs.close();
+		this.worktreeBindings.close();
 		this.store.close();
 	}
 
-	shouldShutdown() {
-		return !this.router.hasActiveLeases() && !this.router.hasActiveSessions();
+	setDemandChangeListener(listener: () => void) {
+		this.demandChangeListener = listener;
 	}
-	private handleLine(line: string): PremindResponse {
+
+	hasDemand(now = Date.now()) {
+		return this.router.hasDaemonDemand(now);
+	}
+
+	shouldShutdown(now = Date.now()) {
+		return !this.hasDemand(now);
+	}
+	private async handleLine(line: string): Promise<PremindResponse> {
 		try {
 			const request = requestSchema.parse(JSON.parse(line));
-			return this.router.handle(request);
+			return await this.router.handle(request);
 		} catch (error) {
 			this.logger.warn("failed to handle request", {
 				error: error instanceof Error ? error.message : String(error),

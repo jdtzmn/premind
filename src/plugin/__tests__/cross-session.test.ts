@@ -30,6 +30,9 @@ const makeScenario = async (options: {
     unregisterSession: async () => undefined,
     pauseSession: async () => undefined,
     resumeSession: async () => undefined,
+    activateWorktree: async () => undefined,
+    subscribe: async () => undefined,
+    unsubscribe: async () => undefined,
     getPendingReminder: async (sessionId: string) => ({ batch: pendingBatches[sessionId] ?? null }),
     ackReminder: async ({ batchId, state, sessionId }: { batchId: string; state: string; sessionId: string }) => {
       ackStates.push(`${sessionId}:${state}`)

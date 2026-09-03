@@ -39,6 +39,13 @@ const makeReattachingDaemon = (knownSessionIds: Set<string> = new Set()) => {
     resumeSession: async (sessionId: string) => {
       requireKnown(sessionId, "resume")
     },
+    activateWorktree: async ({ sessionId }: { sessionId: string }) => {
+      requireKnown(sessionId, "activate")
+    },
+    subscribe: async ({ sessionId }: { sessionId: string }) => {
+		requireKnown(sessionId, "subscribe")
+	},
+    unsubscribe: async () => undefined,
     getPendingReminder: async (_sessionId: string) => ({ batch: null }),
     ackReminder: async () => undefined,
     setGlobalDisabled: async (disabled: boolean) => ({ disabled }),
@@ -112,11 +119,12 @@ describe("reactive session re-attach", () => {
 
     // Expected sequence:
     // 1. first busy update fails (SESSION_NOT_FOUND)
-    // 2. withReattach calls registerSession
+    // 2. withReattach registers and activates the worktree
     // 3. retry the busy update — succeeds
     assert.deepEqual(daemon._operations, [
       "update:busy:resumed-session",
       "register:resumed-session",
+      "activate:resumed-session",
       "update:busy:resumed-session",
     ])
   })
@@ -130,6 +138,7 @@ describe("reactive session re-attach", () => {
     assert.deepEqual(daemon._operations, [
       "update:idle:resumed-session",
       "register:resumed-session",
+      "activate:resumed-session",
       "update:idle:resumed-session",
     ])
   })
@@ -148,6 +157,7 @@ describe("reactive session re-attach", () => {
     assert.deepEqual(daemon._operations, [
       "update:busy:resumed-session",
       "register:resumed-session",
+      "activate:resumed-session",
       "update:busy:resumed-session",
     ])
   })
@@ -182,19 +192,21 @@ describe("reactive session re-attach", () => {
     assert.equal(daemon._knownSessionIds.size, 0, "child session must not be registered")
   })
 
-  test("/premind-pause on unknown session re-attaches and pauses", async () => {
+  test("premind_subscribe on an unknown session re-attaches before subscribing", async () => {
     const daemon = makeReattachingDaemon(new Set())
     const runtime = await makePlugin(daemon)
 
-    // Invoke the pause command via the tool to bypass the chat.message marker flow.
-    const result = await runtime.tool.premind_pause.execute({}, { sessionID: "resumed-session" })
-    assert.match(result, /premind paused/)
+    const result = await runtime.tool.premind_subscribe.execute(
+      { prNumber: 13, repo: "acme/repo" },
+      { sessionID: "resumed-session" },
+    )
+    assert.match(result, /subscribed to acme\/repo#13/)
 
-    // Sequence: pause fails, re-attach, pause retried successfully.
     assert.deepEqual(daemon._operations, [
-      "pause:resumed-session",
+      "subscribe:resumed-session",
       "register:resumed-session",
-      "pause:resumed-session",
+      "activate:resumed-session",
+      "subscribe:resumed-session",
     ])
   })
 
@@ -285,6 +297,9 @@ describe("NotFoundError handling", () => {
       },
       pauseSession: async () => undefined,
       resumeSession: async () => undefined,
+      activateWorktree: async () => undefined,
+      subscribe: async () => undefined,
+      unsubscribe: async () => undefined,
       getPendingReminder: async (sessionId: string) => ({
         batch: batchAvailable
           ? {
@@ -403,6 +418,9 @@ describe("attachSession skips nonexistent sessions", () => {
       unregisterSession: async (sessionId: string) => { operations.push(`unregister:${sessionId}`) },
       pauseSession: async () => undefined,
       resumeSession: async () => undefined,
+      activateWorktree: async () => undefined,
+      subscribe: async () => undefined,
+      unsubscribe: async () => undefined,
       getPendingReminder: async () => ({ batch: null }),
       ackReminder: async () => undefined,
       setGlobalDisabled: async (d: boolean) => ({ disabled: d }),
@@ -491,6 +509,9 @@ describe("chat.message session registration", () => {
       unregisterSession: async () => undefined,
       pauseSession: async () => undefined,
       resumeSession: async () => undefined,
+      activateWorktree: async () => undefined,
+      subscribe: async () => undefined,
+      unsubscribe: async () => undefined,
       getPendingReminder: async () => ({ batch: null }),
       ackReminder: async () => undefined,
       setGlobalDisabled: async (d: boolean) => ({ disabled: d }),
@@ -569,6 +590,9 @@ describe("child session caching", () => {
       unregisterSession: async (sessionId: string) => { daemonCalls.push(`unregister:${sessionId}`) },
       pauseSession: async () => undefined,
       resumeSession: async () => undefined,
+      activateWorktree: async () => undefined,
+      subscribe: async () => undefined,
+      unsubscribe: async () => undefined,
       getPendingReminder: async () => ({ batch: null }),
       ackReminder: async () => undefined,
       setGlobalDisabled: async (d: boolean) => ({ disabled: d }),

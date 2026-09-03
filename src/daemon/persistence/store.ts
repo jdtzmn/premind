@@ -5,7 +5,9 @@ import { randomUUID } from "node:crypto";
 import {
 	PREMIND_CLIENT_LEASE_TTL_MS,
 	PREMIND_DB_PATH,
+	PREMIND_PR_STREAM_RETENTION_MS,
 	PREMIND_STATE_DIR,
+	PREMIND_SUBSCRIPTION_RETENTION_MS,
 } from "../../shared/constants.ts";
 import type {
 	AckReminderPayload,
@@ -21,6 +23,8 @@ import type {
 	PullRequestSnapshot,
 } from "../github/types.ts";
 import { DetailFileWriter } from "../reminders/detail-files.ts";
+import { createReminderHandoffActor, eventForReminderState, type ReminderHandoffState } from "../reminders/reminder-handoff-machine.ts";
+import type { PrWatcherState } from "../watchers/pr-watcher-machine.ts";
 
 type SessionRow = {
 	session_id: string;
@@ -35,13 +39,72 @@ type SessionRow = {
 	last_activity_at: number;
 };
 
+export type SubscriptionSource = "automatic" | "manual";
+export type SubscriptionState = "active" | "unsubscribed";
+
+export type PrWatcherRecord = {
+	repo: string;
+	prNumber: number;
+	state: PrWatcherState;
+	activeSubscriberCount: number;
+	lastCheckedAt: number | null;
+	idleDeadlineAt: number | null;
+	terminalAt: number | null;
+	nextEligiblePollAt: number | null;
+	consecutiveFailures: number;
+	lastFailureAt: number | null;
+	lastFailureMessage: string | null;
+	rateLimitResetAt: number | null;
+	createdAt: number;
+	updatedAt: number;
+};
+
+export type PrStreamPruneResult = {
+	events: number;
+	snapshots: number;
+	watchers: number;
+	subscriptions: number;
+};
+
+export type WorktreeBinding = {
+	sessionId: string;
+	root: string;
+	gitDir: string;
+	repo: string;
+	branch: string | null;
+	headSha: string;
+	state: string;
+	updatedAt: number;
+};
+
+export type SessionSubscription = {
+	subscriptionId: string;
+	sessionId: string;
+	repo: string;
+	prNumber: number;
+	source: SubscriptionSource;
+	state: SubscriptionState;
+	lastDeliveredEventSeq: number;
+	updatedAt: number;
+};
+
 type ReminderRow = {
 	batch_id: string;
 	session_id: string;
+	subscription_id: string | null;
 	reminder_text: string;
 	events_json: string;
-	state: "built" | "handed_off" | "confirmed" | "failed";
+	state: ReminderHandoffState;
 	max_event_seq: number | null;
+	repo?: string | null;
+	pr_number?: number | null;
+	source?: SubscriptionSource | null;
+};
+
+export type ReminderBatchRecord = Omit<ReminderBatch, "subscriptionId"> & {
+	state: ReminderHandoffState;
+	subscriptionId: string | null;
+	maxEventSeq: number | null;
 };
 
 type EventRow = {
@@ -82,6 +145,21 @@ export class StateStore {
 		this.db.close();
 	}
 
+	transaction<T>(operation: () => T): T {
+		// SQLite resolves duplicate savepoint names to the most recently opened one,
+		// which makes this safe for nested store operations without dynamic SQL.
+		this.db.exec("SAVEPOINT premind_transaction");
+		try {
+			const result = operation();
+			this.db.exec("RELEASE premind_transaction");
+			return result;
+		} catch (error) {
+			this.db.exec("ROLLBACK TO premind_transaction");
+			this.db.exec("RELEASE premind_transaction");
+			throw error;
+		}
+	}
+
 	registerClient(clientId: string, metadata: ClientMetadata, now = Date.now()) {
 		const expiresAt = now + PREMIND_CLIENT_LEASE_TTL_MS;
 		this.db
@@ -112,33 +190,15 @@ export class StateStore {
 		// so all leases from it are stale regardless of expiry.
 		const deletedClients = this.db.prepare(`DELETE FROM client_leases`).run();
 
-		// Clear any in-flight reminder batches that were handed_off but never confirmed.
-		// They'll be rebuilt from the event log on next idle.
+		// A crash leaves handed-off delivery uncertain. Preserve the durable batch
+		// and its cursor, but move it through the valid failure transition so the
+		// handoff registry can explicitly retry it after reconstruction.
 		const resetBatches = this.db
-			.prepare(`DELETE FROM reminder_batches WHERE state = 'handed_off'`)
-			.run();
-
-		// Deduplicate active sessions: keep only the most-recently-updated session
-		// per (repo, branch) and close the rest. Without this, accumulated duplicate
-		// sessions from prior runs are recovered as-is and never get superseded
-		// (opencode doesn't re-emit session.created on reconnect, so registerSession
-		// never fires for them and the new session's supersession logic can't run).
-		const deduped = this.db
-			.prepare(`
-      UPDATE sessions
-      SET status = 'closed', updated_at = :now
-      WHERE status = 'active'
-        AND session_id NOT IN (
-          SELECT session_id FROM sessions AS s2
-          WHERE s2.repo = sessions.repo
-            AND s2.branch = sessions.branch
-            AND s2.status = 'active'
-          ORDER BY s2.updated_at DESC
-          LIMIT 1
-        )
-    `)
+			.prepare(
+				`UPDATE reminder_batches SET state = 'failed', updated_at = :now
+				 WHERE state = 'handed_off'`,
+			)
 			.run({ now });
-		if ((deduped.changes as number) > 0) this.refreshWatcherCounts(now);
 
 		// Count what we're recovering.
 		const sessions = this.countActiveSessions();
@@ -154,7 +214,8 @@ export class StateStore {
 		return {
 			prunedClients: deletedClients.changes as number,
 			resetBatches: resetBatches.changes as number,
-			dedupedSessions: deduped.changes as number,
+			// Retained for protocol compatibility. Same-branch sessions are independent consumers.
+			dedupedSessions: 0,
 			recoveredSessions: sessions,
 			recoveredBranchWatchers: branchWatchers,
 			recoveredPrWatchers: prWatchers,
@@ -189,10 +250,11 @@ export class StateStore {
 		payload: RegisterSessionPayload,
 		now = Date.now(),
 	): { created: boolean; superseded: number } {
-		const existing = this.getSession(payload.sessionId);
-		this.db
-			.prepare(
-				`
+		return this.transaction(() => {
+			const existing = this.getSession(payload.sessionId);
+			this.db
+				.prepare(
+					`
           INSERT INTO sessions (session_id, client_id, repo, branch, pr_number, is_primary, status, busy_state, last_delivered_event_seq, last_activity_at, created_at, updated_at)
           VALUES (:sessionId, :clientId, :repo, :branch, NULL, :isPrimary, :status, :busyState, 0, :now, :now, :now)
           ON CONFLICT(session_id) DO UPDATE SET
@@ -205,25 +267,15 @@ export class StateStore {
             last_activity_at = excluded.last_activity_at,
             updated_at = excluded.updated_at
         `,
-			)
-			.run({
-				...payload,
-				isPrimary: payload.isPrimary ? 1 : 0,
-				now,
-			});
-		this.touchBranchWatcher(payload.repo, payload.branch, now);
-
-		// Only one active premind session per (repo, branch) — close any pre-existing
-		// sessions on this branch so they stop receiving delivery and drop out of
-		// watchers/status. The new session becomes the sole active one.
-		const superseded = this.closeSupersededSessions(
-			payload.repo,
-			payload.branch,
-			payload.sessionId,
-			now,
-		);
-
-		return { created: !existing, superseded };
+				)
+				.run({
+					...payload,
+					isPrimary: payload.isPrimary ? 1 : 0,
+					now,
+				});
+			this.touchBranchWatcher(payload.repo, payload.branch, now);
+			return { created: !existing, superseded: 0 };
+		});
 	}
 
 	/**
@@ -274,6 +326,7 @@ export class StateStore {
 					this.db
 						.prepare(`DELETE FROM reminder_batches WHERE session_id = ?`)
 						.run(payload.sessionId);
+					this.deactivateAutomaticSubscriptions(payload.sessionId, now);
 				}
 				this.db
 					.prepare(
@@ -322,39 +375,21 @@ export class StateStore {
 					});
 			}
 
+			if (attachedPrNumber !== null) {
+				this.baselineAutomaticSubscription({
+					sessionId: payload.sessionId,
+					repo: payload.repo,
+					prNumber: attachedPrNumber,
+				}, now);
+			}
 			this.touchBranchWatcher(payload.repo, payload.branch, now);
-			const superseded = this.closeSupersededSessions(
-				payload.repo,
-				payload.branch,
-				payload.sessionId,
-				now,
-			);
 			this.db.exec("COMMIT");
-			return { created: !existing, superseded };
+			// Preserve the main-compatible response shape without closing peer sessions.
+			return { created: !existing, superseded: 0 };
 		} catch (error) {
 			this.db.exec("ROLLBACK");
 			throw error;
 		}
-	}
-
-	/**
-	 * Marks all non-closed sessions on (repo, branch) other than exceptSessionId
-	 * as closed. Returns the number of sessions closed.
-	 */
-	closeSupersededSessions(
-		repo: string,
-		branch: string,
-		exceptSessionId: string,
-		now = Date.now(),
-	): number {
-		const result = this.db
-			.prepare(
-				`UPDATE sessions SET status = 'closed', updated_at = :now
-         WHERE repo = :repo AND branch = :branch AND session_id != :exceptSessionId AND status != 'closed'`,
-			)
-			.run({ repo, branch, exceptSessionId, now });
-		if ((result.changes as number) > 0) this.refreshWatcherCounts(now);
-		return result.changes as number;
 	}
 
 	updateSessionState(payload: UpdateSessionStatePayload, now = Date.now()) {
@@ -365,10 +400,8 @@ export class StateStore {
 			repo: payload.repo ?? current.repo,
 			branch: payload.branch ?? current.branch,
 			busyState: payload.busyState ?? current.busy_state,
-			// If the session was closed by supersession but activity is now arriving
-			// (e.g. user resumed via `opencode --continue`), revive it to active so
-			// delivery can resume. A subsequent registerSession from the same or a
-			// newer session will re-apply supersession if needed.
+			// If a previously closed session becomes active again (for example via
+			// `opencode --continue`), revive it so its independent delivery can resume.
 			status: revived ? "active" : (payload.status ?? current.status),
 		};
 
@@ -401,6 +434,292 @@ export class StateStore {
 		this.db
 			.prepare(`DELETE FROM reminder_batches WHERE session_id = ?`)
 			.run(sessionId);
+	}
+
+	upsertWorktreeBinding(
+		binding: Omit<WorktreeBinding, "updatedAt">,
+		now = Date.now(),
+	): WorktreeBinding {
+		if (!this.getSession(binding.sessionId)) {
+			throw new Error(`Unknown session: ${binding.sessionId}`);
+		}
+		this.db
+			.prepare(
+				`
+				INSERT INTO worktree_bindings (session_id, root, git_dir, repo, branch, head_sha, state, created_at, updated_at)
+				VALUES (:sessionId, :root, :gitDir, :repo, :branch, :headSha, :state, :now, :now)
+				ON CONFLICT(session_id) DO UPDATE SET
+					root = excluded.root,
+					git_dir = excluded.git_dir,
+					repo = excluded.repo,
+					branch = excluded.branch,
+					head_sha = excluded.head_sha,
+					state = excluded.state,
+					updated_at = excluded.updated_at
+				`,
+			)
+			.run({ ...binding, now });
+		this.refreshWatcherCounts(now);
+		return this.getWorktreeBinding(binding.sessionId)!;
+	}
+
+	getWorktreeBinding(sessionId: string): WorktreeBinding | null {
+		const row = this.db
+			.prepare(`SELECT * FROM worktree_bindings WHERE session_id = ?`)
+			.get(sessionId) as {
+				session_id: string;
+				root: string;
+				git_dir: string;
+				repo: string;
+				branch: string | null;
+				head_sha: string;
+				state: string;
+				updated_at: number;
+			} | undefined;
+		if (!row) return null;
+		return {
+			sessionId: row.session_id,
+			root: row.root,
+			gitDir: row.git_dir,
+			repo: row.repo,
+			branch: row.branch,
+			headSha: row.head_sha,
+			state: row.state,
+			updatedAt: row.updated_at,
+		};
+	}
+
+	activateWorktree(
+		binding: Omit<WorktreeBinding, "updatedAt">,
+		now = Date.now(),
+	): WorktreeBinding {
+		return this.transaction(() => {
+			const activeBinding = this.upsertWorktreeBinding(binding, now);
+			this.deactivateAutomaticSubscriptions(binding.sessionId, now);
+			if (binding.branch) this.ensureBranchWatcher(binding.repo, binding.branch, now);
+			return activeBinding;
+		});
+	}
+
+	upsertSubscription(
+		input: { sessionId: string; repo: string; prNumber: number; source: SubscriptionSource },
+		now = Date.now(),
+	): SessionSubscription {
+		return this.transaction(() => {
+			if (!this.getSession(input.sessionId)) {
+				throw new Error(`Unknown session: ${input.sessionId}`);
+			}
+			this.db
+				.prepare(
+					`
+					INSERT INTO session_subscriptions (subscription_id, session_id, repo, pr_number, source, state, last_delivered_event_seq, created_at, updated_at)
+					VALUES (:subscriptionId, :sessionId, :repo, :prNumber, :source, 'active', 0, :now, :now)
+					ON CONFLICT(session_id, repo, pr_number) DO UPDATE SET
+						source = CASE WHEN session_subscriptions.source = 'manual' OR excluded.source = 'manual' THEN 'manual' ELSE 'automatic' END,
+						state = 'active',
+						updated_at = excluded.updated_at
+					`,
+				)
+				.run({ ...input, subscriptionId: randomUUID(), now });
+			this.touchPrWatcher(input.repo, input.prNumber, now);
+			return this.getSubscription(input.sessionId, input.repo, input.prNumber)!;
+		});
+	}
+
+	getSubscription(sessionId: string, repo: string, prNumber: number): SessionSubscription | null {
+		const row = this.db
+			.prepare(`SELECT * FROM session_subscriptions WHERE session_id = ? AND repo = ? AND pr_number = ?`)
+			.get(sessionId, repo, prNumber) as {
+				subscription_id: string;
+				session_id: string;
+				repo: string;
+				pr_number: number;
+				source: SubscriptionSource;
+				state: SubscriptionState;
+				last_delivered_event_seq: number;
+				updated_at: number;
+			} | undefined;
+		return row ? this.toSubscription(row) : null;
+	}
+
+	getSubscriptionById(subscriptionId: string): SessionSubscription | null {
+		const row = this.db
+			.prepare(`SELECT * FROM session_subscriptions WHERE subscription_id = ?`)
+			.get(subscriptionId) as {
+				subscription_id: string;
+				session_id: string;
+				repo: string;
+				pr_number: number;
+				source: SubscriptionSource;
+				state: SubscriptionState;
+				last_delivered_event_seq: number;
+				updated_at: number;
+			} | undefined;
+		return row ? this.toSubscription(row) : null;
+	}
+
+	private toSubscription(row: {
+		subscription_id: string;
+		session_id: string;
+		repo: string;
+		pr_number: number;
+		source: SubscriptionSource;
+		state: SubscriptionState;
+		last_delivered_event_seq: number;
+		updated_at: number;
+	}): SessionSubscription {
+		return {
+			subscriptionId: row.subscription_id,
+			sessionId: row.session_id,
+			repo: row.repo,
+			prNumber: row.pr_number,
+			source: row.source,
+			state: row.state,
+			lastDeliveredEventSeq: row.last_delivered_event_seq,
+			updatedAt: row.updated_at,
+		};
+	}
+
+	listSessionSubscriptions(sessionId: string, state?: SubscriptionState): SessionSubscription[] {
+		const statement = state
+			? this.db.prepare(`SELECT * FROM session_subscriptions WHERE session_id = :sessionId AND state = :state ORDER BY created_at ASC`)
+			: this.db.prepare(`SELECT * FROM session_subscriptions WHERE session_id = :sessionId ORDER BY created_at ASC`);
+		const rows = (state
+			? statement.all({ sessionId, state })
+			: statement.all({ sessionId })) as Array<{
+			subscription_id: string; session_id: string; repo: string; pr_number: number; source: SubscriptionSource; state: SubscriptionState; last_delivered_event_seq: number; updated_at: number;
+		}>;
+		return rows.map((row) => ({
+			subscriptionId: row.subscription_id, sessionId: row.session_id, repo: row.repo, prNumber: row.pr_number, source: row.source, state: row.state, lastDeliveredEventSeq: row.last_delivered_event_seq, updatedAt: row.updated_at,
+		}));
+	}
+
+	listActiveSubscriptionsForPr(repo: string, prNumber: number): SessionSubscription[] {
+		const rows = this.db
+			.prepare(
+				`SELECT session_subscriptions.*
+				 FROM session_subscriptions
+				 INNER JOIN sessions ON sessions.session_id = session_subscriptions.session_id
+				 WHERE session_subscriptions.repo = :repo
+				   AND session_subscriptions.pr_number = :prNumber
+				   AND session_subscriptions.state = 'active'
+				   AND sessions.status != 'closed'
+				 ORDER BY session_subscriptions.created_at ASC`,
+			)
+			.all({ repo, prNumber }) as Array<{
+				subscription_id: string; session_id: string; repo: string; pr_number: number; source: SubscriptionSource; state: SubscriptionState; last_delivered_event_seq: number; updated_at: number;
+			}>;
+		return rows.map((row) => ({
+			subscriptionId: row.subscription_id, sessionId: row.session_id, repo: row.repo, prNumber: row.pr_number, source: row.source, state: row.state, lastDeliveredEventSeq: row.last_delivered_event_seq, updatedAt: row.updated_at,
+		}));
+	}
+
+	baselineAutomaticSubscription(
+		input: { sessionId: string; repo: string; prNumber: number },
+		now = Date.now(),
+	): SessionSubscription {
+		return this.transaction(() => {
+			const existing = this.getSubscription(input.sessionId, input.repo, input.prNumber);
+			if (existing?.source === "manual" || existing?.state === "active") return existing;
+
+			const row = this.db
+				.prepare(`SELECT MAX(seq) AS max_seq FROM pr_events WHERE repo = :repo AND pr_number = :prNumber`)
+				.get({ repo: input.repo, prNumber: input.prNumber }) as { max_seq: number | null } | undefined;
+			const cursor = row?.max_seq ?? 0;
+			const subscriptionId = existing?.subscriptionId ?? randomUUID();
+			this.db
+				.prepare(
+					`INSERT INTO session_subscriptions (subscription_id, session_id, repo, pr_number, source, state, last_delivered_event_seq, created_at, updated_at)
+					 VALUES (:subscriptionId, :sessionId, :repo, :prNumber, 'automatic', 'active', :cursor, :now, :now)
+					 ON CONFLICT(session_id, repo, pr_number) DO UPDATE SET
+					   state = 'active',
+					   last_delivered_event_seq = :cursor,
+					   updated_at = :now`,
+				)
+				.run({ ...input, subscriptionId, cursor, now });
+			this.touchPrWatcher(input.repo, input.prNumber, now);
+			return this.getSubscription(input.sessionId, input.repo, input.prNumber)!;
+		});
+	}
+
+	unsubscribe(sessionId: string, repo: string, prNumber: number, now = Date.now()): boolean {
+		return this.transaction(() => {
+			const input = { sessionId, repo, prNumber, now };
+			this.db
+				.prepare(
+					`DELETE FROM reminder_batches
+					 WHERE subscription_id IN (
+					   SELECT subscription_id FROM session_subscriptions
+					   WHERE session_id = :sessionId AND repo = :repo AND pr_number = :prNumber
+					 )`,
+				)
+				.run({ sessionId, repo, prNumber });
+			const result = this.db
+				.prepare(`UPDATE session_subscriptions SET state = 'unsubscribed', updated_at = :now WHERE session_id = :sessionId AND repo = :repo AND pr_number = :prNumber AND state = 'active'`)
+				.run(input);
+			if ((result.changes as number) > 0) this.refreshWatcherCounts(now);
+			return (result.changes as number) > 0;
+		});
+	}
+
+	deactivateAutomaticSubscriptions(sessionId: string, now = Date.now()) {
+		return this.transaction(() => {
+			this.db
+				.prepare(
+					`DELETE FROM reminder_batches
+					 WHERE subscription_id IN (
+					   SELECT subscription_id FROM session_subscriptions
+					   WHERE session_id = :sessionId AND source = 'automatic'
+					 )`,
+				)
+				.run({ sessionId });
+			const result = this.db
+				.prepare(`UPDATE session_subscriptions SET state = 'unsubscribed', updated_at = :now WHERE session_id = :sessionId AND source = 'automatic' AND state = 'active'`)
+				.run({ sessionId, now });
+			if ((result.changes as number) > 0) this.refreshWatcherCounts(now);
+			return result.changes as number;
+		});
+	}
+
+	recordAutomaticSubscriptionOptOut(
+		input: { sessionId: string; gitDir: string; repo: string; branch: string; prNumber: number },
+		now = Date.now(),
+	) {
+		this.db
+			.prepare(
+				`INSERT OR IGNORE INTO automatic_subscription_opt_outs (session_id, git_dir, repo, branch, pr_number, created_at)
+				 VALUES (:sessionId, :gitDir, :repo, :branch, :prNumber, :now)`,
+			)
+			.run({ ...input, now });
+	}
+
+	hasAutomaticSubscriptionOptOut(input: { sessionId: string; gitDir: string; repo: string; branch: string; prNumber: number }): boolean {
+		return Boolean(
+			this.db
+				.prepare(`SELECT 1 FROM automatic_subscription_opt_outs WHERE session_id = :sessionId AND git_dir = :gitDir AND repo = :repo AND branch = :branch AND pr_number = :prNumber`)
+				.get(input),
+		);
+	}
+
+	getAutomaticSubscriptionOptOutForBinding(input: {
+		sessionId: string;
+		gitDir: string;
+		repo: string;
+		branch: string;
+	}): { prNumber: number; createdAt: number } | null {
+		const row = this.db
+			.prepare(
+				`SELECT pr_number, created_at
+				 FROM automatic_subscription_opt_outs
+				 WHERE session_id = :sessionId
+				   AND git_dir = :gitDir
+				   AND repo = :repo
+				   AND branch = :branch
+				 ORDER BY created_at DESC, pr_number DESC
+				 LIMIT 1`,
+			)
+			.get(input) as { pr_number: number; created_at: number } | undefined;
+		return row ? { prNumber: row.pr_number, createdAt: row.created_at } : null;
 	}
 
 	/**
@@ -483,37 +802,69 @@ export class StateStore {
 	}
 
 	/**
-	 * Deletes pr_events and pr_snapshots for (repo, pr_number) pairs that have
-	 * no active (non-closed) sessions referencing them. Once the last active
-	 * session on a PR is gone, its event history can never be delivered, so
-	 * retaining it only wastes space.
-	 *
-	 * Returns the number of event rows deleted.
+	 * Prunes inactive subscription cursors and expired stopped/terminal PR streams.
+	 * Active subscriptions always retain their stream, including while their owning
+	 * session is awaiting separate session-retention cleanup.
 	 */
-	pruneOrphanedPrEvents(now = Date.now()): number {
-		// Snapshots first — they're smaller and have no dependents.
-		this.db
-			.prepare(`
-      DELETE FROM pr_snapshots
-      WHERE (repo, pr_number) NOT IN (
-        SELECT repo, pr_number
-        FROM sessions
-        WHERE status != 'closed' AND pr_number IS NOT NULL
-      )
-    `)
-			.run();
+	pruneExpiredPrStreams(
+		now = Date.now(),
+		streamRetentionMs = PREMIND_PR_STREAM_RETENTION_MS,
+		subscriptionRetentionMs = PREMIND_SUBSCRIPTION_RETENTION_MS,
+	): PrStreamPruneResult {
+		return this.transaction(() => {
+			const subscriptions = this.db
+				.prepare(
+					`DELETE FROM session_subscriptions
+					 WHERE state = 'unsubscribed' AND updated_at <= :subscriptionCutoff`,
+				)
+				.run({ subscriptionCutoff: now - subscriptionRetentionMs });
 
-		const result = this.db
-			.prepare(`
-      DELETE FROM pr_events
-      WHERE (repo, pr_number) NOT IN (
-        SELECT repo, pr_number
-        FROM sessions
-        WHERE status != 'closed' AND pr_number IS NOT NULL
-      )
-    `)
-			.run();
-		return result.changes as number;
+			const expiredStreams = `
+				SELECT repo, pr_number
+				FROM pr_watchers
+				WHERE state IN ('stopped', 'terminal')
+				  AND COALESCE(terminal_at, idle_deadline_at, updated_at) <= :streamCutoff
+				  AND NOT EXISTS (
+				    SELECT 1 FROM session_subscriptions
+				    WHERE session_subscriptions.repo = pr_watchers.repo
+				      AND session_subscriptions.pr_number = pr_watchers.pr_number
+				      AND session_subscriptions.state = 'active'
+				  )
+			`;
+			const parameters = { streamCutoff: now - streamRetentionMs };
+			const snapshots = this.db
+				.prepare(`DELETE FROM pr_snapshots WHERE (repo, pr_number) IN (${expiredStreams})`)
+				.run(parameters);
+			const events = this.db
+				.prepare(`DELETE FROM pr_events WHERE (repo, pr_number) IN (${expiredStreams})`)
+				.run(parameters);
+			this.db
+				.prepare(
+					`DELETE FROM etags
+					 WHERE scope = 'pr.snapshot'
+					   AND EXISTS (
+					     SELECT 1 FROM pr_watchers
+					     WHERE etags.key = pr_watchers.repo || '#' || pr_watchers.pr_number
+					       AND (pr_watchers.repo, pr_watchers.pr_number) IN (${expiredStreams})
+					   )`,
+				)
+				.run(parameters);
+			const watchers = this.db
+				.prepare(`DELETE FROM pr_watchers WHERE (repo, pr_number) IN (${expiredStreams})`)
+				.run(parameters);
+
+			return {
+				events: events.changes as number,
+				snapshots: snapshots.changes as number,
+				watchers: watchers.changes as number,
+				subscriptions: subscriptions.changes as number,
+			};
+		});
+	}
+
+	/** Backward-compatible event-count facade for the daemon's retention sweep. */
+	pruneOrphanedPrEvents(now = Date.now()): number {
+		return this.pruneExpiredPrStreams(now).events;
 	}
 
 	countClosedSessions(): number {
@@ -545,20 +896,35 @@ export class StateStore {
 		}>;
 
 		return sessions.map((session) => {
-			const pendingReminderCount =
-				session.pr_number === null
-					? 0
-					: (
-							this.db
-								.prepare(
-									`SELECT COUNT(*) AS count FROM pr_events WHERE repo = :repo AND pr_number = :prNumber AND seq > :lastDeliveredEventSeq`,
+			const subscriptions = this.listSessionSubscriptions(session.session_id).map(
+				(subscription) => ({
+					repo: subscription.repo,
+					prNumber: subscription.prNumber,
+					source: subscription.source,
+					state: subscription.state,
+					pendingEventCount:
+						subscription.state === "active"
+							? this.countPendingEvents(
+									subscription.repo,
+									subscription.prNumber,
+									subscription.lastDeliveredEventSeq,
 								)
-								.get({
-									repo: session.repo,
-									prNumber: session.pr_number,
-									lastDeliveredEventSeq: session.last_delivered_event_seq,
-								}) as { count: number }
-						).count;
+							: 0,
+				}),
+			);
+			const pendingReminderCount =
+				subscriptions.length > 0
+					? subscriptions
+							.filter((subscription) => subscription.state === "active")
+							.reduce((count, subscription) => count + subscription.pendingEventCount, 0)
+					: session.pr_number === null
+							? 0
+							: this.countPendingEvents(
+									session.repo,
+									session.pr_number,
+									session.last_delivered_event_seq,
+								);
+			const binding = this.getWorktreeBinding(session.session_id);
 
 			return {
 				sessionId: session.session_id,
@@ -568,8 +934,30 @@ export class StateStore {
 				status: session.status,
 				busyState: session.busy_state,
 				pendingReminderCount,
+				worktreeBinding: binding
+					? {
+							root: binding.root,
+							gitDir: binding.gitDir,
+							repo: binding.repo,
+							branch: binding.branch,
+							headSha: binding.headSha,
+							state: binding.state,
+							updatedAt: binding.updatedAt,
+						}
+					: null,
+				subscriptions,
 			};
 		});
+	}
+
+	private countPendingEvents(repo: string, prNumber: number, lastDeliveredEventSeq: number) {
+		return (
+			this.db
+				.prepare(
+					`SELECT COUNT(*) AS count FROM pr_events WHERE repo = :repo AND pr_number = :prNumber AND seq > :lastDeliveredEventSeq`,
+				)
+				.get({ repo, prNumber, lastDeliveredEventSeq }) as { count: number }
+		).count;
 	}
 
 	setSessionPaused(sessionId: string, paused: boolean, now = Date.now()) {
@@ -629,6 +1017,23 @@ export class StateStore {
 		return row.count;
 	}
 
+	hasDaemonDemand(now = Date.now()): boolean {
+		if (this.countActiveClients(now) > 0) return true;
+		this.refreshWatcherCounts(now);
+		const row = this.db
+			.prepare(
+				`SELECT
+				   (SELECT COUNT(*) FROM session_subscriptions
+				      INNER JOIN sessions USING (session_id)
+				      WHERE session_subscriptions.state = 'active' AND sessions.status != 'closed') +
+				   (SELECT COUNT(*) FROM pr_watchers WHERE active_session_count > 0) +
+				   (SELECT COUNT(*) FROM branch_watchers WHERE active_session_count > 0)
+				 AS count`,
+			)
+			.get() as { count: number };
+		return row.count > 0;
+	}
+
 	listBranchWatchTargets(now = Date.now()) {
 		this.pruneExpiredClients(now);
 		this.refreshWatcherCounts(now);
@@ -647,6 +1052,39 @@ export class StateStore {
 			pr_number: number | null;
 			last_checked_at: number | null;
 			active_session_count: number;
+		}>;
+	}
+
+	listActiveWorktreeBranchTargets(now = Date.now()) {
+		this.pruneExpiredClients(now);
+		return this.db
+			.prepare(
+				`SELECT sessions.session_id, worktree_bindings.git_dir, worktree_bindings.repo, worktree_bindings.branch, branch_watchers.pr_number
+				 FROM worktree_bindings
+				 INNER JOIN sessions ON sessions.session_id = worktree_bindings.session_id
+				 LEFT JOIN branch_watchers
+				   ON branch_watchers.repo = worktree_bindings.repo
+				  AND branch_watchers.branch = worktree_bindings.branch
+				 WHERE sessions.status != 'closed'
+				   AND worktree_bindings.branch IS NOT NULL
+				   AND worktree_bindings.state != 'detached_head'
+				 UNION ALL
+				 SELECT sessions.session_id, '' AS git_dir, sessions.repo, sessions.branch, branch_watchers.pr_number
+				 FROM sessions
+				 LEFT JOIN worktree_bindings ON worktree_bindings.session_id = sessions.session_id
+				 LEFT JOIN branch_watchers
+				   ON branch_watchers.repo = sessions.repo
+				  AND branch_watchers.branch = sessions.branch
+				 WHERE sessions.status != 'closed'
+				   AND worktree_bindings.session_id IS NULL
+				 `
+			)
+			.all() as Array<{
+			session_id: string;
+			git_dir: string;
+			repo: string;
+			branch: string;
+			pr_number: number | null;
 		}>;
 	}
 
@@ -707,6 +1145,26 @@ export class StateStore {
 				if (session.pr_number !== prNumber) {
 					advance.run({ cursor: freshCursor, sessionId: session.session_id });
 				}
+			}
+		}
+
+		if (prNumber !== null) {
+			// Compatibility seam for adapters that have not yet activated a worktree.
+			// New branch discovery never calls this path; it owns subscriptions from bindings.
+			const legacySessions = this.db
+				.prepare(
+					`SELECT sessions.session_id FROM sessions
+					 LEFT JOIN worktree_bindings ON worktree_bindings.session_id = sessions.session_id
+					 WHERE sessions.repo = :repo AND sessions.branch = :branch
+					   AND worktree_bindings.session_id IS NULL`,
+				)
+				.all({ repo, branch }) as Array<{ session_id: string }>;
+			for (const session of legacySessions) {
+				this.baselineAutomaticSubscription({
+					sessionId: session.session_id,
+					repo,
+					prNumber,
+				}, checkedAt);
 			}
 		}
 
@@ -801,6 +1259,36 @@ export class StateStore {
 		}
 	}
 
+	saveTerminalSnapshotAndEvents(
+		repo: string,
+		prNumber: number,
+		snapshot: PullRequestSnapshot,
+		events: NormalizedPrEvent[],
+		etag: string | null,
+		now = Date.now(),
+	): void {
+		this.transaction(() => {
+			this.saveSnapshot(repo, prNumber, snapshot);
+			this.insertEventsInTransaction(repo, prNumber, events, now);
+			this.saveEtag("pr.snapshot", `${repo}#${prNumber}`, etag, now);
+			this.persistPrWatcherLifecycle(
+				{
+					repo,
+					prNumber,
+					state: "terminal",
+					idleDeadlineAt: null,
+					terminalAt: now,
+					nextEligiblePollAt: null,
+					consecutiveFailures: 0,
+					lastFailureAt: null,
+					lastFailureMessage: null,
+					rateLimitResetAt: null,
+				},
+				now,
+			);
+		});
+	}
+
 	insertEvents(
 		repo: string,
 		prNumber: number,
@@ -853,15 +1341,19 @@ export class StateStore {
 
 	listPrWatchTargets(now = Date.now()) {
 		this.pruneExpiredClients(now);
-		this.refreshWatcherCounts(now);
 		return this.db
 			.prepare(
-				`
-          SELECT repo, pr_number, active_session_count, last_checked_at
-          FROM pr_watchers
-          WHERE active_session_count > 0 AND pr_number IS NOT NULL
-          ORDER BY updated_at ASC
-        `,
+				`SELECT session_subscriptions.repo, session_subscriptions.pr_number,
+				        COUNT(*) AS active_session_count, pr_watchers.last_checked_at
+				 FROM session_subscriptions
+				 INNER JOIN sessions ON sessions.session_id = session_subscriptions.session_id
+				 LEFT JOIN pr_watchers
+				   ON pr_watchers.repo = session_subscriptions.repo
+				  AND pr_watchers.pr_number = session_subscriptions.pr_number
+				 WHERE session_subscriptions.state = 'active'
+				   AND sessions.status != 'closed'
+				 GROUP BY session_subscriptions.repo, session_subscriptions.pr_number
+				 ORDER BY MIN(session_subscriptions.updated_at) ASC`,
 			)
 			.all() as Array<{
 			repo: string;
@@ -869,6 +1361,82 @@ export class StateStore {
 			active_session_count: number;
 			last_checked_at: number | null;
 		}>;
+	}
+
+	listPrWatcherRecords(now = Date.now()): PrWatcherRecord[] {
+		this.pruneExpiredClients(now);
+		this.refreshWatcherCounts(now);
+		const rows = this.db.prepare(`SELECT * FROM pr_watchers ORDER BY created_at ASC`).all() as Array<{
+			repo: string;
+			pr_number: number;
+			state: PrWatcherState;
+			active_session_count: number;
+			last_checked_at: number | null;
+			idle_deadline_at: number | null;
+			terminal_at: number | null;
+			next_eligible_poll_at: number | null;
+			consecutive_failures: number;
+			last_failure_at: number | null;
+			last_failure_message: string | null;
+			rate_limit_reset_at: number | null;
+			created_at: number;
+			updated_at: number;
+		}>;
+		return rows.map((row) => ({
+			repo: row.repo,
+			prNumber: row.pr_number,
+			state: row.state,
+			activeSubscriberCount: row.active_session_count,
+			lastCheckedAt: row.last_checked_at,
+			idleDeadlineAt: row.idle_deadline_at,
+			terminalAt: row.terminal_at,
+			nextEligiblePollAt: row.next_eligible_poll_at,
+			consecutiveFailures: row.consecutive_failures,
+			lastFailureAt: row.last_failure_at,
+			lastFailureMessage: row.last_failure_message,
+			rateLimitResetAt: row.rate_limit_reset_at,
+			createdAt: row.created_at,
+			updatedAt: row.updated_at,
+		}));
+	}
+
+	getPrWatcherRecord(repo: string, prNumber: number): PrWatcherRecord | null {
+		return this.listPrWatcherRecords().find(
+			(record) => record.repo === repo && record.prNumber === prNumber,
+		) ?? null;
+	}
+
+	persistPrWatcherLifecycle(
+		record: Pick<
+			PrWatcherRecord,
+			| "repo"
+			| "prNumber"
+			| "state"
+			| "idleDeadlineAt"
+			| "terminalAt"
+			| "nextEligiblePollAt"
+			| "consecutiveFailures"
+			| "lastFailureAt"
+			| "lastFailureMessage"
+			| "rateLimitResetAt"
+		>,
+		now = Date.now(),
+	): void {
+		this.db
+			.prepare(
+				`UPDATE pr_watchers
+				 SET state = :state,
+				     idle_deadline_at = :idleDeadlineAt,
+				     terminal_at = :terminalAt,
+				     next_eligible_poll_at = :nextEligiblePollAt,
+				     consecutive_failures = :consecutiveFailures,
+				     last_failure_at = :lastFailureAt,
+				     last_failure_message = :lastFailureMessage,
+				     rate_limit_reset_at = :rateLimitResetAt,
+				     updated_at = :now
+				 WHERE repo = :repo AND pr_number = :prNumber`,
+			)
+			.run({ ...record, now });
 	}
 
 	markPrWatchChecked(repo: string, prNumber: number, checkedAt = Date.now()) {
@@ -892,115 +1460,296 @@ export class StateStore {
 	}
 
 	listUndeliveredEvents(sessionId: string, limit = 20) {
+		const subscriptions = this.listSessionSubscriptions(sessionId, "active");
+		for (const subscription of subscriptions) {
+			const events = this.listUndeliveredEventsForSubscription(subscription.subscriptionId, limit);
+			if (events.length > 0) return events;
+		}
+		if (subscriptions.length > 0) return [];
+
+		// Legacy adapters still identify a stream through sessions.pr_number. New
+		// watchers and subscription-owned batches never take this fallback.
 		const session = this.getSession(sessionId);
 		if (!session || session.pr_number === null) return [];
+		return this.listEventsAfterCursor(
+			session.repo,
+			session.pr_number,
+			session.last_delivered_event_seq,
+			limit,
+		);
+	}
+
+	listUndeliveredEventsForSubscription(subscriptionId: string, limit = 20) {
+		const subscription = this.getSubscriptionById(subscriptionId);
+		if (!subscription || subscription.state !== "active") return [];
+		return this.listEventsAfterCursor(
+			subscription.repo,
+			subscription.prNumber,
+			subscription.lastDeliveredEventSeq,
+			limit,
+		);
+	}
+
+	private listEventsAfterCursor(
+		repo: string,
+		prNumber: number,
+		lastDeliveredEventSeq: number,
+		limit: number,
+	) {
 		return this.db
 			.prepare(
-				`
-          SELECT seq, kind, priority, summary, reference_link
-          FROM pr_events
-          WHERE repo = :repo
-            AND pr_number = :prNumber
-            AND seq > :lastDeliveredEventSeq
-          ORDER BY seq ASC
-          LIMIT :limit
-        `,
+				`SELECT seq, kind, priority, summary, reference_link
+				 FROM pr_events
+				 WHERE repo = :repo
+				   AND pr_number = :prNumber
+				   AND seq > :lastDeliveredEventSeq
+				 ORDER BY seq ASC
+				 LIMIT :limit`,
 			)
-			.all({
-				repo: session.repo,
-				prNumber: session.pr_number,
-				lastDeliveredEventSeq:
-					(session as SessionRow & { last_delivered_event_seq?: number })
-						.last_delivered_event_seq ?? 0,
-				limit,
-			}) as EventRow[];
+			.all({ repo, prNumber, lastDeliveredEventSeq, limit }) as EventRow[];
 	}
 
 	createOrReplaceReminder(
 		sessionId: string,
+		subscriptionId: string | null,
 		reminderText: string,
 		events: ReminderEvent[],
+		maxEventSeq: number,
 		now = Date.now(),
 	) {
 		const batchId = randomUUID();
-		const maxEventSeq =
-			this.listUndeliveredEvents(sessionId).at(-1)?.seq ?? null;
 		this.db
 			.prepare(
-				`
-          INSERT INTO reminder_batches (batch_id, session_id, reminder_text, events_json, state, max_event_seq, created_at, updated_at)
-          VALUES (:batchId, :sessionId, :reminderText, :eventsJson, 'built', :maxEventSeq, :now, :now)
-          ON CONFLICT(session_id) DO UPDATE SET
-            batch_id = excluded.batch_id,
-            reminder_text = excluded.reminder_text,
-            events_json = excluded.events_json,
-            state = excluded.state,
-            max_event_seq = excluded.max_event_seq,
-            updated_at = excluded.updated_at
-        `,
+				`INSERT INTO reminder_batches (batch_id, session_id, subscription_id, reminder_text, events_json, state, max_event_seq, created_at, updated_at)
+				 VALUES (:batchId, :sessionId, :subscriptionId, :reminderText, :eventsJson, 'built', :maxEventSeq, :now, :now)`,
 			)
 			.run({
 				batchId,
 				sessionId,
+				subscriptionId,
 				reminderText,
 				eventsJson: JSON.stringify(events),
 				maxEventSeq,
 				now,
 			});
-
 		return batchId;
 	}
 
 	getPendingReminder(sessionId: string): ReminderBatch | null {
+		const record = this.getPendingReminderRecord(sessionId);
+		return record ? this.toReminderBatch(record) : null;
+	}
+
+	getPendingReminderRecord(sessionId: string): ReminderBatchRecord | null {
 		const row = this.db
 			.prepare(
-				`SELECT batch_id, session_id, reminder_text, events_json, state FROM reminder_batches WHERE session_id = ?`,
+				`SELECT reminder_batches.batch_id, reminder_batches.session_id, reminder_batches.subscription_id,
+				        reminder_batches.reminder_text, reminder_batches.events_json, reminder_batches.state,
+				        reminder_batches.max_event_seq, session_subscriptions.repo,
+				        session_subscriptions.pr_number, session_subscriptions.source
+				 FROM reminder_batches
+				 LEFT JOIN session_subscriptions
+				   ON session_subscriptions.subscription_id = reminder_batches.subscription_id
+				 WHERE reminder_batches.session_id = :sessionId
+				   AND reminder_batches.state IN ('built', 'failed')
+				   AND (reminder_batches.subscription_id IS NULL OR session_subscriptions.state = 'active')
+				 ORDER BY reminder_batches.created_at ASC LIMIT 1`,
 			)
-			.get(sessionId) as ReminderRow | undefined;
+			.get({ sessionId }) as ReminderRow | undefined;
+		return this.toReminderBatchRecord(row);
+	}
+
+	getReminderBatchRecord(
+		batchId: string,
+		sessionId?: string,
+	): ReminderBatchRecord | null {
+		const row = (sessionId
+			? this.db
+					.prepare(
+						`SELECT reminder_batches.batch_id, reminder_batches.session_id, reminder_batches.subscription_id,
+						        reminder_batches.reminder_text, reminder_batches.events_json, reminder_batches.state, reminder_batches.max_event_seq,
+						        session_subscriptions.repo, session_subscriptions.pr_number, session_subscriptions.source
+						 FROM reminder_batches LEFT JOIN session_subscriptions USING (subscription_id)
+						 WHERE batch_id = :batchId AND reminder_batches.session_id = :sessionId`,
+					)
+					.get({ batchId, sessionId })
+			: this.db
+					.prepare(
+						`SELECT reminder_batches.batch_id, reminder_batches.session_id, reminder_batches.subscription_id,
+						        reminder_batches.reminder_text, reminder_batches.events_json, reminder_batches.state, reminder_batches.max_event_seq,
+						        session_subscriptions.repo, session_subscriptions.pr_number, session_subscriptions.source
+						 FROM reminder_batches LEFT JOIN session_subscriptions USING (subscription_id)
+						 WHERE batch_id = :batchId`,
+					)
+					.get({ batchId })) as ReminderRow | undefined;
+		return this.toReminderBatchRecord(row);
+	}
+
+	listPendingReminderBatchRecords(): ReminderBatchRecord[] {
+		const rows = this.db
+			.prepare(
+				`SELECT reminder_batches.batch_id, reminder_batches.session_id, reminder_batches.subscription_id,
+				        reminder_batches.reminder_text, reminder_batches.events_json, reminder_batches.state, reminder_batches.max_event_seq,
+				        session_subscriptions.repo, session_subscriptions.pr_number, session_subscriptions.source
+				 FROM reminder_batches LEFT JOIN session_subscriptions USING (subscription_id)
+				 WHERE reminder_batches.state != 'confirmed' ORDER BY reminder_batches.created_at ASC`,
+			)
+			.all() as ReminderRow[];
+		return rows.flatMap((row) => {
+			const record = this.toReminderBatchRecord(row);
+			return record ? [record] : [];
+		});
+	}
+
+	private getPendingReminderForSubscription(subscriptionId: string): ReminderBatch | null {
+		const row = this.db
+			.prepare(
+				`SELECT reminder_batches.batch_id, reminder_batches.session_id, reminder_batches.subscription_id,
+				        reminder_batches.reminder_text, reminder_batches.events_json, reminder_batches.state,
+				        reminder_batches.max_event_seq, session_subscriptions.repo,
+				        session_subscriptions.pr_number, session_subscriptions.source
+				 FROM reminder_batches
+				 INNER JOIN session_subscriptions
+				   ON session_subscriptions.subscription_id = reminder_batches.subscription_id
+				 WHERE reminder_batches.subscription_id = :subscriptionId
+				   AND reminder_batches.state IN ('built', 'failed')
+				   AND session_subscriptions.state = 'active'`,
+			)
+			.get({ subscriptionId }) as ReminderRow | undefined;
+		const record = this.toReminderBatchRecord(row);
+		return record ? this.toReminderBatch(record) : null;
+	}
+
+	private toReminderBatch(record: ReminderBatchRecord): ReminderBatch {
+		return {
+			batchId: record.batchId,
+			sessionId: record.sessionId,
+			...(record.repo ? { repo: record.repo } : {}),
+			...(record.prNumber ? { prNumber: record.prNumber } : {}),
+			...(record.subscriptionId ? { subscriptionId: record.subscriptionId } : {}),
+			...(record.source ? { source: record.source } : {}),
+			reminderText: record.reminderText,
+			events: record.events,
+		};
+	}
+
+	private toReminderBatchRecord(row: ReminderRow | undefined): ReminderBatchRecord | null {
 		if (!row || row.state === "confirmed") return null;
 		try {
 			return {
 				batchId: row.batch_id,
 				sessionId: row.session_id,
+				subscriptionId: row.subscription_id,
+				repo: row.repo ?? undefined,
+				prNumber: row.pr_number ?? undefined,
+				source: row.source ?? undefined,
 				reminderText: row.reminder_text,
 				events: JSON.parse(row.events_json) as ReminderEvent[],
+				state: row.state,
+				maxEventSeq: row.max_event_seq,
 			};
 		} catch {
 			return null;
 		}
 	}
 
-	ackReminder(payload: AckReminderPayload, now = Date.now()) {
-		const current = this.db
-			.prepare(`SELECT batch_id FROM reminder_batches WHERE session_id = ?`)
-			.get(payload.sessionId) as { batch_id: string } | undefined;
-		if (!current || current.batch_id !== payload.batchId) return false;
+	transitionReminderBatchState(
+		batchId: string,
+		sessionId: string,
+		expectedState: ReminderHandoffState,
+		nextState: ReminderHandoffState,
+		now = Date.now(),
+	): boolean {
+		const valid =
+			(expectedState === "built" && nextState === "handed_off") ||
+			(expectedState === "handed_off" && nextState === "failed") ||
+			(expectedState === "failed" && nextState === "built");
+		if (!valid) return false;
+		const result = this.db
+			.prepare(
+				`UPDATE reminder_batches SET state = :nextState, updated_at = :now
+				 WHERE batch_id = :batchId AND session_id = :sessionId AND state = :expectedState`,
+			)
+			.run({ batchId, sessionId, expectedState, nextState, now });
+		return (result.changes as number) === 1;
+	}
 
-		if (payload.state === "confirmed") {
+	confirmReminderBatch(batchId: string, sessionId: string, now = Date.now()): boolean {
+		return this.transaction(() => {
 			const row = this.db
 				.prepare(
-					`SELECT max_event_seq FROM reminder_batches WHERE session_id = ?`,
+					`SELECT subscription_id, max_event_seq FROM reminder_batches
+					 WHERE batch_id = :batchId AND session_id = :sessionId AND state = 'handed_off'`,
 				)
-				.get(payload.sessionId) as { max_event_seq: number | null } | undefined;
-			if (row?.max_event_seq !== null && row?.max_event_seq !== undefined) {
+				.get({ batchId, sessionId }) as
+				| { subscription_id: string | null; max_event_seq: number | null }
+				| undefined;
+			if (!row) return false;
+
+			const confirmed = this.db
+				.prepare(
+					`UPDATE reminder_batches SET state = 'confirmed', updated_at = :now
+					 WHERE batch_id = :batchId AND session_id = :sessionId AND state = 'handed_off'`,
+				)
+				.run({ batchId, sessionId, now });
+			if ((confirmed.changes as number) !== 1) return false;
+
+			if (row.max_event_seq !== null) {
+				if (row.subscription_id) {
+					this.db
+						.prepare(
+							`UPDATE session_subscriptions
+							 SET last_delivered_event_seq = MAX(last_delivered_event_seq, :seq), updated_at = :now
+							 WHERE subscription_id = :subscriptionId`,
+						)
+						.run({ seq: row.max_event_seq, now, subscriptionId: row.subscription_id });
+				}
+				// Keep the legacy session cursor synchronized until all adapters and
+				// migrations exclusively consume subscription-owned cursors.
 				this.db
 					.prepare(
-						`UPDATE sessions SET last_delivered_event_seq = :seq, updated_at = :now WHERE session_id = :sessionId`,
+						`UPDATE sessions
+						 SET last_delivered_event_seq = MAX(last_delivered_event_seq, :seq), updated_at = :now
+						 WHERE session_id = :sessionId`,
 					)
-					.run({ seq: row.max_event_seq, now, sessionId: payload.sessionId });
+					.run({ seq: row.max_event_seq, now, sessionId });
 			}
 			this.db
-				.prepare(`DELETE FROM reminder_batches WHERE session_id = ?`)
-				.run(payload.sessionId);
+				.prepare(`DELETE FROM reminder_batches WHERE batch_id = :batchId AND state = 'confirmed'`)
+				.run({ batchId });
 			return true;
-		}
+		});
+	}
 
-		this.db
-			.prepare(
-				`UPDATE reminder_batches SET state = :state, updated_at = :now WHERE session_id = :sessionId`,
-			)
-			.run({ state: payload.state, now, sessionId: payload.sessionId });
-		return true;
+	ackReminder(payload: AckReminderPayload, now = Date.now()) {
+		const record = this.getReminderBatchRecord(payload.batchId, payload.sessionId);
+		if (!record) return false;
+		const actor = createReminderHandoffActor(record.state);
+		actor.send(eventForReminderState(payload.state));
+		const accepted = actor.getSnapshot().value === payload.state;
+		actor.stop();
+		if (!accepted) return false;
+
+		switch (payload.state) {
+			case "handed_off":
+				return this.transitionReminderBatchState(
+					payload.batchId,
+					payload.sessionId,
+					"built",
+					"handed_off",
+					now,
+				);
+			case "failed":
+				return this.transitionReminderBatchState(
+					payload.batchId,
+					payload.sessionId,
+					"handed_off",
+					"failed",
+					now,
+				);
+			case "confirmed":
+				return this.confirmReminderBatch(payload.batchId, payload.sessionId, now);
+		}
 	}
 
 	listSessionsForBranch(repo: string, branch: string) {
@@ -1018,16 +1767,32 @@ export class StateStore {
 	buildReminderBatch(
 		sessionId: string,
 		now = Date.now(),
+		subscriptionId?: string,
 	): ReminderBatch | null {
 		const session = this.getSession(sessionId);
 		if (!session || session.status === "paused" || session.status === "closed")
 			return null;
 
-		const existing = this.getPendingReminder(sessionId);
+		const subscription = subscriptionId
+			? this.getSubscriptionById(subscriptionId)
+			: this.listSessionSubscriptions(sessionId, "active").find(
+					(candidate) => this.listUndeliveredEventsForSubscription(candidate.subscriptionId).length > 0,
+				);
+		if (
+			subscription &&
+			(subscription.sessionId !== sessionId || subscription.state !== "active")
+		) return null;
+
+		const existing = subscription
+			? this.getPendingReminderForSubscription(subscription.subscriptionId)
+			: this.getPendingReminder(sessionId);
 		if (existing) return existing;
 
-		const events = this.listUndeliveredEvents(sessionId);
+		const events = subscription
+			? this.listUndeliveredEventsForSubscription(subscription.subscriptionId)
+			: this.listUndeliveredEvents(sessionId);
 		if (events.length === 0) return null;
+		const maxEventSeq = events.at(-1)!.seq;
 
 		const reminderEvents: GroupedReminderEvent[] = events.map((event) => ({
 			eventId: String(event.seq),
@@ -1071,9 +1836,12 @@ export class StateStore {
 		const hasActionableBlocker = condensed.some((event) =>
 			["check.failed", "merge_conflict.detected"].includes(event.kind),
 		);
+		const targetRepo = subscription?.repo ?? session.repo;
+		const targetPrNumber = subscription?.prNumber ?? session.pr_number;
+		const qualifiedTarget = targetPrNumber ? `${targetRepo}#${targetPrNumber}` : targetRepo;
 		const reminderText = [
 			"<system-reminder>",
-			"New pull request context was detected since the last reminder.",
+			`New pull request context was detected for ${qualifiedTarget} since the last reminder.`,
 			"",
 			"Changes:",
 			...condensed.map(
@@ -1094,16 +1862,34 @@ export class StateStore {
 		].join("\n");
 		const batchId = this.createOrReplaceReminder(
 			sessionId,
+			subscription?.subscriptionId ?? null,
 			reminderText,
 			condensed,
+			maxEventSeq,
 			now,
 		);
 		return {
 			batchId,
 			sessionId,
+			repo: targetRepo,
+			...(targetPrNumber ? { prNumber: targetPrNumber } : {}),
+			...(subscription ? { subscriptionId: subscription.subscriptionId, source: subscription.source } : {}),
 			reminderText,
 			events: condensed,
 		};
+	}
+
+	buildReminderBatchForSubscription(
+		subscriptionId: string,
+		now = Date.now(),
+	): ReminderBatch | null {
+		const subscription = this.getSubscriptionById(subscriptionId);
+		if (!subscription || subscription.state !== "active") return null;
+		return this.buildReminderBatch(subscription.sessionId, now, subscriptionId);
+	}
+
+	ensureBranchWatcher(repo: string, branch: string, now = Date.now()) {
+		this.touchBranchWatcher(repo, branch, now);
 	}
 
 	private touchBranchWatcher(repo: string, branch: string, now = Date.now()) {
@@ -1147,9 +1933,17 @@ export class StateStore {
           SET active_session_count = (
             SELECT COUNT(*)
             FROM sessions
-            WHERE sessions.repo = branch_watchers.repo
-              AND sessions.branch = branch_watchers.branch
-              AND sessions.status != 'closed'
+            LEFT JOIN worktree_bindings
+              ON worktree_bindings.session_id = sessions.session_id
+            WHERE sessions.status != 'closed'
+              AND (
+                (worktree_bindings.session_id IS NOT NULL
+                  AND worktree_bindings.repo = branch_watchers.repo
+                  AND worktree_bindings.branch = branch_watchers.branch)
+                OR (worktree_bindings.session_id IS NULL
+                  AND sessions.repo = branch_watchers.repo
+                  AND sessions.branch = branch_watchers.branch)
+              )
           ),
               updated_at = :now
         `,
@@ -1158,21 +1952,31 @@ export class StateStore {
 
 		this.db
 			.prepare(
-				`UPDATE pr_watchers SET active_session_count = 0, updated_at = :now`,
-			)
-			.run({ now });
-		this.db
-			.prepare(
 				`
           UPDATE pr_watchers
           SET active_session_count = (
             SELECT COUNT(*)
-            FROM sessions
-            WHERE sessions.repo = pr_watchers.repo
-              AND sessions.pr_number = pr_watchers.pr_number
+            FROM session_subscriptions
+            INNER JOIN sessions
+              ON sessions.session_id = session_subscriptions.session_id
+            WHERE session_subscriptions.repo = pr_watchers.repo
+              AND session_subscriptions.pr_number = pr_watchers.pr_number
+              AND session_subscriptions.state = 'active'
               AND sessions.status != 'closed'
           ),
-              updated_at = :now
+              updated_at = CASE
+                WHEN active_session_count != (
+                  SELECT COUNT(*)
+                  FROM session_subscriptions
+                  INNER JOIN sessions
+                    ON sessions.session_id = session_subscriptions.session_id
+                  WHERE session_subscriptions.repo = pr_watchers.repo
+                    AND session_subscriptions.pr_number = pr_watchers.pr_number
+                    AND session_subscriptions.state = 'active'
+                    AND sessions.status != 'closed'
+                ) THEN :now
+                ELSE updated_at
+              END
         `,
 			)
 			.run({ now });
@@ -1205,16 +2009,59 @@ export class StateStore {
         updated_at INTEGER NOT NULL
       );
 
-      CREATE TABLE IF NOT EXISTS reminder_batches (
+      CREATE TABLE IF NOT EXISTS worktree_bindings (
         session_id TEXT PRIMARY KEY,
-        batch_id TEXT NOT NULL,
+        root TEXT NOT NULL,
+        git_dir TEXT NOT NULL,
+        repo TEXT NOT NULL,
+        branch TEXT,
+        head_sha TEXT NOT NULL,
+        state TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        FOREIGN KEY(session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS session_subscriptions (
+        subscription_id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        repo TEXT NOT NULL,
+        pr_number INTEGER NOT NULL,
+        source TEXT NOT NULL CHECK(source IN ('automatic', 'manual')),
+        state TEXT NOT NULL CHECK(state IN ('active', 'unsubscribed')),
+        last_delivered_event_seq INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        UNIQUE(session_id, repo, pr_number),
+        FOREIGN KEY(session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS session_subscriptions_active_pr
+      ON session_subscriptions(repo, pr_number, state);
+
+      CREATE TABLE IF NOT EXISTS automatic_subscription_opt_outs (
+        session_id TEXT NOT NULL,
+        git_dir TEXT NOT NULL,
+        repo TEXT NOT NULL,
+        branch TEXT NOT NULL,
+        pr_number INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY(session_id, git_dir, repo, branch, pr_number),
+        FOREIGN KEY(session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS reminder_batches (
+        batch_id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        subscription_id TEXT UNIQUE,
         reminder_text TEXT NOT NULL,
         events_json TEXT NOT NULL,
         state TEXT NOT NULL,
         max_event_seq INTEGER,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,
-        FOREIGN KEY(session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+        FOREIGN KEY(session_id) REFERENCES sessions(session_id) ON DELETE CASCADE,
+        FOREIGN KEY(subscription_id) REFERENCES session_subscriptions(subscription_id) ON DELETE CASCADE
       );
 
       CREATE TABLE IF NOT EXISTS branch_watchers (
@@ -1233,6 +2080,14 @@ export class StateStore {
         pr_number INTEGER NOT NULL,
         last_checked_at INTEGER,
         active_session_count INTEGER NOT NULL DEFAULT 0,
+        state TEXT NOT NULL DEFAULT 'stopped',
+        idle_deadline_at INTEGER,
+        terminal_at INTEGER,
+        next_eligible_poll_at INTEGER,
+        consecutive_failures INTEGER NOT NULL DEFAULT 0,
+        last_failure_at INTEGER,
+        last_failure_message TEXT,
+        rate_limit_reset_at INTEGER,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,
         PRIMARY KEY(repo, pr_number)
@@ -1252,13 +2107,14 @@ export class StateStore {
         seq INTEGER PRIMARY KEY AUTOINCREMENT,
         repo TEXT NOT NULL,
         pr_number INTEGER NOT NULL,
-        dedupe_key TEXT NOT NULL UNIQUE,
+        dedupe_key TEXT NOT NULL,
         kind TEXT NOT NULL,
         priority TEXT NOT NULL,
         summary TEXT NOT NULL,
         reference_link TEXT,
         payload_json TEXT NOT NULL,
-        created_at INTEGER NOT NULL
+        created_at INTEGER NOT NULL,
+        UNIQUE(repo, pr_number, dedupe_key)
       );
 
       CREATE TABLE IF NOT EXISTS etags (
@@ -1289,13 +2145,72 @@ export class StateStore {
 			);
 		}
 
+		this.db
+			.prepare(
+				`INSERT OR IGNORE INTO session_subscriptions (subscription_id, session_id, repo, pr_number, source, state, last_delivered_event_seq, created_at, updated_at)
+				 SELECT 'legacy:' || session_id || ':' || repo || ':' || pr_number,
+				        session_id, repo, pr_number, 'automatic', 'active', last_delivered_event_seq, created_at, updated_at
+				 FROM sessions WHERE pr_number IS NOT NULL`,
+			)
+			.run();
+
+		const prWatcherColumns = this.db
+			.prepare(`PRAGMA table_info(pr_watchers)`)
+			.all() as Array<{ name: string }>;
+		const ensurePrWatcherColumn = (name: string, definition: string) => {
+			if (!prWatcherColumns.some((column) => column.name === name)) {
+				this.db.exec(`ALTER TABLE pr_watchers ADD COLUMN ${name} ${definition}`);
+			}
+		};
+		ensurePrWatcherColumn("state", "TEXT NOT NULL DEFAULT 'stopped'");
+		ensurePrWatcherColumn("idle_deadline_at", "INTEGER");
+		ensurePrWatcherColumn("terminal_at", "INTEGER");
+		ensurePrWatcherColumn("next_eligible_poll_at", "INTEGER");
+		ensurePrWatcherColumn("consecutive_failures", "INTEGER NOT NULL DEFAULT 0");
+		ensurePrWatcherColumn("last_failure_at", "INTEGER");
+		ensurePrWatcherColumn("last_failure_message", "TEXT");
+		ensurePrWatcherColumn("rate_limit_reset_at", "INTEGER");
+		this.db.exec(
+			`UPDATE pr_watchers
+			 SET state = 'warming_up'
+			 WHERE active_session_count > 0 AND state = 'stopped'`,
+		);
+
 		const reminderColumns = this.db
 			.prepare(`PRAGMA table_info(reminder_batches)`)
 			.all() as Array<{ name: string }>;
 		if (!reminderColumns.some((column) => column.name === "max_event_seq")) {
-			this.db.exec(
-				`ALTER TABLE reminder_batches ADD COLUMN max_event_seq INTEGER`,
-			);
+			this.db.exec(`ALTER TABLE reminder_batches ADD COLUMN max_event_seq INTEGER`);
+		}
+		if (!reminderColumns.some((column) => column.name === "subscription_id")) {
+			this.db.exec(`
+				CREATE TABLE reminder_batches_next (
+					batch_id TEXT PRIMARY KEY,
+					session_id TEXT NOT NULL,
+					subscription_id TEXT UNIQUE,
+					reminder_text TEXT NOT NULL,
+					events_json TEXT NOT NULL,
+					state TEXT NOT NULL,
+					max_event_seq INTEGER,
+					created_at INTEGER NOT NULL,
+					updated_at INTEGER NOT NULL,
+					FOREIGN KEY(session_id) REFERENCES sessions(session_id) ON DELETE CASCADE,
+					FOREIGN KEY(subscription_id) REFERENCES session_subscriptions(subscription_id) ON DELETE CASCADE
+				);
+				INSERT INTO reminder_batches_next (batch_id, session_id, subscription_id, reminder_text, events_json, state, max_event_seq, created_at, updated_at)
+				SELECT reminder_batches.batch_id, reminder_batches.session_id,
+				       session_subscriptions.subscription_id, reminder_batches.reminder_text,
+				       reminder_batches.events_json, reminder_batches.state, reminder_batches.max_event_seq,
+				       reminder_batches.created_at, reminder_batches.updated_at
+				FROM reminder_batches
+				LEFT JOIN sessions ON sessions.session_id = reminder_batches.session_id
+				LEFT JOIN session_subscriptions
+				  ON session_subscriptions.session_id = reminder_batches.session_id
+				 AND session_subscriptions.repo = sessions.repo
+				 AND session_subscriptions.pr_number = sessions.pr_number;
+				DROP TABLE reminder_batches;
+				ALTER TABLE reminder_batches_next RENAME TO reminder_batches;
+			`);
 		}
 
 		// Rename pr_events.detail_file_path -> reference_link. The legacy name
@@ -1313,6 +2228,51 @@ export class StateStore {
 			this.db.exec(
 				`ALTER TABLE pr_events RENAME COLUMN detail_file_path TO reference_link`,
 			);
+		}
+
+		const prEventIndexes = this.db
+			.prepare(`PRAGMA index_list(pr_events)`)
+			.all() as Array<{ name: string; unique: number }>;
+		const hasScopedEventUniqueness = prEventIndexes.some((index) => {
+			if (index.unique !== 1) return false;
+			const columns = this.db
+				.prepare(`SELECT name FROM pragma_index_info(?) ORDER BY seqno`)
+				.all(index.name) as Array<{ name: string }>;
+			return columns.map((column) => column.name).join(",") === "repo,pr_number,dedupe_key";
+		});
+		if (!hasScopedEventUniqueness) {
+			const previousSequence = (this.db
+				.prepare(`SELECT seq FROM sqlite_sequence WHERE name = 'pr_events'`)
+				.get() as { seq: number } | undefined)?.seq;
+			this.transaction(() => {
+				this.db.exec(`
+					CREATE TABLE pr_events_next (
+						seq INTEGER PRIMARY KEY AUTOINCREMENT,
+						repo TEXT NOT NULL,
+						pr_number INTEGER NOT NULL,
+						dedupe_key TEXT NOT NULL,
+						kind TEXT NOT NULL,
+						priority TEXT NOT NULL,
+						summary TEXT NOT NULL,
+						reference_link TEXT,
+						payload_json TEXT NOT NULL,
+						created_at INTEGER NOT NULL,
+						UNIQUE(repo, pr_number, dedupe_key)
+					);
+					INSERT INTO pr_events_next
+						(seq, repo, pr_number, dedupe_key, kind, priority, summary, reference_link, payload_json, created_at)
+					SELECT seq, repo, pr_number, dedupe_key, kind, priority, summary, reference_link, payload_json, created_at
+					FROM pr_events ORDER BY seq;
+					DROP TABLE pr_events;
+					ALTER TABLE pr_events_next RENAME TO pr_events;
+				`);
+				if (previousSequence !== undefined) {
+					this.db.prepare(`DELETE FROM sqlite_sequence WHERE name = 'pr_events'`).run();
+					this.db
+						.prepare(`INSERT INTO sqlite_sequence (name, seq) VALUES ('pr_events', ?)`)
+						.run(previousSequence);
+				}
+			});
 		}
 	}
 }

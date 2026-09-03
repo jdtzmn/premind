@@ -41,6 +41,19 @@ export const renderPremindStatus = (status: {
     status: string
     busyState: string
     pendingReminderCount: number
+    worktreeBinding?: {
+      root: string
+      repo: string
+      branch: string | null
+      state: string
+    } | null
+    subscriptions?: Array<{
+      repo: string
+      prNumber: number
+      source: string
+      state: string
+      pendingEventCount: number
+    }>
   }>
 }, now = Date.now()) => {
   const lastReapLine = status.lastReapAt === null
@@ -62,10 +75,19 @@ export const renderPremindStatus = (status: {
   lines.push(
     `- active watchers: ${status.activeWatchers}`,
     lastReapLine,
-    ...status.sessions.map(
-      (session) =>
-        `- session ${session.sessionId}: ${session.repo} @ ${session.branch}${session.prNumber ? ` (PR #${session.prNumber})` : ""} | ${session.status}/${session.busyState} | pending ${session.pendingReminderCount}`,
-    ),
+    ...status.sessions.map((session) => {
+      const worktree = session.worktreeBinding
+        ? ` | worktree ${session.worktreeBinding.repo} @ ${session.worktreeBinding.branch ?? "detached"} (${session.worktreeBinding.state})`
+        : ""
+      const subscriptions = (session.subscriptions ?? [])
+        .map(
+          (subscription) =>
+            `${subscription.repo}#${subscription.prNumber} (${subscription.source}/${subscription.state}, pending ${subscription.pendingEventCount})`,
+        )
+        .join(", ")
+      const subscriptionSummary = subscriptions ? ` | subscriptions ${subscriptions}` : ""
+      return `- session ${session.sessionId}: ${session.repo} @ ${session.branch}${session.prNumber ? ` (PR #${session.prNumber})` : ""} | ${session.status}/${session.busyState} | pending ${session.pendingReminderCount}${worktree}${subscriptionSummary}`
+    }),
   )
   return lines.join("\n")
 }

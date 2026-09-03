@@ -140,8 +140,9 @@ The current `src/shared` schemas and constants should be reused by both the exte
 
 ```text
 premind/
-  PI_PLAN.md
-  PLAN.md
+  docs/plans/
+    pi-package.md
+    initial-implementation.md
   package.json
   tsconfig.json
   extensions/
@@ -720,3 +721,17 @@ This proves the core advantage of making `premind` a Pi package: PR context can 
 Build `premind` as a Pi-native package centered on custom reminder messages and automatic idle revival. Preserve the existing daemon as the durable GitHub intelligence layer, but make the session integration a proper Pi extension.
 
 The defining feature should be: when the PR changes underneath an active coding session, Pi receives a structured `premind-reminder` and wakes the agent to continue with the new context.
+
+## 23. Issue #13: Worktree and Subscription Controls
+
+The Pi extension must use the shared worktree-aware subscription architecture in [the initial implementation plan](./initial-implementation.md#35-issue-13-worktree-aware-subscription-architecture). Pi's startup `ctx.cwd` is only the initial worktree; it cannot reliably infer a later shell-local `cd` into a linked or nested worktree.
+
+Expose these Pi commands and model tools in place of pause/resume controls:
+
+- `/premind:activate-worktree <path>` and `premind_activate_worktree({ path })` select the session's active Git worktree and begin automatic branch-to-PR resolution, even when no PR exists yet.
+- `/premind:subscribe <pr> [owner/repo]` and `premind_subscribe({ prNumber, repo? })` add a manual subscription. The default repository is the active worktree repository; external accessible GitHub repositories are supported.
+- `/premind:unsubscribe <pr> [owner/repo]` and `premind_unsubscribe({ prNumber, repo? })` remove the current session's matching subscription, including an automatic subscription.
+
+The extension should guide the model to call `premind_activate_worktree` whenever it begins work in another Git worktree. It must not attempt to infer durable worktree changes from an individual shell command's `cd`. Runtime reconciliation at session start, agent start/end, and the status-poll cadence is an optimization, not a replacement for explicit activation.
+
+Pi must keep manual subscriptions when activating a new worktree. When the new branch has no PR, the daemon continues branch discovery and later creates the automatic subscription. Status UI and rendered reminders must include fully qualified PR identities for cross-repository subscriptions.

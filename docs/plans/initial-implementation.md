@@ -1139,7 +1139,7 @@ One possible layout:
 
 ```text
 premind/
-  PLAN.md
+  docs/plans/initial-implementation.md
   package.json
   tsconfig.json
   src/
@@ -1257,3 +1257,68 @@ It covers the highest-value user cases and validates the most important architec
 ## 34. Final Recommendation
 
 Build `premind` as a typed TypeScript system composed of a thin OpenCode plugin and a single machine-local daemon with durable SQLite-backed watcher state. Start with the highest-value PR event types, prove the end-to-end injection path through normal OpenCode session behavior, and invest early in diff-engine tests plus restart-safe delivery semantics. The product will succeed if it feels invisible when things are calm and immediately useful when PR context changes underneath an active coding session.
+
+## 35. Issue #13: Worktree-Aware Subscription Architecture
+
+This section supersedes the single mutable `sessions.pr_number` attachment model described above. Premind must model PR streams, session subscriptions, and active worktree bindings separately.
+
+### 35.1 Durable PR event streams
+
+Each canonical PR watcher, keyed by `{repo, prNumber}`, appends normalized events to a durable ordered stream. Every session subscription owns an independent acknowledged cursor. Delivering a batch to one session never advances another session's cursor or removes events from the stream.
+
+The daemon's SQLite database remains the source of truth. Event streams and cursors, not in-memory state-machine snapshots, must survive restarts.
+
+### 35.2 Subscriptions
+
+A session can have multiple subscriptions to PR streams:
+
+- `automatic`: created from the session's active worktree branch when GitHub resolves an open PR.
+- `manual`: explicitly created by `premind_subscribe`. Manual subscriptions survive active-worktree changes.
+
+`premind_unsubscribe` must remove an automatic subscription as well as a manual one. When it removes the current automatic PR subscription, persist an opt-out tombstone for that current worktree/branch/PR binding so discovery does not recreate it on every poll. Activating a different worktree/branch clears the relevance of the prior opt-out and begins a fresh automatic resolution cycle.
+
+Initial command/tool semantics:
+
+- `premind_subscribe({ prNumber, repo? })`: manually follow a PR. `repo` defaults to the active worktree's repository and accepts `owner/repo` for an accessible external GitHub repository.
+- `premind_unsubscribe({ prNumber, repo? })`: stop this session from following that repository-qualified PR.
+- `premind_activate_worktree({ path })`: resolve a Git worktree and make it the session's active automatic-tracking target.
+
+External-repository subscriptions are manual only and must not alter the session's active worktree binding. A worktree activated from another repository is allowed to create that repository's automatic subscription. Status and reminders must always render the full `owner/repo#number` identity.
+
+### 35.3 Active worktree binding
+
+An active worktree binding records the canonical Git worktree root, Git directory identity, repository, named branch or detached-HEAD state, and HEAD SHA. `premind_activate_worktree` resolves these values with Git; it must accept a descendant path and normalize it to the worktree root.
+
+Activation is valid before a PR exists:
+
+```text
+activate worktree
+  -> resolve repository and named branch
+  -> remove the preceding automatic subscription
+  -> start branch discovery
+  -> no open PR: wait and poll
+  -> PR opens: create automatic subscription
+```
+
+Detached HEAD has no automatic branch subscription. Runtime adapters may reconcile their current worktree automatically, but explicit activation is the portable and reliable mechanism when an agent moves from a repository root into a nested or linked worktree.
+
+### 35.4 State machines and actors
+
+Adopt `xstate` v5 for lifecycle boundaries. Use it without a hosted service; SQLite persists domain state and actors are reconstructed at daemon startup.
+
+Required machines:
+
+- **Worktree binding:** `unbound`, `resolving_worktree`, `waiting_for_pr`, `following_automatic_pr`, `automatic_pr_unsubscribed`, `detached_head`, and `closed`.
+- **Canonical PR watcher actor:** `stopped`, `warming_up`, `polling`, `idle_grace`, `backing_off`, `rate_limited`, and `terminal`.
+- **Reminder handoff:** formalize the existing `built -> handed_off -> confirmed` / `failed -> retry` lifecycle so only confirmation advances a subscription cursor.
+- **Daemon lifecycle:** `starting`, `running`, `shutdown_grace`, `stopping`, and `stopped`.
+
+Do not turn snapshot diffing, SQLite access, ETag caching, or detail-file generation into state machines. They remain services invoked by lifecycle actors.
+
+### 35.5 Watcher liveness and retention
+
+A canonical PR watcher polls while it has one or more active subscriptions. After the last subscription is removed, it enters an idle grace period and then stops polling. A merged or closed PR emits its terminal event, enters `terminal`, and stops polling immediately. Stopped and terminal streams remain readable until bounded event/subscription retention prunes them; retention durations and idle-grace values are configuration decisions to finalize during implementation.
+
+### 35.6 Migration and validation
+
+Migrate the existing single PR attachment into one automatic subscription where possible. Add tests for independent session cursors, manual external-repository subscriptions, automatic opt-out, activation before PR creation, linked-worktree transitions, detached HEAD, watcher grace shutdown, merge/close terminal behavior, crash recovery, and both OpenCode and Pi adapters.

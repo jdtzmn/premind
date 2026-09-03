@@ -30,6 +30,9 @@ const makeDaemon = (initialBatch: PendingBatch = {
     unregisterSession: async () => undefined,
     pauseSession: async () => undefined,
     resumeSession: async () => undefined,
+    activateWorktree: async () => undefined,
+    subscribe: async () => undefined,
+    unsubscribe: async () => undefined,
     getPendingReminder: async (_sessionId: string) => ({ batch: pendingBatch }),
     ackReminder: async ({ batchId, state }: { batchId: string; state: string }) => {
       acknowledgements.push({ batchId, state })

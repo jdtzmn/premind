@@ -7,6 +7,7 @@ import {
 } from "./constants.ts"
 import {
   ackReminderPayloadSchema,
+  activateWorktreePayloadSchema,
   debugStatusPayloadSchema,
   debugStatusResponseSchema,
   ensureSessionControlPayloadSchema,
@@ -19,6 +20,8 @@ import {
   reminderBatchSchema,
   sessionControlPayloadSchema,
   setGlobalDisabledPayloadSchema,
+  subscribePayloadSchema,
+  unsubscribePayloadSchema,
   unregisterSessionPayloadSchema,
   updateSessionStatePayloadSchema,
 } from "./schema.ts"
@@ -33,6 +36,9 @@ export const requestSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("unregisterSession"), protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION), payload: unregisterSessionPayloadSchema }),
   z.object({ type: z.literal("pauseSession"), protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION), payload: sessionControlPayloadSchema }),
   z.object({ type: z.literal("resumeSession"), protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION), payload: sessionControlPayloadSchema }),
+  z.object({ type: z.literal("activateWorktree"), protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION), payload: activateWorktreePayloadSchema }),
+  z.object({ type: z.literal("subscribe"), protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION), payload: subscribePayloadSchema }),
+  z.object({ type: z.literal("unsubscribe"), protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION), payload: unsubscribePayloadSchema }),
   z.object({ type: z.literal("getPendingReminder"), protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION), payload: getPendingReminderPayloadSchema }),
   z.object({ type: z.literal("ackReminder"), protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION), payload: ackReminderPayloadSchema }),
   z.object({ type: z.literal("setGlobalDisabled"), protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION), payload: setGlobalDisabledPayloadSchema }),
@@ -71,6 +77,44 @@ export const getPendingReminderResponseSchema = z.object({
 export const globalDisabledResponseSchema = z.object({
   disabled: z.boolean(),
 })
+
+const worktreeBindingResponseSchema = z
+  .object({
+    sessionId: z.string().min(1),
+    root: z.string().min(1),
+    gitDir: z.string().min(1),
+    repo: z.string().min(1),
+    branch: z.string().min(1).nullable(),
+    headSha: z.string().min(1),
+    state: z.string().min(1),
+    updatedAt: z.number().int(),
+  })
+  .strict()
+
+const subscriptionResponseSchema = z
+  .object({
+    subscriptionId: z.string().min(1),
+    sessionId: z.string().min(1),
+    repo: z.string().min(1),
+    prNumber: z.number().int().positive(),
+    source: z.enum(["automatic", "manual"]),
+    state: z.enum(["active", "unsubscribed"]),
+    lastDeliveredEventSeq: z.number().int().nonnegative(),
+    updatedAt: z.number().int(),
+  })
+  .strict()
+
+export const activateWorktreeResponseSchema = z
+  .object({ binding: worktreeBindingResponseSchema, watching: z.boolean() })
+  .strict()
+
+export const subscribeResponseSchema = z
+  .object({ subscription: subscriptionResponseSchema })
+  .strict()
+
+export const unsubscribeResponseSchema = z
+  .object({ unsubscribed: z.boolean(), automaticOptOutRecorded: z.boolean() })
+  .strict()
 
 export { debugStatusResponseSchema }
 

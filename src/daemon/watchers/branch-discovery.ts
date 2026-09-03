@@ -1,6 +1,7 @@
 import { createLogger } from "../logging/logger.ts"
 import { StateStore } from "../persistence/store.ts"
 import type { GitHubClientLike } from "../github/client.ts"
+import { WorktreeBindingRegistry } from "../worktrees/worktree-binding-registry.ts"
 
 const BRANCH_PULLS_ETAG_SCOPE = "branch.pulls"
 
@@ -12,11 +13,20 @@ export class BranchDiscoveryWatcher {
   constructor(
     private readonly store: StateStore,
     private readonly github: GitHubClientLike,
+    private readonly worktreeBindings = new WorktreeBindingRegistry(store),
   ) {}
 
   async tick(now = Date.now()) {
-    const targets = this.store.listBranchWatchTargets(now)
-    for (const target of targets) {
+    const targetsByBranch = new Map<string, ReturnType<StateStore["listActiveWorktreeBranchTargets"]>>()
+    for (const target of this.store.listActiveWorktreeBranchTargets(now)) {
+      const key = etagKey(target.repo, target.branch)
+      const targets = targetsByBranch.get(key)
+      if (targets) targets.push(target)
+      else targetsByBranch.set(key, [target])
+    }
+
+    for (const targets of targetsByBranch.values()) {
+      const target = targets[0]!
       try {
         const cachedEtag = this.store.getEtag(BRANCH_PULLS_ETAG_SCOPE, etagKey(target.repo, target.branch))
         const result = await this.github.findOpenPullRequestForBranch(target.repo, target.branch, {
@@ -31,15 +41,13 @@ export class BranchDiscoveryWatcher {
           continue
         }
 
-        // result.kind === "ok"
         if (result.etag !== null) {
           this.store.saveEtag(BRANCH_PULLS_ETAG_SCOPE, etagKey(target.repo, target.branch), result.etag, now)
         }
 
         const pr = result.pr
         if (pr && target.pr_number !== null && pr.number !== target.pr_number) {
-          const previousSnapshot = this.store.getSnapshot(target.repo, target.pr_number)
-          const previousState = previousSnapshot?.core.state
+          const previousState = this.store.getSnapshot(target.repo, target.pr_number)?.core.state
           if (previousState !== "MERGED" && previousState !== "CLOSED") {
             this.logger.info("deferring branch reassociation until prior PR reaches a terminal state", {
               repo: target.repo,
@@ -51,9 +59,36 @@ export class BranchDiscoveryWatcher {
             continue
           }
         }
-        this.store.recordBranchAssociation(target.repo, target.branch, pr?.number ?? target.pr_number, now)
-        if (!pr) continue
-        if (target.pr_number === pr.number) continue
+        // Keep the legacy attachment synchronized during the subscription migration.
+        // A missing open PR must not detach a previously resolved PR before its
+        // terminal snapshot has been observed and delivered.
+        this.store.recordBranchAssociation(
+          target.repo,
+          target.branch,
+          pr?.number ?? target.pr_number,
+          now,
+        )
+        if (!pr) {
+          for (const binding of targets) {
+            if (binding.git_dir !== "") {
+              this.worktreeBindings.pullRequestNotFound(binding.session_id, now)
+            }
+          }
+          continue
+        }
+
+        // Establish each automatic subscription at the existing stream high-water mark
+        // before appending the discovery event, so the new association itself remains
+        // pending for every session that just began following this PR.
+        for (const binding of targets) {
+          if (binding.git_dir !== "") {
+            this.worktreeBindings.pullRequestFound(
+              binding.session_id,
+              { repo: binding.repo, prNumber: pr.number },
+              now,
+            )
+          }
+        }
 
         this.store.insertEvents(target.repo, pr.number, [
           {
@@ -71,11 +106,6 @@ export class BranchDiscoveryWatcher {
             },
           },
         ], now)
-
-        const sessions = this.store.listSessionsForBranch(target.repo, target.branch)
-        for (const session of sessions) {
-          this.store.buildReminderBatch(session.session_id, now)
-        }
       } catch (error) {
         this.logger.warn("branch discovery failed", {
           repo: target.repo,
