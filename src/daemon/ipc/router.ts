@@ -6,18 +6,30 @@ import {
 import {
 	debugStatusResponseSchema,
 	type AckReminderPayload,
+	type ActivateWorktreePayload,
 	type RegisterClientPayload,
+	type SubscribePayload,
+	type UnsubscribePayload,
 } from "../../shared/schema.ts";
 import type { PremindRequest, PremindResponse } from "../../shared/ipc.ts";
 import { createLogger } from "../logging/logger.ts";
 import { StateStore } from "../persistence/store.ts";
+import { resolveGitWorktree } from "../worktrees/git-resolver.ts";
+import type { ActiveWorktree } from "../worktrees/worktree-binding.ts";
+
+export type WorktreeResolver = (
+	requestedPath: string,
+) => Promise<ActiveWorktree>;
 
 export class Router {
 	private readonly logger = createLogger("daemon.ipc");
 
-	constructor(private readonly store: StateStore) {}
+	constructor(
+		private readonly store: StateStore,
+		private readonly resolveWorktree: WorktreeResolver = resolveGitWorktree,
+	) {}
 
-	handle(request: PremindRequest): PremindResponse {
+	async handle(request: PremindRequest): Promise<PremindResponse> {
 		switch (request.type) {
 			case "registerClient":
 				return this.ok(this.handleRegisterClient(request.payload));
@@ -118,6 +130,12 @@ export class Router {
 					);
 				return this.ok({ resumed: true });
 			}
+			case "activateWorktree":
+				return await this.handleActivateWorktree(request.payload);
+			case "subscribe":
+				return this.handleSubscribe(request.payload);
+			case "unsubscribe":
+				return this.handleUnsubscribe(request.payload);
 			case "getPendingReminder":
 				return this.ok({
 					batch: this.store.buildReminderBatch(request.payload.sessionId),
@@ -159,6 +177,111 @@ export class Router {
 
 	hasActiveSessions() {
 		return this.store.countActiveSessions() > 0;
+	}
+
+	private async handleActivateWorktree(
+		payload: ActivateWorktreePayload,
+	): Promise<PremindResponse> {
+		if (!this.store.getSession(payload.sessionId)) {
+			return this.fail(
+				"SESSION_NOT_FOUND",
+				`Unknown session: ${payload.sessionId}`,
+			);
+		}
+
+		let worktree: ActiveWorktree;
+		try {
+			worktree = await this.resolveWorktree(payload.path);
+		} catch (error) {
+			return this.fail(
+				"WORKTREE_RESOLUTION_FAILED",
+				error instanceof Error ? error.message : "Unable to resolve Git worktree",
+			);
+		}
+
+		const binding = this.store.upsertWorktreeBinding({
+			sessionId: payload.sessionId,
+			...worktree,
+			state: worktree.branch ? "waiting_for_pr" : "detached_head",
+		});
+		this.store.deactivateAutomaticSubscriptions(payload.sessionId);
+		if (worktree.branch) {
+			this.store.ensureBranchWatcher(worktree.repo, worktree.branch);
+		}
+
+		return this.ok({ binding, watching: worktree.branch !== null });
+	}
+
+	private handleSubscribe(payload: SubscribePayload): PremindResponse {
+		if (!this.store.getSession(payload.sessionId)) {
+			return this.fail(
+				"SESSION_NOT_FOUND",
+				`Unknown session: ${payload.sessionId}`,
+			);
+		}
+		const binding = this.store.getWorktreeBinding(payload.sessionId);
+		const repo = payload.repo ?? binding?.repo;
+		if (!repo) {
+			return this.fail(
+				"WORKTREE_NOT_ACTIVE",
+				"An active worktree is required when repo is omitted",
+			);
+		}
+
+		return this.ok({
+			subscription: this.store.upsertSubscription({
+				sessionId: payload.sessionId,
+				repo,
+				prNumber: payload.prNumber,
+				source: "manual",
+			}),
+		});
+	}
+
+	private handleUnsubscribe(payload: UnsubscribePayload): PremindResponse {
+		if (!this.store.getSession(payload.sessionId)) {
+			return this.fail(
+				"SESSION_NOT_FOUND",
+				`Unknown session: ${payload.sessionId}`,
+			);
+		}
+		const binding = this.store.getWorktreeBinding(payload.sessionId);
+		const repo = payload.repo ?? binding?.repo;
+		if (!repo) {
+			return this.fail(
+				"WORKTREE_NOT_ACTIVE",
+				"An active worktree is required when repo is omitted",
+			);
+		}
+
+		const subscription = this.store.getSubscription(
+			payload.sessionId,
+			repo,
+			payload.prNumber,
+		);
+		const unsubscribed = this.store.unsubscribe(
+			payload.sessionId,
+			repo,
+			payload.prNumber,
+		);
+		let automaticOptOutRecorded = false;
+		if (
+			unsubscribed &&
+			subscription?.source === "automatic" &&
+			binding?.repo === repo &&
+			binding.branch !== null
+		) {
+			this.store.recordAutomaticSubscriptionOptOut({
+				sessionId: payload.sessionId,
+				gitDir: binding.gitDir,
+				repo,
+				branch: binding.branch,
+				prNumber: payload.prNumber,
+			});
+			automaticOptOutRecorded = true;
+		}
+
+		return this.ok({ unsubscribed, automaticOptOutRecorded });
 	}
 
 	private handleRegisterClient(payload: RegisterClientPayload) {

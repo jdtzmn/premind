@@ -1579,4 +1579,40 @@ describe("StateStore", () => {
     assert.equal(store.hasAutomaticSubscriptionOptOut(optOut), true)
     store.close()
   })
+
+  test("uses an active worktree binding for branch watches and subscriptions for PR watches", () => {
+    const store = createStore()
+    store.registerClient("client-watch-targets", { pid: 1, projectRoot: "/repo" })
+    store.registerSession({
+      clientId: "client-watch-targets", sessionId: "session-watch-targets", repo: "acme/repo",
+      branch: "legacy-branch", isPrimary: true, status: "active", busyState: "idle",
+    })
+    store.upsertWorktreeBinding({
+      sessionId: "session-watch-targets",
+      root: "/repo/.trees/feature",
+      gitDir: "/repo/.git/worktrees/feature",
+      repo: "acme/repo",
+      branch: "feature-branch",
+      headSha: "abc123",
+      state: "waiting_for_pr",
+    })
+    store.ensureBranchWatcher("acme/repo", "feature-branch")
+
+    assert.deepEqual(
+      store.listBranchWatchTargets().map((target) => [target.repo, target.branch]),
+      [["acme/repo", "feature-branch"]],
+    )
+
+    store.upsertSubscription({
+      sessionId: "session-watch-targets", repo: "other/repo", prNumber: 42, source: "manual",
+    })
+    assert.deepEqual(
+      store.listPrWatchTargets().map((target) => [target.repo, target.pr_number]),
+      [["other/repo", 42]],
+    )
+
+    store.unsubscribe("session-watch-targets", "other/repo", 42)
+    assert.deepEqual(store.listPrWatchTargets(), [])
+    store.close()
+  })
 })

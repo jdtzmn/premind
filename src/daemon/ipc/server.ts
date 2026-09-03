@@ -22,8 +22,9 @@ export class IpcServer {
 				const line = buffer.slice(0, newlineIndex).trim();
 				buffer = buffer.slice(newlineIndex + 1);
 				if (line.length > 0) {
-					const response = this.handleLine(line);
-					socket.write(`${JSON.stringify(response)}\n`);
+					void this.handleLine(line).then((response) => {
+						socket.write(`${JSON.stringify(response)}\n`);
+					});
 				}
 				newlineIndex = buffer.indexOf("\n");
 			}
@@ -58,10 +59,10 @@ export class IpcServer {
 	shouldShutdown() {
 		return !this.router.hasActiveLeases() && !this.router.hasActiveSessions();
 	}
-	private handleLine(line: string): PremindResponse {
+	private async handleLine(line: string): Promise<PremindResponse> {
 		try {
 			const request = requestSchema.parse(JSON.parse(line));
-			return this.router.handle(request);
+			return await this.router.handle(request);
 		} catch (error) {
 			this.logger.warn("failed to handle request", {
 				error: error instanceof Error ? error.message : String(error),

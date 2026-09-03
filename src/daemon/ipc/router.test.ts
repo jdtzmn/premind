@@ -15,11 +15,175 @@ const createStore = () => {
   return new StateStore(path.join(dir, "premind.db"))
 }
 
+const worktree = {
+  root: "/repo/.trees/feature",
+  gitDir: "/repo/.git/worktrees/feature",
+  repo: "acme/repo",
+  branch: "feature/worktree",
+  headSha: "abc123",
+}
+
+const registerSession = (store: StateStore, sessionId = "session-1") => {
+  store.registerClient("client-1", { pid: 1, projectRoot: "/repo" })
+  store.registerSession({
+    clientId: "client-1",
+    sessionId,
+    repo: "acme/repo",
+    branch: "feature/legacy",
+    isPrimary: true,
+    status: "active",
+    busyState: "idle",
+  })
+}
+
 afterEach(() => {
   while (tempPaths.length > 0) {
     const dir = tempPaths.pop()
     if (dir) fs.rmSync(dir, { recursive: true, force: true })
   }
+})
+
+describe("Router worktree subscription operations", () => {
+  test("activates a worktree, replaces automatic subscriptions, and watches its branch", async () => {
+    const store = createStore()
+    registerSession(store)
+    store.upsertSubscription({
+      sessionId: "session-1",
+      repo: "acme/repo",
+      prNumber: 13,
+      source: "automatic",
+    })
+    const requestedPaths: string[] = []
+    const router = new Router(store, async (requestedPath) => {
+      requestedPaths.push(requestedPath)
+      return worktree
+    })
+
+    const response = await router.handle({
+      type: "activateWorktree",
+      protocolVersion: 1,
+      payload: { sessionId: "session-1", path: "/repo/.trees/feature/src" },
+    })
+
+    assert.equal(response.ok, true)
+    assert.deepEqual(requestedPaths, ["/repo/.trees/feature/src"])
+    assert.deepEqual(store.getWorktreeBinding("session-1"), {
+      sessionId: "session-1",
+      ...worktree,
+      state: "waiting_for_pr",
+      updatedAt: store.getWorktreeBinding("session-1")?.updatedAt,
+    })
+    assert.equal(
+      store.getSubscription("session-1", "acme/repo", 13)?.state,
+      "unsubscribed",
+    )
+    assert.deepEqual(
+      store.listBranchWatchTargets().map((target) => [target.repo, target.branch]),
+      [["acme/repo", "feature/worktree"]],
+    )
+    store.close()
+  })
+
+  test("defaults subscriptions to the active repository and records automatic opt-outs", async () => {
+    const store = createStore()
+    registerSession(store)
+    const router = new Router(store, async () => worktree)
+    await router.handle({
+      type: "activateWorktree",
+      protocolVersion: 1,
+      payload: { sessionId: "session-1", path: worktree.root },
+    })
+
+    const manualResponse = await router.handle({
+      type: "subscribe",
+      protocolVersion: 1,
+      payload: { sessionId: "session-1", prNumber: 42 },
+    })
+    assert.equal(manualResponse.ok, true)
+    assert.equal(
+      store.getSubscription("session-1", "acme/repo", 42)?.source,
+      "manual",
+    )
+
+    await router.handle({
+      type: "subscribe",
+      protocolVersion: 1,
+      payload: { sessionId: "session-1", repo: "other/repo", prNumber: 99 },
+    })
+    assert.equal(
+      store.getSubscription("session-1", "other/repo", 99)?.source,
+      "manual",
+    )
+
+    store.upsertSubscription({
+      sessionId: "session-1",
+      repo: "acme/repo",
+      prNumber: 13,
+      source: "automatic",
+    })
+    const unsubscribeResponse = await router.handle({
+      type: "unsubscribe",
+      protocolVersion: 1,
+      payload: { sessionId: "session-1", prNumber: 13 },
+    })
+
+    assert.equal(unsubscribeResponse.ok, true)
+    if (!unsubscribeResponse.ok) throw new Error("unsubscribe failed")
+    assert.deepEqual(unsubscribeResponse.result, {
+      unsubscribed: true,
+      automaticOptOutRecorded: true,
+    })
+    assert.equal(
+      store.hasAutomaticSubscriptionOptOut({
+        sessionId: "session-1",
+        gitDir: worktree.gitDir,
+        repo: worktree.repo,
+        branch: worktree.branch,
+        prNumber: 13,
+      }),
+      true,
+    )
+    assert.deepEqual(
+      store.listPrWatchTargets().map((target) => [target.repo, target.pr_number]),
+      [
+        ["acme/repo", 42],
+        ["other/repo", 99],
+      ],
+    )
+    store.close()
+  })
+
+  test("requires an existing session and an active worktree for default repositories", async () => {
+    const store = createStore()
+    const router = new Router(store, async () => worktree)
+
+    const missingSession = await router.handle({
+      type: "activateWorktree",
+      protocolVersion: 1,
+      payload: { sessionId: "missing", path: worktree.root },
+    })
+    assert.deepEqual(missingSession, {
+      ok: false,
+      protocolVersion: 1,
+      error: { code: "SESSION_NOT_FOUND", message: "Unknown session: missing" },
+    })
+
+    registerSession(store)
+    const noBinding = await router.handle({
+      type: "subscribe",
+      protocolVersion: 1,
+      payload: { sessionId: "session-1", prNumber: 1 },
+    })
+    assert.deepEqual(noBinding, {
+      ok: false,
+      protocolVersion: 1,
+      error: {
+        code: "WORKTREE_NOT_ACTIVE",
+        message: "An active worktree is required when repo is omitted",
+      },
+    })
+    store.close()
+  })
 })
 
 const controlRequest = (clientId: string) => ({

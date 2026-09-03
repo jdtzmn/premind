@@ -95,6 +95,25 @@ export const sessionControlPayloadSchema = z
     sessionId: z.string().min(1),
   })
   .strict()
+
+export const activateWorktreePayloadSchema = z
+  .object({
+    sessionId: z.string().min(1),
+    path: z.string().min(1),
+  })
+  .strict()
+
+const subscriptionControlPayloadSchema = z
+  .object({
+    sessionId: z.string().min(1),
+    prNumber: z.number().int().positive(),
+    repo: z.string().min(1).optional(),
+  })
+  .strict()
+
+export const subscribePayloadSchema = subscriptionControlPayloadSchema
+export const unsubscribePayloadSchema = subscriptionControlPayloadSchema
+
 export const reminderEventSchema = z
   .object({
     eventId: z.string().min(1),
@@ -186,6 +205,9 @@ export type EnsureSessionControlPayload = z.infer<
 export type UpdateSessionStatePayload = z.infer<typeof updateSessionStatePayloadSchema>
 export type UnregisterSessionPayload = z.infer<typeof unregisterSessionPayloadSchema>
 export type SessionControlPayload = z.infer<typeof sessionControlPayloadSchema>
+export type ActivateWorktreePayload = z.infer<typeof activateWorktreePayloadSchema>
+export type SubscribePayload = z.infer<typeof subscribePayloadSchema>
+export type UnsubscribePayload = z.infer<typeof unsubscribePayloadSchema>
 export type ReminderEvent = z.infer<typeof reminderEventSchema>
 export type ReminderBatch = z.infer<typeof reminderBatchSchema>
 export type AckReminderPayload = z.infer<typeof ackReminderPayloadSchema>

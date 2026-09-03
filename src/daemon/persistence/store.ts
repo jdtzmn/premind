@@ -451,6 +451,7 @@ export class StateStore {
 				`,
 			)
 			.run({ ...binding, now });
+		this.refreshWatcherCounts(now);
 		return this.getWorktreeBinding(binding.sessionId)!;
 	}
 
@@ -499,6 +500,7 @@ export class StateStore {
 				`,
 			)
 			.run({ ...input, subscriptionId: randomUUID(), now });
+		this.touchPrWatcher(input.repo, input.prNumber, now);
 		return this.getSubscription(input.sessionId, input.repo, input.prNumber)!;
 	}
 
@@ -546,13 +548,16 @@ export class StateStore {
 		const result = this.db
 			.prepare(`UPDATE session_subscriptions SET state = 'unsubscribed', updated_at = :now WHERE session_id = :sessionId AND repo = :repo AND pr_number = :prNumber AND state = 'active'`)
 			.run({ sessionId, repo, prNumber, now });
+		if ((result.changes as number) > 0) this.refreshWatcherCounts(now);
 		return (result.changes as number) > 0;
 	}
 
 	deactivateAutomaticSubscriptions(sessionId: string, now = Date.now()) {
-		this.db
+		const result = this.db
 			.prepare(`UPDATE session_subscriptions SET state = 'unsubscribed', updated_at = :now WHERE session_id = :sessionId AND source = 'automatic' AND state = 'active'`)
 			.run({ sessionId, now });
+		if ((result.changes as number) > 0) this.refreshWatcherCounts(now);
+		return result.changes as number;
 	}
 
 	recordAutomaticSubscriptionOptOut(
@@ -1278,6 +1283,10 @@ export class StateStore {
 		};
 	}
 
+	ensureBranchWatcher(repo: string, branch: string, now = Date.now()) {
+		this.touchBranchWatcher(repo, branch, now);
+	}
+
 	private touchBranchWatcher(repo: string, branch: string, now = Date.now()) {
 		this.db
 			.prepare(
@@ -1319,9 +1328,17 @@ export class StateStore {
           SET active_session_count = (
             SELECT COUNT(*)
             FROM sessions
-            WHERE sessions.repo = branch_watchers.repo
-              AND sessions.branch = branch_watchers.branch
-              AND sessions.status != 'closed'
+            LEFT JOIN worktree_bindings
+              ON worktree_bindings.session_id = sessions.session_id
+            WHERE sessions.status != 'closed'
+              AND (
+                (worktree_bindings.session_id IS NOT NULL
+                  AND worktree_bindings.repo = branch_watchers.repo
+                  AND worktree_bindings.branch = branch_watchers.branch)
+                OR (worktree_bindings.session_id IS NULL
+                  AND sessions.repo = branch_watchers.repo
+                  AND sessions.branch = branch_watchers.branch)
+              )
           ),
               updated_at = :now
         `,
@@ -1339,10 +1356,22 @@ export class StateStore {
           UPDATE pr_watchers
           SET active_session_count = (
             SELECT COUNT(*)
-            FROM sessions
-            WHERE sessions.repo = pr_watchers.repo
-              AND sessions.pr_number = pr_watchers.pr_number
-              AND sessions.status != 'closed'
+            FROM (
+              SELECT sessions.session_id
+              FROM sessions
+              WHERE sessions.repo = pr_watchers.repo
+                AND sessions.pr_number = pr_watchers.pr_number
+                AND sessions.status != 'closed'
+              UNION
+              SELECT session_subscriptions.session_id
+              FROM session_subscriptions
+              INNER JOIN sessions
+                ON sessions.session_id = session_subscriptions.session_id
+              WHERE session_subscriptions.repo = pr_watchers.repo
+                AND session_subscriptions.pr_number = pr_watchers.pr_number
+                AND session_subscriptions.state = 'active'
+                AND sessions.status != 'closed'
+            )
           ),
               updated_at = :now
         `,

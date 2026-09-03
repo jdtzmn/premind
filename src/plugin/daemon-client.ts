@@ -2,16 +2,22 @@ import net from "node:net"
 import { randomUUID } from "node:crypto"
 import { PREMIND_PROTOCOL_VERSION, PREMIND_SOCKET_PATH } from "../shared/constants.ts"
 import {
+  activateWorktreeResponseSchema,
   debugStatusResponseSchema,
   getPendingReminderResponseSchema,
   globalDisabledResponseSchema,
   registerClientResponseSchema,
   responseSchema,
+  subscribeResponseSchema,
+  unsubscribeResponseSchema,
 } from "../shared/ipc.ts"
 import type {
   AckReminderPayload,
+  ActivateWorktreePayload,
   EnsureSessionControlPayload,
   RegisterSessionPayload,
+  SubscribePayload,
+  UnsubscribePayload,
   UpdateSessionStatePayload,
 } from "../shared/schema.ts"
 import { ensureDaemonRunning } from "./daemon-launcher.ts"
@@ -123,6 +129,33 @@ export class PremindDaemonClient {
       protocolVersion: PREMIND_PROTOCOL_VERSION,
       payload: { sessionId },
     })
+  }
+
+  async activateWorktree(payload: ActivateWorktreePayload) {
+    const response = await this.requestWithRetry({
+      type: "activateWorktree",
+      protocolVersion: PREMIND_PROTOCOL_VERSION,
+      payload,
+    })
+    return activateWorktreeResponseSchema.parse(response)
+  }
+
+  async subscribe(payload: SubscribePayload) {
+    const response = await this.requestWithRetry({
+      type: "subscribe",
+      protocolVersion: PREMIND_PROTOCOL_VERSION,
+      payload,
+    })
+    return subscribeResponseSchema.parse(response)
+  }
+
+  async unsubscribe(payload: UnsubscribePayload) {
+    const response = await this.requestWithRetry({
+      type: "unsubscribe",
+      protocolVersion: PREMIND_PROTOCOL_VERSION,
+      payload,
+    })
+    return unsubscribeResponseSchema.parse(response)
   }
 
   async getPendingReminder(sessionId: string) {
