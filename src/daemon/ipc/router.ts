@@ -199,15 +199,11 @@ export class Router {
 			);
 		}
 
-		const binding = this.store.upsertWorktreeBinding({
+		const binding = this.store.activateWorktree({
 			sessionId: payload.sessionId,
 			...worktree,
 			state: worktree.branch ? "waiting_for_pr" : "detached_head",
 		});
-		this.store.deactivateAutomaticSubscriptions(payload.sessionId);
-		if (worktree.branch) {
-			this.store.ensureBranchWatcher(worktree.repo, worktree.branch);
-		}
 
 		return this.ok({ binding, watching: worktree.branch !== null });
 	}

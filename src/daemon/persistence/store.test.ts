@@ -1262,61 +1262,65 @@ describe("StateStore", () => {
     store.close()
   })
 
-  test("recoverFromRestart deduplicates: keeps most-recent session per branch, closes the rest", () => {
+  test("same-branch sessions remain independent consumers across restart recovery", () => {
     const store = createStore()
-    const now = Date.now()
+    store.registerClient("client-shared", { pid: 1, projectRoot: "/tmp/project" })
 
-    store.registerClient("client-dedup", { pid: 1, projectRoot: "/tmp/project" }, now - 10_000)
+    for (const sessionId of ["same-branch-a", "same-branch-b"]) {
+      const result = store.registerSession({
+        clientId: "client-shared", sessionId, repo: "acme/repo", branch: "feature/shared",
+        isPrimary: true, status: "active", busyState: "idle",
+      })
+      assert.deepEqual(result, { created: true, superseded: 0 })
+    }
+    store.recordBranchAssociation("acme/repo", "feature/shared", 31)
+    store.insertEvents("acme/repo", 31, [{
+      dedupeKey: "shared-event-1", kind: "issue_comment.created", priority: "high",
+      summary: "first shared event", payload: {},
+    }])
 
-    // Insert three sessions on the same branch directly (bypassing registerSession's
-    // own supersession so we can simulate the pre-fix state where duplicates existed).
-    const insertSession = (store as any).db.prepare(`
-      INSERT INTO sessions (session_id, client_id, repo, branch, pr_number, is_primary, status, busy_state, last_delivered_event_seq, last_activity_at, created_at, updated_at)
-      VALUES (:id, 'client-dedup', 'acme/repo', 'feature/x', NULL, 1, 'active', 'idle', 0, :t, :t, :t)
-    `)
-    insertSession.run({ id: "oldest", t: now - 3000 })
-    insertSession.run({ id: "middle", t: now - 2000 })
-    insertSession.run({ id: "newest", t: now - 1000 })
+    const firstA = store.buildReminderBatch("same-branch-a")
+    const firstB = store.buildReminderBatch("same-branch-b")
+    assert.ok(firstA)
+    assert.ok(firstB)
+    assert.deepEqual(firstA.events.map((event) => event.eventId), ["1"])
+    assert.deepEqual(firstB.events.map((event) => event.eventId), ["1"])
+    store.ackReminder({ batchId: firstA.batchId, sessionId: "same-branch-a", state: "confirmed" })
 
-    // A session on a different branch — must not be affected.
-    ;(store as any).db.prepare(`
-      INSERT INTO sessions (session_id, client_id, repo, branch, pr_number, is_primary, status, busy_state, last_delivered_event_seq, last_activity_at, created_at, updated_at)
-      VALUES ('other-branch', 'client-dedup', 'acme/repo', 'feature/y', NULL, 1, 'active', 'idle', 0, :t, :t, :t)
-    `).run({ t: now - 500 })
+    const recovery = store.recoverFromRestart()
+    assert.equal(recovery.dedupedSessions, 0)
+    assert.equal(recovery.recoveredSessions, 2)
+    assert.equal(store.getSession("same-branch-a")?.status, "active")
+    assert.equal(store.getSession("same-branch-b")?.status, "active")
+    assert.equal(store.getPendingReminder("same-branch-b")?.batchId, firstB.batchId)
+    store.ackReminder({ batchId: firstB.batchId, sessionId: "same-branch-b", state: "confirmed" })
 
-    const recovery = store.recoverFromRestart(now)
-
-    assert.equal(recovery.dedupedSessions, 2, "oldest and middle should be closed")
-    assert.equal(store.getSession("oldest")?.status, "closed")
-    assert.equal(store.getSession("middle")?.status, "closed")
-    assert.equal(store.getSession("newest")?.status, "active", "most-recent session survives")
-    assert.equal(store.getSession("other-branch")?.status, "active", "different branch unaffected")
-    assert.equal(recovery.recoveredSessions, 2, "two active sessions remain after dedup")
+    store.insertEvents("acme/repo", 31, [{
+      dedupeKey: "shared-event-2", kind: "review.approved", priority: "high",
+      summary: "second shared event", payload: {},
+    }])
+    assert.deepEqual(store.buildReminderBatch("same-branch-a")?.events.map((event) => event.eventId), ["2"])
+    assert.deepEqual(store.buildReminderBatch("same-branch-b")?.events.map((event) => event.eventId), ["2"])
 
     store.close()
   })
 
-  test("registerSession closes superseded sessions on the same (repo, branch)", () => {
+  test("ensureSessionControl keeps same-branch peers active and preserves its response shape", () => {
     const store = createStore()
-    store.registerClient("client-sup", { pid: 1, projectRoot: "/tmp/project" })
-
-    // Register session A on acme/repo @ feature/x.
-    const r1 = store.registerSession({
-      clientId: "client-sup", sessionId: "session-A", repo: "acme/repo",
+    store.registerClient("client-control", { pid: 1, projectRoot: "/tmp/project" })
+    store.registerSession({
+      clientId: "client-control", sessionId: "session-A", repo: "acme/repo",
       branch: "feature/x", isPrimary: true, status: "active", busyState: "idle",
     })
-    assert.deepEqual(r1, { created: true, superseded: 0 })
+
+    const result = store.ensureSessionControl({
+      clientId: "client-control", sessionId: "session-B", repo: "acme/repo",
+      branch: "feature/x", isPrimary: true, busyState: "idle", paused: false,
+    })
+
+    assert.deepEqual(result, { created: true, superseded: 0 })
     assert.equal(store.getSession("session-A")?.status, "active")
-
-    // Register session B on the same branch — A should be superseded.
-    const r2 = store.registerSession({
-      clientId: "client-sup", sessionId: "session-B", repo: "acme/repo",
-      branch: "feature/x", isPrimary: true, status: "active", busyState: "idle",
-    })
-    assert.deepEqual(r2, { created: true, superseded: 1 })
-    assert.equal(store.getSession("session-A")?.status, "closed", "A should be closed")
-    assert.equal(store.getSession("session-B")?.status, "active", "B should be active")
-
+    assert.equal(store.getSession("session-B")?.status, "active")
     store.close()
   })
 
@@ -1359,37 +1363,95 @@ describe("StateStore", () => {
     store.close()
   })
 
-  test("superseded sessions become orphan-pruneable once they lose the only active reference", () => {
+  test("pruneOrphanedPrEvents preserves an external manual subscription", () => {
     const store = createStore()
-    store.registerClient("client-orphan2", { pid: 1, projectRoot: "/tmp/project" })
-
-    // Register A, associate with PR 7.
+    store.registerClient("client-external", { pid: 1, projectRoot: "/tmp/project" })
     store.registerSession({
-      clientId: "client-orphan2", sessionId: "sup-A", repo: "acme/repo",
-      branch: "feature/x", isPrimary: true, status: "active", busyState: "idle",
+      clientId: "client-external", sessionId: "manual-session", repo: "acme/repo",
+      branch: "feature/local", isPrimary: true, status: "active", busyState: "idle",
     })
-    store.recordBranchAssociation("acme/repo", "feature/x", 7)
-    store.insertEvents("acme/repo", 7, [{
-      dedupeKey: "sup-ev-1", kind: "review.approved", priority: "high",
-      summary: "approved", payload: {},
+    store.upsertSubscription({
+      sessionId: "manual-session", repo: "external/widgets", prNumber: 77, source: "manual",
+    })
+    store.saveSnapshot("external/widgets", 77, snapshot())
+    store.insertEvents("external/widgets", 77, [{
+      dedupeKey: "external-event", kind: "review.approved", priority: "high",
+      summary: "external approval", payload: {},
     }])
 
-    // Before supersession: events must NOT be prunable (A is active).
-    assert.equal(store.pruneOrphanedPrEvents(), 0, "events must survive while A is active")
-
-    // Register B on the same branch — supersedes A.
-    store.registerSession({
-      clientId: "client-orphan2", sessionId: "sup-B", repo: "acme/repo",
-      branch: "feature/x", isPrimary: true, status: "active", busyState: "idle",
-    })
-    assert.equal(store.getSession("sup-A")?.status, "closed")
-
-    // B has no pr_number yet (recordBranchAssociation hasn't run for it).
-    // So PR 7 now has zero active sessions — events are prunable.
-    assert.equal(store.pruneOrphanedPrEvents(), 1, "events for orphaned PR should now be prunable")
-
+    assert.equal(store.getSession("manual-session")?.pr_number, null)
+    assert.equal(store.pruneOrphanedPrEvents(), 0)
+    assert.ok(store.getSnapshot("external/widgets", 77))
+    assert.equal(store.listUndeliveredEvents("manual-session").length, 1)
     store.close()
   })
+  test("scopes event deduplication to repository and pull request", () => {
+    const store = createStore()
+    const event = {
+      dedupeKey: "shared-dedupe-key", kind: "check.failed" as const, priority: "high" as const,
+      summary: "same upstream identity", payload: {},
+    }
+
+    store.insertEvents("acme/one", 1, [event])
+    store.insertEvents("acme/two", 1, [event])
+    store.insertEvents("acme/one", 2, [event])
+    store.insertEvents("acme/one", 1, [event])
+
+    const rows = ((store as any).db
+      .prepare(`SELECT repo, pr_number, dedupe_key FROM pr_events ORDER BY seq`)
+      .all() as Array<{ repo: string; pr_number: number; dedupe_key: string }>)
+      .map((row) => ({ ...row }))
+    assert.deepEqual(rows, [
+      { repo: "acme/one", pr_number: 1, dedupe_key: "shared-dedupe-key" },
+      { repo: "acme/two", pr_number: 1, dedupe_key: "shared-dedupe-key" },
+      { repo: "acme/one", pr_number: 2, dedupe_key: "shared-dedupe-key" },
+    ])
+    store.close()
+  })
+
+  test("inactive subscriptions hide stale batches and lifecycle deactivation cancels them", () => {
+    const store = createStore()
+    store.registerClient("client-batches", { pid: 1, projectRoot: "/tmp/project" })
+    store.registerSession({
+      clientId: "client-batches", sessionId: "batch-session", repo: "acme/repo",
+      branch: "feature/batches", isPrimary: true, status: "active", busyState: "idle",
+    })
+
+    const manual = store.upsertSubscription({
+      sessionId: "batch-session", repo: "external/repo", prNumber: 10, source: "manual",
+    })
+    store.insertEvents("external/repo", 10, [{
+      dedupeKey: "manual-event", kind: "review.approved", priority: "high",
+      summary: "manual event", payload: {},
+    }])
+    const staleBatch = store.buildReminderBatchForSubscription(manual.subscriptionId)
+    assert.ok(staleBatch)
+    ;(store as any).db
+      .prepare(`UPDATE session_subscriptions SET state = 'unsubscribed' WHERE subscription_id = ?`)
+      .run(manual.subscriptionId)
+    assert.equal(store.getPendingReminder("batch-session"), null)
+    assert.equal((store as any).db.prepare(`SELECT COUNT(*) AS count FROM reminder_batches`).get().count, 1)
+
+    store.upsertSubscription({
+      sessionId: "batch-session", repo: "external/repo", prNumber: 10, source: "manual",
+    })
+    assert.equal(store.unsubscribe("batch-session", "external/repo", 10), true)
+    assert.equal((store as any).db.prepare(`SELECT COUNT(*) AS count FROM reminder_batches`).get().count, 0)
+
+    const automatic = store.upsertSubscription({
+      sessionId: "batch-session", repo: "acme/repo", prNumber: 11, source: "automatic",
+    })
+    store.insertEvents("acme/repo", 11, [{
+      dedupeKey: "automatic-event", kind: "check.failed", priority: "high",
+      summary: "automatic event", payload: {},
+    }])
+    assert.ok(store.buildReminderBatchForSubscription(automatic.subscriptionId))
+    assert.equal(store.deactivateAutomaticSubscriptions("batch-session"), 1)
+    assert.equal(store.getPendingReminder("batch-session"), null)
+    assert.equal((store as any).db.prepare(`SELECT COUNT(*) AS count FROM reminder_batches`).get().count, 0)
+    store.close()
+  })
+
 
   test("migrates pr_events.detail_file_path -> reference_link on existing databases", () => {
     // Build a database that mimics the pre-rename schema, then open it with
@@ -1417,8 +1479,9 @@ describe("StateStore", () => {
       );
     `)
     legacy.prepare(
-      `INSERT INTO pr_events (repo, pr_number, dedupe_key, kind, priority, summary, detail_file_path, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run("acme/repo", 1, "k:1", "check.queued", "low", "stale entry", "https://github.com/acme/repo/runs/1", "{}", 0)
+      `INSERT INTO pr_events (seq, repo, pr_number, dedupe_key, kind, priority, summary, detail_file_path, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(41, "acme/repo", 1, "k:1", "check.queued", "low", "stale entry", "https://github.com/acme/repo/runs/1", "{}", 0)
+    legacy.prepare(`UPDATE sqlite_sequence SET seq = 50 WHERE name = 'pr_events'`).run()
     legacy.close()
 
     // Opening the StateStore should run the migration.
@@ -1429,13 +1492,30 @@ describe("StateStore", () => {
     assert.ok(columns.some((c) => c.name === "reference_link"), "reference_link column should exist after migration")
     assert.ok(!columns.some((c) => c.name === "detail_file_path"), "detail_file_path column should be gone")
 
-    // The pre-existing row's data should have survived the rename.
-    const row = (store as unknown as { db: { prepare: (sql: string) => { get: () => { reference_link: string } | undefined } } })
-      .db.prepare(`SELECT reference_link FROM pr_events WHERE dedupe_key = 'k:1'`)
+    // The pre-existing row's data and sequence should survive both migrations.
+    const row = (store as unknown as { db: { prepare: (sql: string) => { get: () => { seq: number; reference_link: string } | undefined } } })
+      .db.prepare(`SELECT seq, reference_link FROM pr_events WHERE dedupe_key = 'k:1'`)
       .get()
+    assert.equal(row?.seq, 41)
     assert.equal(row?.reference_link, "https://github.com/acme/repo/runs/1")
 
+    store.insertEvents("other/repo", 1, [{
+      dedupeKey: "k:1", kind: "check.queued", priority: "low", summary: "new scope", payload: {},
+    }])
+    const migratedRows = ((store as any).db
+      .prepare(`SELECT seq, repo, pr_number FROM pr_events ORDER BY seq`)
+      .all() as Array<{ seq: number; repo: string; pr_number: number }>)
+      .map((row) => ({ ...row }))
+    assert.deepEqual(migratedRows, [
+      { seq: 41, repo: "acme/repo", pr_number: 1 },
+      { seq: 51, repo: "other/repo", pr_number: 1 },
+    ])
+
     store.close()
+    const reopened = new StateStore(dbPath)
+    const reopenedCount = (reopened as any).db.prepare(`SELECT COUNT(*) AS count FROM pr_events`).get().count
+    assert.equal(reopenedCount, 2)
+    reopened.close()
   })
 
   test("migration is idempotent and a no-op on a fresh database", () => {
