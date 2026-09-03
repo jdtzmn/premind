@@ -18,10 +18,6 @@ async function main() {
   const server = new IpcServer()
   const github = new GitHubClient()
   const discoveryWatcher = new BranchDiscoveryWatcher(server.store, github, server.worktreeBindings)
-  // Adaptive per-PR scheduling: active PRs poll every 20s; quiet PRs stretch to
-  // 5 minutes. Default tiers in AdaptiveSchedule match the documented cadence.
-  const prSchedule = new AdaptiveSchedule()
-  const pullRequestWatcher = new PullRequestWatcher(server.store, github, { schedule: prSchedule })
 
   const recovery = server.store.recoverFromRestart()
   logger.info("startup recovery", {
@@ -32,6 +28,11 @@ async function main() {
     recoveredBranchWatchers: recovery.recoveredBranchWatchers,
     recoveredPrWatchers: recovery.recoveredPrWatchers,
   })
+
+  // Adaptive per-PR scheduling: active PRs poll every 20s; quiet PRs stretch to
+  // 5 minutes. The registry reconstructs canonical actors from SQLite here.
+  const prSchedule = new AdaptiveSchedule()
+  const pullRequestWatcher = new PullRequestWatcher(server.store, github, { schedule: prSchedule })
 
   // Reap sessions whose last_activity_at is older than the staleness threshold.
   // Runs once at startup to clean up any backlog carried across daemon restarts,
@@ -93,6 +94,7 @@ async function main() {
         resetAtMs: snapshot.resetAtMs,
       })
     } else if (snapshot.resource === "graphql") {
+      pullRequestWatcher.setRateLimitReset(snapshot.resetAtMs)
       prScheduler.setRateLimitReset(snapshot.resetAtMs)
       logger.warn("rate limit throttled; deferring pr poll", {
         resource: snapshot.resource,
@@ -132,6 +134,7 @@ async function main() {
     clearInterval(reapInterval)
     discoveryScheduler.stop()
     prScheduler.stop()
+    pullRequestWatcher.close()
     logger.info("graceful shutdown", { reason: "no_active_clients_or_sessions" })
     await server.close()
     process.exit(0)
@@ -142,6 +145,7 @@ async function main() {
     clearInterval(reapInterval)
     discoveryScheduler.stop()
     prScheduler.stop()
+    pullRequestWatcher.close()
     await server.close()
     process.exit(0)
   }

@@ -382,11 +382,17 @@ describe("diffSnapshot", () => {
     assert.equal(merged.payload.previousState, null)
   })
 
-  test("does not report an unmerged closed PR as merged", () => {
+  test("emits pr.closed, not pr.merged, for an unmerged OPEN to CLOSED transition", () => {
     const previous = baseSnapshot()
     const next = { ...previous, core: { ...previous.core, state: "CLOSED" } }
 
-    assert.ok(!diffSnapshot(previous, next).some((event) => event.kind === "pr.merged"))
+    const events = diffSnapshot(previous, next)
+    const closed = events.find((event) => event.kind === "pr.closed")
+    assert.ok(closed)
+    assert.equal(closed.priority, "high")
+    assert.equal(closed.payload.previousState, "OPEN")
+    assert.equal(closed.payload.state, "CLOSED")
+    assert.ok(!events.some((event) => event.kind === "pr.merged"))
   })
 
   test("uses a repository-qualified merge dedupe key", () => {

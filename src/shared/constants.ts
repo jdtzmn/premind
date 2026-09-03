@@ -14,6 +14,11 @@ export const PREMIND_CLIENT_LEASE_TTL_MS = 30_000
 export const PREMIND_IDLE_SHUTDOWN_GRACE_MS = 15_000
 export const PREMIND_IDLE_DELIVERY_THRESHOLD_MS = 60_000
 export const PREMIND_SESSION_STALE_MS = 6 * 60 * 60 * 1000
+// Canonical PR watchers stay warm briefly after their final subscriber leaves.
+export const PREMIND_PR_WATCHER_IDLE_GRACE_MS = 5 * 60 * 1000
+// Durable PR streams and inactive subscription cursors outlive their actors.
+export const PREMIND_PR_STREAM_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
+export const PREMIND_SUBSCRIPTION_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
 // How long a closed session row is retained before being permanently deleted.
 export const PREMIND_CLOSED_SESSION_RETENTION_MS = 24 * 60 * 60 * 1000
 // Daemon log file. Entries are appended here for post-hoc diagnosis.

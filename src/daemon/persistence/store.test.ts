@@ -4,6 +4,7 @@ import os from "node:os"
 import path from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { afterEach, describe, test } from "node:test"
+import { PREMIND_PR_STREAM_RETENTION_MS } from "../../shared/constants.ts"
 import { StateStore } from "./store.ts"
 import type { PullRequestSnapshot } from "../github/types.ts"
 
@@ -1201,8 +1202,10 @@ describe("StateStore", () => {
       summary: "active event", payload: {},
     }])
 
-    const prunedEvents = store.pruneOrphanedPrEvents()
-    assert.equal(prunedEvents, 1, "should prune 1 event for the orphaned PR")
+    const pruneAt = Date.now() + PREMIND_PR_STREAM_RETENTION_MS + 1
+    store.pruneClosedSessions(0, pruneAt)
+    const prunedEvents = store.pruneOrphanedPrEvents(pruneAt)
+    assert.equal(prunedEvents, 1, "should prune 1 expired event for the orphaned PR")
 
     // PR 1 events gone, snapshot gone.
     const eventsForPr1 = (store as any).db.prepare(`SELECT COUNT(*) AS c FROM pr_events WHERE repo = 'acme/repo' AND pr_number = 1`).get() as { c: number }

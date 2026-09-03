@@ -5,7 +5,9 @@ import { randomUUID } from "node:crypto";
 import {
 	PREMIND_CLIENT_LEASE_TTL_MS,
 	PREMIND_DB_PATH,
+	PREMIND_PR_STREAM_RETENTION_MS,
 	PREMIND_STATE_DIR,
+	PREMIND_SUBSCRIPTION_RETENTION_MS,
 } from "../../shared/constants.ts";
 import type {
 	AckReminderPayload,
@@ -21,6 +23,7 @@ import type {
 	PullRequestSnapshot,
 } from "../github/types.ts";
 import { DetailFileWriter } from "../reminders/detail-files.ts";
+import type { PrWatcherState } from "../watchers/pr-watcher-machine.ts";
 
 type SessionRow = {
 	session_id: string;
@@ -37,6 +40,30 @@ type SessionRow = {
 
 export type SubscriptionSource = "automatic" | "manual";
 export type SubscriptionState = "active" | "unsubscribed";
+
+export type PrWatcherRecord = {
+	repo: string;
+	prNumber: number;
+	state: PrWatcherState;
+	activeSubscriberCount: number;
+	lastCheckedAt: number | null;
+	idleDeadlineAt: number | null;
+	terminalAt: number | null;
+	nextEligiblePollAt: number | null;
+	consecutiveFailures: number;
+	lastFailureAt: number | null;
+	lastFailureMessage: string | null;
+	rateLimitResetAt: number | null;
+	createdAt: number;
+	updatedAt: number;
+};
+
+export type PrStreamPruneResult = {
+	events: number;
+	snapshots: number;
+	watchers: number;
+	subscriptions: number;
+};
 
 export type WorktreeBinding = {
 	sessionId: string;
@@ -761,29 +788,69 @@ export class StateStore {
 	}
 
 	/**
-	 * Deletes pr_events and pr_snapshots for (repo, pr_number) pairs that have
-	 * no active subscription owned by a non-closed session. Subscriptions, rather
-	 * than the legacy sessions.pr_number association, define independent event
-	 * consumers and include manual watches for external repositories.
-	 *
-	 * Returns the number of event rows deleted.
+	 * Prunes inactive subscription cursors and expired stopped/terminal PR streams.
+	 * Active subscriptions always retain their stream, including while their owning
+	 * session is awaiting separate session-retention cleanup.
 	 */
-	pruneOrphanedPrEvents(_now = Date.now()): number {
+	pruneExpiredPrStreams(
+		now = Date.now(),
+		streamRetentionMs = PREMIND_PR_STREAM_RETENTION_MS,
+		subscriptionRetentionMs = PREMIND_SUBSCRIPTION_RETENTION_MS,
+	): PrStreamPruneResult {
 		return this.transaction(() => {
-			const activeSubscriptions = `
-				SELECT session_subscriptions.repo, session_subscriptions.pr_number
-				FROM session_subscriptions
-				INNER JOIN sessions ON sessions.session_id = session_subscriptions.session_id
-				WHERE session_subscriptions.state = 'active' AND sessions.status != 'closed'
+			const subscriptions = this.db
+				.prepare(
+					`DELETE FROM session_subscriptions
+					 WHERE state = 'unsubscribed' AND updated_at <= :subscriptionCutoff`,
+				)
+				.run({ subscriptionCutoff: now - subscriptionRetentionMs });
+
+			const expiredStreams = `
+				SELECT repo, pr_number
+				FROM pr_watchers
+				WHERE state IN ('stopped', 'terminal')
+				  AND COALESCE(terminal_at, idle_deadline_at, updated_at) <= :streamCutoff
+				  AND NOT EXISTS (
+				    SELECT 1 FROM session_subscriptions
+				    WHERE session_subscriptions.repo = pr_watchers.repo
+				      AND session_subscriptions.pr_number = pr_watchers.pr_number
+				      AND session_subscriptions.state = 'active'
+				  )
 			`;
+			const parameters = { streamCutoff: now - streamRetentionMs };
+			const snapshots = this.db
+				.prepare(`DELETE FROM pr_snapshots WHERE (repo, pr_number) IN (${expiredStreams})`)
+				.run(parameters);
+			const events = this.db
+				.prepare(`DELETE FROM pr_events WHERE (repo, pr_number) IN (${expiredStreams})`)
+				.run(parameters);
 			this.db
-				.prepare(`DELETE FROM pr_snapshots WHERE (repo, pr_number) NOT IN (${activeSubscriptions})`)
-				.run();
-			const result = this.db
-				.prepare(`DELETE FROM pr_events WHERE (repo, pr_number) NOT IN (${activeSubscriptions})`)
-				.run();
-			return result.changes as number;
+				.prepare(
+					`DELETE FROM etags
+					 WHERE scope = 'pr.snapshot'
+					   AND EXISTS (
+					     SELECT 1 FROM pr_watchers
+					     WHERE etags.key = pr_watchers.repo || '#' || pr_watchers.pr_number
+					       AND (pr_watchers.repo, pr_watchers.pr_number) IN (${expiredStreams})
+					   )`,
+				)
+				.run(parameters);
+			const watchers = this.db
+				.prepare(`DELETE FROM pr_watchers WHERE (repo, pr_number) IN (${expiredStreams})`)
+				.run(parameters);
+
+			return {
+				events: events.changes as number,
+				snapshots: snapshots.changes as number,
+				watchers: watchers.changes as number,
+				subscriptions: subscriptions.changes as number,
+			};
 		});
+	}
+
+	/** Backward-compatible event-count facade for the daemon's retention sweep. */
+	pruneOrphanedPrEvents(now = Date.now()): number {
+		return this.pruneExpiredPrStreams(now).events;
 	}
 
 	countClosedSessions(): number {
@@ -1161,6 +1228,36 @@ export class StateStore {
 		}
 	}
 
+	saveTerminalSnapshotAndEvents(
+		repo: string,
+		prNumber: number,
+		snapshot: PullRequestSnapshot,
+		events: NormalizedPrEvent[],
+		etag: string | null,
+		now = Date.now(),
+	): void {
+		this.transaction(() => {
+			this.saveSnapshot(repo, prNumber, snapshot);
+			this.insertEventsInTransaction(repo, prNumber, events, now);
+			this.saveEtag("pr.snapshot", `${repo}#${prNumber}`, etag, now);
+			this.persistPrWatcherLifecycle(
+				{
+					repo,
+					prNumber,
+					state: "terminal",
+					idleDeadlineAt: null,
+					terminalAt: now,
+					nextEligiblePollAt: null,
+					consecutiveFailures: 0,
+					lastFailureAt: null,
+					lastFailureMessage: null,
+					rateLimitResetAt: null,
+				},
+				now,
+			);
+		});
+	}
+
 	insertEvents(
 		repo: string,
 		prNumber: number,
@@ -1233,6 +1330,82 @@ export class StateStore {
 			active_session_count: number;
 			last_checked_at: number | null;
 		}>;
+	}
+
+	listPrWatcherRecords(now = Date.now()): PrWatcherRecord[] {
+		this.pruneExpiredClients(now);
+		this.refreshWatcherCounts(now);
+		const rows = this.db.prepare(`SELECT * FROM pr_watchers ORDER BY created_at ASC`).all() as Array<{
+			repo: string;
+			pr_number: number;
+			state: PrWatcherState;
+			active_session_count: number;
+			last_checked_at: number | null;
+			idle_deadline_at: number | null;
+			terminal_at: number | null;
+			next_eligible_poll_at: number | null;
+			consecutive_failures: number;
+			last_failure_at: number | null;
+			last_failure_message: string | null;
+			rate_limit_reset_at: number | null;
+			created_at: number;
+			updated_at: number;
+		}>;
+		return rows.map((row) => ({
+			repo: row.repo,
+			prNumber: row.pr_number,
+			state: row.state,
+			activeSubscriberCount: row.active_session_count,
+			lastCheckedAt: row.last_checked_at,
+			idleDeadlineAt: row.idle_deadline_at,
+			terminalAt: row.terminal_at,
+			nextEligiblePollAt: row.next_eligible_poll_at,
+			consecutiveFailures: row.consecutive_failures,
+			lastFailureAt: row.last_failure_at,
+			lastFailureMessage: row.last_failure_message,
+			rateLimitResetAt: row.rate_limit_reset_at,
+			createdAt: row.created_at,
+			updatedAt: row.updated_at,
+		}));
+	}
+
+	getPrWatcherRecord(repo: string, prNumber: number): PrWatcherRecord | null {
+		return this.listPrWatcherRecords().find(
+			(record) => record.repo === repo && record.prNumber === prNumber,
+		) ?? null;
+	}
+
+	persistPrWatcherLifecycle(
+		record: Pick<
+			PrWatcherRecord,
+			| "repo"
+			| "prNumber"
+			| "state"
+			| "idleDeadlineAt"
+			| "terminalAt"
+			| "nextEligiblePollAt"
+			| "consecutiveFailures"
+			| "lastFailureAt"
+			| "lastFailureMessage"
+			| "rateLimitResetAt"
+		>,
+		now = Date.now(),
+	): void {
+		this.db
+			.prepare(
+				`UPDATE pr_watchers
+				 SET state = :state,
+				     idle_deadline_at = :idleDeadlineAt,
+				     terminal_at = :terminalAt,
+				     next_eligible_poll_at = :nextEligiblePollAt,
+				     consecutive_failures = :consecutiveFailures,
+				     last_failure_at = :lastFailureAt,
+				     last_failure_message = :lastFailureMessage,
+				     rate_limit_reset_at = :rateLimitResetAt,
+				     updated_at = :now
+				 WHERE repo = :repo AND pr_number = :prNumber`,
+			)
+			.run({ ...record, now });
 	}
 
 	markPrWatchChecked(repo: string, prNumber: number, checkedAt = Date.now()) {
@@ -1604,11 +1777,6 @@ export class StateStore {
 
 		this.db
 			.prepare(
-				`UPDATE pr_watchers SET active_session_count = 0, updated_at = :now`,
-			)
-			.run({ now });
-		this.db
-			.prepare(
 				`
           UPDATE pr_watchers
           SET active_session_count = (
@@ -1621,7 +1789,19 @@ export class StateStore {
               AND session_subscriptions.state = 'active'
               AND sessions.status != 'closed'
           ),
-              updated_at = :now
+              updated_at = CASE
+                WHEN active_session_count != (
+                  SELECT COUNT(*)
+                  FROM session_subscriptions
+                  INNER JOIN sessions
+                    ON sessions.session_id = session_subscriptions.session_id
+                  WHERE session_subscriptions.repo = pr_watchers.repo
+                    AND session_subscriptions.pr_number = pr_watchers.pr_number
+                    AND session_subscriptions.state = 'active'
+                    AND sessions.status != 'closed'
+                ) THEN :now
+                ELSE updated_at
+              END
         `,
 			)
 			.run({ now });
@@ -1725,6 +1905,14 @@ export class StateStore {
         pr_number INTEGER NOT NULL,
         last_checked_at INTEGER,
         active_session_count INTEGER NOT NULL DEFAULT 0,
+        state TEXT NOT NULL DEFAULT 'stopped',
+        idle_deadline_at INTEGER,
+        terminal_at INTEGER,
+        next_eligible_poll_at INTEGER,
+        consecutive_failures INTEGER NOT NULL DEFAULT 0,
+        last_failure_at INTEGER,
+        last_failure_message TEXT,
+        rate_limit_reset_at INTEGER,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,
         PRIMARY KEY(repo, pr_number)
@@ -1790,6 +1978,28 @@ export class StateStore {
 				 FROM sessions WHERE pr_number IS NOT NULL`,
 			)
 			.run();
+
+		const prWatcherColumns = this.db
+			.prepare(`PRAGMA table_info(pr_watchers)`)
+			.all() as Array<{ name: string }>;
+		const ensurePrWatcherColumn = (name: string, definition: string) => {
+			if (!prWatcherColumns.some((column) => column.name === name)) {
+				this.db.exec(`ALTER TABLE pr_watchers ADD COLUMN ${name} ${definition}`);
+			}
+		};
+		ensurePrWatcherColumn("state", "TEXT NOT NULL DEFAULT 'stopped'");
+		ensurePrWatcherColumn("idle_deadline_at", "INTEGER");
+		ensurePrWatcherColumn("terminal_at", "INTEGER");
+		ensurePrWatcherColumn("next_eligible_poll_at", "INTEGER");
+		ensurePrWatcherColumn("consecutive_failures", "INTEGER NOT NULL DEFAULT 0");
+		ensurePrWatcherColumn("last_failure_at", "INTEGER");
+		ensurePrWatcherColumn("last_failure_message", "TEXT");
+		ensurePrWatcherColumn("rate_limit_reset_at", "INTEGER");
+		this.db.exec(
+			`UPDATE pr_watchers
+			 SET state = 'warming_up'
+			 WHERE active_session_count > 0 AND state = 'stopped'`,
+		);
 
 		const reminderColumns = this.db
 			.prepare(`PRAGMA table_info(reminder_batches)`)

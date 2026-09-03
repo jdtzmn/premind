@@ -78,6 +78,24 @@ const mergedEvent = (next: PullRequestSnapshot, previousState: string | null): N
     state: next.core.state,
   },
 })
+
+const closedEvent = (next: PullRequestSnapshot): NormalizedPrEvent => ({
+  dedupeKey: `pr.closed:${next.core.url}`,
+  kind: "pr.closed",
+  priority: "high",
+  summary: `PR #${next.core.number} was closed without merging: ${next.core.title}`,
+  referenceLink: next.core.url,
+  payload: {
+    prNumber: next.core.number,
+    title: next.core.title,
+    url: next.core.url,
+    branch: next.core.headRefName,
+    baseBranch: next.core.baseRefName,
+    headSha: next.core.headRefOid,
+    previousState: "OPEN",
+    state: next.core.state,
+  },
+})
 const sampleSummaries = (bucket: NormalizedPrEvent[], max = 2) => bucket.slice(0, max).map((event) => event.summary)
 
 export function diffSnapshot(previous: PullRequestSnapshot | null, next: PullRequestSnapshot): NormalizedPrEvent[] {
@@ -138,6 +156,13 @@ export function diffSnapshot(previous: PullRequestSnapshot | null, next: PullReq
 
   if (previous.core.state !== "MERGED" && next.core.state === "MERGED") {
     events.push(mergedEvent(next, previous.core.state))
+  }
+
+  if (
+    previous.core.state.toUpperCase() === "OPEN" &&
+    next.core.state.toUpperCase() === "CLOSED"
+  ) {
+    events.push(closedEvent(next))
   }
 
   if (previous.core.isDraft && !next.core.isDraft) {
