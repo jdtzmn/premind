@@ -17,6 +17,11 @@ const createStore = () => {
   return new StateStore(dbPath)
 }
 
+const confirmReminder = (store: StateStore, batchId: string, sessionId: string) => {
+  assert.equal(store.ackReminder({ batchId, sessionId, state: "handed_off" }), true)
+  assert.equal(store.ackReminder({ batchId, sessionId, state: "confirmed" }), true)
+}
+
 const snapshot = (): PullRequestSnapshot => ({
   core: {
     number: 7,
@@ -89,11 +94,7 @@ describe("StateStore", () => {
     const pending = store.getPendingReminder("session-1")
     assert.equal(pending?.batchId, batch.batchId)
 
-    store.ackReminder({
-      batchId: batch!.batchId,
-      sessionId: "session-1",
-      state: "confirmed",
-    })
+    confirmReminder(store, batch!.batchId, "session-1")
 
     assert.equal(store.getPendingReminder("session-1"), null)
     assert.equal(store.buildReminderBatch("session-1"), null)
@@ -319,11 +320,7 @@ describe("StateStore", () => {
     ])
     const delivered = store.buildReminderBatch("session-existing")
     assert.ok(delivered)
-    store.ackReminder({
-      batchId: delivered.batchId,
-      sessionId: "session-existing",
-      state: "confirmed",
-    })
+    confirmReminder(store, delivered.batchId, "session-existing")
     store.insertEvents("acme/repo", 12, [
       {
         dedupeKey: "issue_comment.created:13",
@@ -452,7 +449,7 @@ describe("StateStore", () => {
     second.close()
   })
 
-  test("restart recovery prunes stale leases and resets handed-off batches", () => {
+  test("restart recovery prunes stale leases and makes uncertain handoffs retryable", () => {
     const store = createStore()
 
     // Simulate a previous daemon session: register client, session, PR, events, and a batch.
@@ -488,7 +485,7 @@ describe("StateStore", () => {
 
     // Verify pre-recovery state.
     assert.equal(store.countActiveClients(), 1)
-    assert.ok(store.getPendingReminder("session-restart"))
+    assert.equal(store.getPendingReminder("session-restart"), null)
 
     // Simulate daemon restart.
     const recovery = store.recoverFromRestart()
@@ -497,9 +494,10 @@ describe("StateStore", () => {
     assert.equal(recovery.prunedClients, 1)
     assert.equal(store.countActiveClients(), 0)
 
-    // Handed-off batch should be reset (deleted).
+    // The uncertain handed-off batch survives as failed so the registry can retry it.
     assert.equal(recovery.resetBatches, 1)
-    assert.equal(store.getPendingReminder("session-restart"), null)
+    assert.equal(store.getReminderBatchRecord(batch.batchId)?.state, "failed")
+    assert.equal(store.getPendingReminder("session-restart")?.batchId, batch.batchId)
 
     // Only one session on its branch — nothing deduplicated.
     assert.equal(recovery.dedupedSessions, 0)
@@ -664,11 +662,7 @@ describe("StateStore", () => {
     assert.ok(batch)
 
     // Confirmed ack runs updateDeliveredEventSeq internally.
-    store.ackReminder({
-      batchId: batch.batchId,
-      sessionId: "session-d",
-      state: "confirmed",
-    })
+    confirmReminder(store, batch.batchId, "session-d")
 
     const session = store.getSession("session-d")
     assert.ok(session)
@@ -1079,11 +1073,7 @@ describe("StateStore", () => {
     ])
     const batch = store.buildReminderBatch("session-idempotent")
     assert.ok(batch)
-    store.ackReminder({
-      batchId: batch!.batchId,
-      sessionId: "session-idempotent",
-      state: "confirmed",
-    })
+    confirmReminder(store, batch!.batchId, "session-idempotent")
 
     // Re-running association with the same PR must NOT roll the cursor backwards or
     // forwards; subsequent new events must still be delivered.
@@ -1288,7 +1278,7 @@ describe("StateStore", () => {
     assert.ok(firstB)
     assert.deepEqual(firstA.events.map((event) => event.eventId), ["1"])
     assert.deepEqual(firstB.events.map((event) => event.eventId), ["1"])
-    store.ackReminder({ batchId: firstA.batchId, sessionId: "same-branch-a", state: "confirmed" })
+    confirmReminder(store, firstA.batchId, "same-branch-a")
 
     const recovery = store.recoverFromRestart()
     assert.equal(recovery.dedupedSessions, 0)
@@ -1296,7 +1286,7 @@ describe("StateStore", () => {
     assert.equal(store.getSession("same-branch-a")?.status, "active")
     assert.equal(store.getSession("same-branch-b")?.status, "active")
     assert.equal(store.getPendingReminder("same-branch-b")?.batchId, firstB.batchId)
-    store.ackReminder({ batchId: firstB.batchId, sessionId: "same-branch-b", state: "confirmed" })
+    confirmReminder(store, firstB.batchId, "same-branch-b")
 
     store.insertEvents("acme/repo", 31, [{
       dedupeKey: "shared-event-2", kind: "review.approved", priority: "high",

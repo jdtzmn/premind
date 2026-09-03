@@ -14,6 +14,7 @@ import {
 import type { PremindRequest, PremindResponse } from "../../shared/ipc.ts";
 import { createLogger } from "../logging/logger.ts";
 import { StateStore } from "../persistence/store.ts";
+import { ReminderHandoffRegistry } from "../reminders/reminder-handoff-registry.ts";
 import { resolveGitWorktree } from "../worktrees/git-resolver.ts";
 import { WorktreeBindingRegistry } from "../worktrees/worktree-binding-registry.ts";
 import type { ActiveWorktree } from "../worktrees/worktree-binding.ts";
@@ -29,10 +30,13 @@ export class Router {
 		private readonly store: StateStore,
 		private readonly resolveWorktree: WorktreeResolver = resolveGitWorktree,
 		private readonly worktreeBindings = new WorktreeBindingRegistry(store),
+		private readonly reminderHandoffs = new ReminderHandoffRegistry(store),
+		private readonly onDemandChanged: () => void = () => {},
 	) {}
 
 	async handle(request: PremindRequest): Promise<PremindResponse> {
-		switch (request.type) {
+		try {
+			switch (request.type) {
 			case "registerClient":
 				return this.ok(this.handleRegisterClient(request.payload));
 			case "heartbeatClient": {
@@ -141,10 +145,10 @@ export class Router {
 				return this.handleUnsubscribe(request.payload);
 			case "getPendingReminder":
 				return this.ok({
-					batch: this.store.buildReminderBatch(request.payload.sessionId),
+					batch: this.reminderHandoffs.getPendingReminder(request.payload.sessionId),
 				});
 			case "ackReminder":
-				return this.ok(this.handleAckReminder(request.payload));
+				return this.handleAckReminder(request.payload);
 			case "setGlobalDisabled":
 				this.store.setGloballyDisabled(request.payload.disabled);
 				return this.ok({ disabled: request.payload.disabled });
@@ -171,6 +175,9 @@ export class Router {
 				);
 			case "pruneClosedSessions":
 				return this.ok(this.store.pruneClosedOrOrphanedSessions());
+			}
+		} finally {
+			this.onDemandChanged();
 		}
 	}
 
@@ -180,6 +187,10 @@ export class Router {
 
 	hasActiveSessions() {
 		return this.store.countActiveSessions() > 0;
+	}
+
+	hasDaemonDemand(now = Date.now()) {
+		return this.store.hasDaemonDemand(now);
 	}
 
 	private async handleActivateWorktree(
@@ -284,13 +295,12 @@ export class Router {
 		};
 	}
 
-	private handleAckReminder(payload: AckReminderPayload) {
-		const acknowledged = this.store.ackReminder(payload);
-		if (!acknowledged) {
-			return { acknowledged: false, retryable: payload.state === "failed" };
+	private handleAckReminder(payload: AckReminderPayload): PremindResponse {
+		const result = this.reminderHandoffs.acknowledge(payload);
+		if (!result.acknowledged) {
+			return this.fail(result.code, result.message);
 		}
-
-		return { acknowledged: true, retryable: payload.state === "failed" };
+		return this.ok(result);
 	}
 
 	private ok(result: unknown): PremindResponse {

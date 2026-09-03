@@ -6,13 +6,16 @@ import type { PremindResponse } from "../../shared/ipc.ts";
 import { PREMIND_SOCKET_PATH } from "../../shared/constants.ts";
 import { Router } from "./router.ts";
 import { StateStore } from "../persistence/store.ts";
+import { ReminderHandoffRegistry } from "../reminders/reminder-handoff-registry.ts";
 import { WorktreeBindingRegistry } from "../worktrees/worktree-binding-registry.ts";
 
 export class IpcServer {
 	private readonly logger = createLogger("daemon.ipc");
 	readonly store: StateStore;
 	readonly worktreeBindings: WorktreeBindingRegistry;
+	readonly reminderHandoffs: ReminderHandoffRegistry;
 	private readonly router: Router;
+	private demandChangeListener: () => void = () => {};
 	private readonly server = net.createServer((socket) => {
 		let buffer = "";
 
@@ -36,10 +39,18 @@ export class IpcServer {
 	constructor(
 		store = new StateStore(),
 		worktreeBindings = new WorktreeBindingRegistry(store),
+		reminderHandoffs = new ReminderHandoffRegistry(store),
 	) {
 		this.store = store;
 		this.worktreeBindings = worktreeBindings;
-		this.router = new Router(store, undefined, worktreeBindings);
+		this.reminderHandoffs = reminderHandoffs;
+		this.router = new Router(
+			store,
+			undefined,
+			worktreeBindings,
+			reminderHandoffs,
+			() => this.demandChangeListener(),
+		);
 	}
 
 	async listen(socketPath = PREMIND_SOCKET_PATH) {
@@ -59,12 +70,21 @@ export class IpcServer {
 			});
 		});
 		if (fs.existsSync(socketPath)) fs.rmSync(socketPath);
+		this.reminderHandoffs.close();
 		this.worktreeBindings.close();
 		this.store.close();
 	}
 
-	shouldShutdown() {
-		return !this.router.hasActiveLeases() && !this.router.hasActiveSessions();
+	setDemandChangeListener(listener: () => void) {
+		this.demandChangeListener = listener;
+	}
+
+	hasDemand(now = Date.now()) {
+		return this.router.hasDaemonDemand(now);
+	}
+
+	shouldShutdown(now = Date.now()) {
+		return !this.hasDemand(now);
 	}
 	private async handleLine(line: string): Promise<PremindResponse> {
 		try {

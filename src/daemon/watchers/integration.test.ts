@@ -20,6 +20,11 @@ const createStore = () => {
   return new StateStore(dbPath)
 }
 
+const confirmReminder = (store: StateStore, batchId: string, sessionId: string) => {
+  assert.equal(store.ackReminder({ batchId, sessionId, state: "handed_off" }), true)
+  assert.equal(store.ackReminder({ batchId, sessionId, state: "confirmed" }), true)
+}
+
 afterEach(() => {
   while (tempPaths.length > 0) {
     const dir = tempPaths.pop()
@@ -225,11 +230,7 @@ describe("watcher integration", () => {
     await prWatcher.tick()
     const initialBatch = store.getPendingReminder("session-merged")
     assert.ok(initialBatch)
-    store.ackReminder({
-      batchId: initialBatch.batchId,
-      sessionId: "session-merged",
-      state: "confirmed",
-    })
+    confirmReminder(store, initialBatch.batchId, "session-merged")
 
 
     // The open-PR query no longer finds the PR after it merges, but that must
@@ -271,11 +272,7 @@ describe("watcher integration", () => {
     await prWatcher.tick()
     const initialBatch = store.getPendingReminder("session-before-replacement")
     assert.ok(initialBatch)
-    store.ackReminder({
-      batchId: initialBatch.batchId,
-      sessionId: "session-before-replacement",
-      state: "confirmed",
-    })
+    confirmReminder(store, initialBatch.batchId, "session-before-replacement")
 
     store.registerSession({
       clientId: "client-replacement",
@@ -320,11 +317,7 @@ describe("watcher integration", () => {
     await prWatcher.tick()
     const initialBatch = store.getPendingReminder("session-reassociation")
     assert.ok(initialBatch)
-    store.ackReminder({
-      batchId: initialBatch.batchId,
-      sessionId: "session-reassociation",
-      state: "confirmed",
-    })
+    confirmReminder(store, initialBatch.batchId, "session-reassociation")
 
     const nextPr = { number: 43, title: "Replacement PR", url: "https://github.com/acme/repo/pull/43", draft: false, state: "open" }
     github.pushBranchResult(nextPr)
@@ -464,10 +457,10 @@ describe("watcher integration", () => {
     // Drain the initial batch for both sessions so cursors advance past the init event.
     const initBatchA = store.buildReminderBatch("session-a")
     assert.ok(initBatchA)
-    store.ackReminder({ batchId: initBatchA.batchId, sessionId: "session-a", state: "confirmed" })
+    confirmReminder(store, initBatchA.batchId, "session-a")
     const initBatchB = store.buildReminderBatch("session-b")
     assert.ok(initBatchB)
-    store.ackReminder({ batchId: initBatchB.batchId, sessionId: "session-b", state: "confirmed" })
+    confirmReminder(store, initBatchB.batchId, "session-b")
 
     // Tick 2: new review.
     github.pushSnapshot(makeSnapshot({
@@ -482,7 +475,7 @@ describe("watcher integration", () => {
     assert.ok(batchB)
 
     // Confirm delivery for session-a only.
-    store.ackReminder({ batchId: batchA.batchId, sessionId: "session-a", state: "confirmed" })
+    confirmReminder(store, batchA.batchId, "session-a")
 
     // session-a should be caught up, session-b should still have pending.
     assert.equal(store.buildReminderBatch("session-a"), null)

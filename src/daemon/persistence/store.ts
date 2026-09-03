@@ -23,6 +23,7 @@ import type {
 	PullRequestSnapshot,
 } from "../github/types.ts";
 import { DetailFileWriter } from "../reminders/detail-files.ts";
+import { createReminderHandoffActor, eventForReminderState, type ReminderHandoffState } from "../reminders/reminder-handoff-machine.ts";
 import type { PrWatcherState } from "../watchers/pr-watcher-machine.ts";
 
 type SessionRow = {
@@ -93,8 +94,14 @@ type ReminderRow = {
 	subscription_id: string | null;
 	reminder_text: string;
 	events_json: string;
-	state: "built" | "handed_off" | "confirmed" | "failed";
+	state: ReminderHandoffState;
 	max_event_seq: number | null;
+};
+
+export type ReminderBatchRecord = ReminderBatch & {
+	state: ReminderHandoffState;
+	subscriptionId: string | null;
+	maxEventSeq: number | null;
 };
 
 type EventRow = {
@@ -175,16 +182,20 @@ export class StateStore {
 			});
 	}
 
-	recoverFromRestart(_now = Date.now()) {
+	recoverFromRestart(now = Date.now()) {
 		// Prune all client leases — previous daemon process is dead,
 		// so all leases from it are stale regardless of expiry.
 		const deletedClients = this.db.prepare(`DELETE FROM client_leases`).run();
 
-		// Clear any in-flight reminder batches that were handed_off but never confirmed.
-		// They'll be rebuilt from the event log on next idle.
+		// A crash leaves handed-off delivery uncertain. Preserve the durable batch
+		// and its cursor, but move it through the valid failure transition so the
+		// handoff registry can explicitly retry it after reconstruction.
 		const resetBatches = this.db
-			.prepare(`DELETE FROM reminder_batches WHERE state = 'handed_off'`)
-			.run();
+			.prepare(
+				`UPDATE reminder_batches SET state = 'failed', updated_at = :now
+				 WHERE state = 'handed_off'`,
+			)
+			.run({ now });
 
 		// Count what we're recovering.
 		const sessions = this.countActiveSessions();
@@ -1003,6 +1014,23 @@ export class StateStore {
 		return row.count;
 	}
 
+	hasDaemonDemand(now = Date.now()): boolean {
+		if (this.countActiveClients(now) > 0) return true;
+		this.refreshWatcherCounts(now);
+		const row = this.db
+			.prepare(
+				`SELECT
+				   (SELECT COUNT(*) FROM session_subscriptions
+				      INNER JOIN sessions USING (session_id)
+				      WHERE session_subscriptions.state = 'active' AND sessions.status != 'closed') +
+				   (SELECT COUNT(*) FROM pr_watchers WHERE active_session_count > 0) +
+				   (SELECT COUNT(*) FROM branch_watchers WHERE active_session_count > 0)
+				 AS count`,
+			)
+			.get() as { count: number };
+		return row.count > 0;
+	}
+
 	listBranchWatchTargets(now = Date.now()) {
 		this.pruneExpiredClients(now);
 		this.refreshWatcherCounts(now);
@@ -1505,6 +1533,11 @@ export class StateStore {
 	}
 
 	getPendingReminder(sessionId: string): ReminderBatch | null {
+		const record = this.getPendingReminderRecord(sessionId);
+		return record ? this.toReminderBatch(record) : null;
+	}
+
+	getPendingReminderRecord(sessionId: string): ReminderBatchRecord | null {
 		const row = this.db
 			.prepare(
 				`SELECT reminder_batches.batch_id, reminder_batches.session_id, reminder_batches.subscription_id,
@@ -1514,11 +1547,45 @@ export class StateStore {
 				 LEFT JOIN session_subscriptions
 				   ON session_subscriptions.subscription_id = reminder_batches.subscription_id
 				 WHERE reminder_batches.session_id = :sessionId
+				   AND reminder_batches.state IN ('built', 'failed')
 				   AND (reminder_batches.subscription_id IS NULL OR session_subscriptions.state = 'active')
 				 ORDER BY reminder_batches.created_at ASC LIMIT 1`,
 			)
 			.get({ sessionId }) as ReminderRow | undefined;
-		return this.toReminderBatch(row);
+		return this.toReminderBatchRecord(row);
+	}
+
+	getReminderBatchRecord(
+		batchId: string,
+		sessionId?: string,
+	): ReminderBatchRecord | null {
+		const row = (sessionId
+			? this.db
+					.prepare(
+						`SELECT batch_id, session_id, subscription_id, reminder_text, events_json, state, max_event_seq
+						 FROM reminder_batches WHERE batch_id = :batchId AND session_id = :sessionId`,
+					)
+					.get({ batchId, sessionId })
+			: this.db
+					.prepare(
+						`SELECT batch_id, session_id, subscription_id, reminder_text, events_json, state, max_event_seq
+						 FROM reminder_batches WHERE batch_id = :batchId`,
+					)
+					.get({ batchId })) as ReminderRow | undefined;
+		return this.toReminderBatchRecord(row);
+	}
+
+	listPendingReminderBatchRecords(): ReminderBatchRecord[] {
+		const rows = this.db
+			.prepare(
+				`SELECT batch_id, session_id, subscription_id, reminder_text, events_json, state, max_event_seq
+				 FROM reminder_batches WHERE state != 'confirmed' ORDER BY created_at ASC`,
+			)
+			.all() as ReminderRow[];
+		return rows.flatMap((row) => {
+			const record = this.toReminderBatchRecord(row);
+			return record ? [record] : [];
+		});
 	}
 
 	private getPendingReminderForSubscription(subscriptionId: string): ReminderBatch | null {
@@ -1531,56 +1598,137 @@ export class StateStore {
 				 INNER JOIN session_subscriptions
 				   ON session_subscriptions.subscription_id = reminder_batches.subscription_id
 				 WHERE reminder_batches.subscription_id = :subscriptionId
+				   AND reminder_batches.state IN ('built', 'failed')
 				   AND session_subscriptions.state = 'active'`,
 			)
 			.get({ subscriptionId }) as ReminderRow | undefined;
-		return this.toReminderBatch(row);
+		const record = this.toReminderBatchRecord(row);
+		return record ? this.toReminderBatch(record) : null;
 	}
 
-	private toReminderBatch(row: ReminderRow | undefined): ReminderBatch | null {
+	private toReminderBatch(record: ReminderBatchRecord): ReminderBatch {
+		return {
+			batchId: record.batchId,
+			sessionId: record.sessionId,
+			reminderText: record.reminderText,
+			events: record.events,
+		};
+	}
+
+	private toReminderBatchRecord(row: ReminderRow | undefined): ReminderBatchRecord | null {
 		if (!row || row.state === "confirmed") return null;
 		try {
 			return {
 				batchId: row.batch_id,
 				sessionId: row.session_id,
+				subscriptionId: row.subscription_id,
 				reminderText: row.reminder_text,
 				events: JSON.parse(row.events_json) as ReminderEvent[],
+				state: row.state,
+				maxEventSeq: row.max_event_seq,
 			};
 		} catch {
 			return null;
 		}
 	}
 
-	ackReminder(payload: AckReminderPayload, now = Date.now()) {
-		const row = this.db
+	transitionReminderBatchState(
+		batchId: string,
+		sessionId: string,
+		expectedState: ReminderHandoffState,
+		nextState: ReminderHandoffState,
+		now = Date.now(),
+	): boolean {
+		const valid =
+			(expectedState === "built" && nextState === "handed_off") ||
+			(expectedState === "handed_off" && nextState === "failed") ||
+			(expectedState === "failed" && nextState === "built");
+		if (!valid) return false;
+		const result = this.db
 			.prepare(
-				`SELECT batch_id, subscription_id, max_event_seq FROM reminder_batches
-				 WHERE batch_id = :batchId AND session_id = :sessionId`,
+				`UPDATE reminder_batches SET state = :nextState, updated_at = :now
+				 WHERE batch_id = :batchId AND session_id = :sessionId AND state = :expectedState`,
 			)
-			.get({ batchId: payload.batchId, sessionId: payload.sessionId }) as { batch_id: string; subscription_id: string | null; max_event_seq: number | null } | undefined;
-		if (!row) return false;
+			.run({ batchId, sessionId, expectedState, nextState, now });
+		return (result.changes as number) === 1;
+	}
 
-		if (payload.state === "confirmed") {
+	confirmReminderBatch(batchId: string, sessionId: string, now = Date.now()): boolean {
+		return this.transaction(() => {
+			const row = this.db
+				.prepare(
+					`SELECT subscription_id, max_event_seq FROM reminder_batches
+					 WHERE batch_id = :batchId AND session_id = :sessionId AND state = 'handed_off'`,
+				)
+				.get({ batchId, sessionId }) as
+				| { subscription_id: string | null; max_event_seq: number | null }
+				| undefined;
+			if (!row) return false;
+
+			const confirmed = this.db
+				.prepare(
+					`UPDATE reminder_batches SET state = 'confirmed', updated_at = :now
+					 WHERE batch_id = :batchId AND session_id = :sessionId AND state = 'handed_off'`,
+				)
+				.run({ batchId, sessionId, now });
+			if ((confirmed.changes as number) !== 1) return false;
+
 			if (row.max_event_seq !== null) {
 				if (row.subscription_id) {
 					this.db
-						.prepare(`UPDATE session_subscriptions SET last_delivered_event_seq = :seq, updated_at = :now WHERE subscription_id = :subscriptionId`)
+						.prepare(
+							`UPDATE session_subscriptions
+							 SET last_delivered_event_seq = MAX(last_delivered_event_seq, :seq), updated_at = :now
+							 WHERE subscription_id = :subscriptionId`,
+						)
 						.run({ seq: row.max_event_seq, now, subscriptionId: row.subscription_id });
 				}
 				// Keep the legacy session cursor synchronized until all adapters and
 				// migrations exclusively consume subscription-owned cursors.
 				this.db
-					.prepare(`UPDATE sessions SET last_delivered_event_seq = :seq, updated_at = :now WHERE session_id = :sessionId`)
-					.run({ seq: row.max_event_seq, now, sessionId: payload.sessionId });
+					.prepare(
+						`UPDATE sessions
+						 SET last_delivered_event_seq = MAX(last_delivered_event_seq, :seq), updated_at = :now
+						 WHERE session_id = :sessionId`,
+					)
+					.run({ seq: row.max_event_seq, now, sessionId });
 			}
-			this.db.prepare(`DELETE FROM reminder_batches WHERE batch_id = ?`).run(payload.batchId);
+			this.db
+				.prepare(`DELETE FROM reminder_batches WHERE batch_id = :batchId AND state = 'confirmed'`)
+				.run({ batchId });
 			return true;
-		}
+		});
+	}
 
-		this.db
-			.prepare(`UPDATE reminder_batches SET state = :state, updated_at = :now WHERE batch_id = :batchId`)
-			.run({ state: payload.state, now, batchId: payload.batchId });
-		return true;
+	ackReminder(payload: AckReminderPayload, now = Date.now()) {
+		const record = this.getReminderBatchRecord(payload.batchId, payload.sessionId);
+		if (!record) return false;
+		const actor = createReminderHandoffActor(record.state);
+		actor.send(eventForReminderState(payload.state));
+		const accepted = actor.getSnapshot().value === payload.state;
+		actor.stop();
+		if (!accepted) return false;
+
+		switch (payload.state) {
+			case "handed_off":
+				return this.transitionReminderBatchState(
+					payload.batchId,
+					payload.sessionId,
+					"built",
+					"handed_off",
+					now,
+				);
+			case "failed":
+				return this.transitionReminderBatchState(
+					payload.batchId,
+					payload.sessionId,
+					"handed_off",
+					"failed",
+					now,
+				);
+			case "confirmed":
+				return this.confirmReminderBatch(payload.batchId, payload.sessionId, now);
+		}
 	}
 
 	listSessionsForBranch(repo: string, branch: string) {

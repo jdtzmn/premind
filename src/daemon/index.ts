@@ -8,6 +8,7 @@ import { AdaptiveSchedule } from "./watchers/adaptive-schedule.ts"
 import { PollScheduler } from "./watchers/poll-scheduler.ts"
 import { createDisableGatedTick } from "./watchers/disable-gate.ts"
 import { DetailFileWriter } from "./reminders/detail-files.ts"
+import { createDaemonLifecycleActor } from "./lifecycle/daemon-machine.ts"
 
 const logger = createLogger("daemon")
 
@@ -16,6 +17,8 @@ const STALENESS_SWEEP_INTERVAL_MS = 5 * 60 * 1000
 async function main() {
   logger.info("daemon starting", { pid: process.pid, logFile: PREMIND_DAEMON_LOG_PATH })
   const server = new IpcServer()
+  const lifecycle = createDaemonLifecycleActor()
+  lifecycle.start()
   const github = new GitHubClient()
   const discoveryWatcher = new BranchDiscoveryWatcher(server.store, github, server.worktreeBindings)
 
@@ -66,6 +69,7 @@ async function main() {
   }
 
   await server.listen()
+  lifecycle.send({ type: "STARTUP_COMPLETE", hasDemand: server.hasDemand() })
 
   const discoveryScheduler = new PollScheduler(
     "branch-discovery",
@@ -128,26 +132,48 @@ async function main() {
   }, STALENESS_SWEEP_INTERVAL_MS)
   if (typeof reapInterval.unref === "function") reapInterval.unref()
 
-  const shutdownCheck = setInterval(async () => {
-    if (!server.shouldShutdown()) return
+  let stopping = false
+  let shutdownDeadlineAt: number | null =
+    lifecycle.getSnapshot().value === "shutdown_grace"
+      ? Date.now() + PREMIND_IDLE_SHUTDOWN_GRACE_MS
+      : null
+  const stopDaemon = async (reason: string) => {
+    if (stopping) return
+    stopping = true
+    lifecycle.send({ type: "STOP_REQUESTED", reason })
     clearInterval(shutdownCheck)
     clearInterval(reapInterval)
     discoveryScheduler.stop()
     prScheduler.stop()
     pullRequestWatcher.close()
-    logger.info("graceful shutdown", { reason: "no_active_clients_or_sessions" })
+    logger.info("graceful shutdown", { reason })
     await server.close()
+    lifecycle.send({ type: "STOPPED" })
     process.exit(0)
-  }, PREMIND_IDLE_SHUTDOWN_GRACE_MS)
+  }
 
-  const cleanup = async () => {
-    clearInterval(shutdownCheck)
-    clearInterval(reapInterval)
-    discoveryScheduler.stop()
-    prScheduler.stop()
-    pullRequestWatcher.close()
-    await server.close()
-    process.exit(0)
+  const reconcileDemand = (now = Date.now()) => {
+    lifecycle.send({ type: "DEMAND_CHANGED", hasDemand: server.hasDemand(now) })
+    const state = lifecycle.getSnapshot().value
+    if (state === "running") {
+      shutdownDeadlineAt = null
+      return
+    }
+    if (state !== "shutdown_grace") return
+    shutdownDeadlineAt ??= now + PREMIND_IDLE_SHUTDOWN_GRACE_MS
+    if (now >= shutdownDeadlineAt) {
+      lifecycle.send({ type: "GRACE_EXPIRED" })
+      void stopDaemon("idle_grace_expired")
+    }
+  }
+
+  server.setDemandChangeListener(() => reconcileDemand())
+  reconcileDemand()
+  const shutdownCheck = setInterval(() => reconcileDemand(), Math.min(1_000, PREMIND_IDLE_SHUTDOWN_GRACE_MS))
+  if (typeof shutdownCheck.unref === "function") shutdownCheck.unref()
+
+  const cleanup = () => {
+    void stopDaemon("signal")
   }
 
   process.on("SIGINT", cleanup)
