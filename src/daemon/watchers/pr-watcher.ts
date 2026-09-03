@@ -71,7 +71,7 @@ export class PullRequestWatcher {
         }
         const events = diffSnapshot(previous, next)
 
-        this.store.saveSnapshot(target.repo, target.pr_number, next)
+        this.store.saveSnapshotAndEvents(target.repo, target.pr_number, next, events, now)
         this.store.saveEtag(PR_SNAPSHOT_ETAG_SCOPE, etagKey(target.repo, target.pr_number), result.etag, now)
 
         if (events.length === 0) continue
@@ -79,7 +79,6 @@ export class PullRequestWatcher {
         // Real changes landed — reset adaptive cadence to the active tier.
         this.schedule?.recordActivity(key, now)
 
-        this.store.insertEvents(target.repo, target.pr_number, events, now)
         const sessions = this.store.listSessionsForPr(target.repo, target.pr_number)
         for (const session of sessions) {
           this.store.buildReminderBatch(session.session_id, now)

@@ -100,6 +100,61 @@ describe("StateStore", () => {
     store.close()
   })
 
+
+  test("persists a snapshot and its events atomically", () => {
+    const store = createStore()
+    const mergedSnapshot = { ...snapshot(), core: { ...snapshot().core, state: "MERGED" } }
+    const events = [
+      {
+        dedupeKey: "pr.merged:https://github.com/acme/repo/pull/7",
+        kind: "pr.merged",
+        priority: "high" as const,
+        summary: "Branch feature/x was merged",
+        referenceLink: mergedSnapshot.core.url,
+        payload: { prNumber: 7, state: "MERGED" },
+      },
+    ]
+
+    store.saveSnapshotAndEvents("acme/repo", 7, mergedSnapshot, events, 123)
+
+    assert.equal(store.getSnapshot("acme/repo", 7)?.core.state, "MERGED")
+    const eventCount = (store as any).db
+      .prepare("SELECT COUNT(*) AS count FROM pr_events WHERE repo = ? AND pr_number = ?")
+      .get("acme/repo", 7) as { count: number }
+    assert.equal(eventCount.count, 1)
+
+    store.close()
+  })
+
+  test("rolls back the snapshot when event persistence fails", () => {
+    const store = createStore()
+    const mergedSnapshot = { ...snapshot(), core: { ...snapshot().core, state: "MERGED" } }
+    const invalidEvents = [
+      {
+        dedupeKey: "pr.merged:https://github.com/acme/repo/pull/7",
+        kind: "pr.merged",
+        priority: "high" as const,
+        summary: "Branch feature/x was merged",
+        payload: { prNumber: 7, state: "MERGED" },
+      },
+      {
+        dedupeKey: "invalid-event",
+        kind: "pr.merged",
+        priority: "high" as const,
+        summary: "Invalid event payload",
+        payload: { invalid: BigInt(1) },
+      },
+    ]
+
+    assert.throws(() => store.saveSnapshotAndEvents("acme/repo", 7, mergedSnapshot, invalidEvents, 123))
+    assert.equal(store.getSnapshot("acme/repo", 7), null)
+    const eventCount = (store as any).db
+      .prepare("SELECT COUNT(*) AS count FROM pr_events WHERE repo = ? AND pr_number = ?")
+      .get("acme/repo", 7) as { count: number }
+    assert.equal(eventCount.count, 0)
+
+    store.close()
+  })
   test("keeps failed reminder batches retryable", () => {
     const store = createStore()
 

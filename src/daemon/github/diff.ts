@@ -60,6 +60,24 @@ const groupKinds = new Set([
   "review_comment.deleted",
 ])
 
+
+const mergedEvent = (next: PullRequestSnapshot, previousState: string | null): NormalizedPrEvent => ({
+  dedupeKey: `pr.merged:${next.core.url}`,
+  kind: "pr.merged",
+  priority: "high",
+  summary: `Branch ${next.core.headRefName} was merged via PR #${next.core.number}: ${next.core.title}`,
+  referenceLink: next.core.url,
+  payload: {
+    prNumber: next.core.number,
+    title: next.core.title,
+    url: next.core.url,
+    branch: next.core.headRefName,
+    baseBranch: next.core.baseRefName,
+    headSha: next.core.headRefOid,
+    previousState,
+    state: next.core.state,
+  },
+})
 const sampleSummaries = (bucket: NormalizedPrEvent[], max = 2) => bucket.slice(0, max).map((event) => event.summary)
 
 export function diffSnapshot(previous: PullRequestSnapshot | null, next: PullRequestSnapshot): NormalizedPrEvent[] {
@@ -92,6 +110,11 @@ export function diffSnapshot(previous: PullRequestSnapshot | null, next: PullReq
     const summary = blockers.length > 0 ? `${baseSummary} — ${blockers.join("; ")}` : baseSummary
 
     return [
+      ...(next.core.state === "MERGED"
+        ? [
+            mergedEvent(next, null),
+          ]
+        : []),
       {
         dedupeKey: `pr.snapshot.initial:${next.core.number}:${next.core.headRefOid}`,
         kind: "pr.snapshot.initialized",
@@ -112,6 +135,10 @@ export function diffSnapshot(previous: PullRequestSnapshot | null, next: PullReq
   }
 
   const events: NormalizedPrEvent[] = []
+
+  if (previous.core.state !== "MERGED" && next.core.state === "MERGED") {
+    events.push(mergedEvent(next, previous.core.state))
+  }
 
   if (previous.core.isDraft && !next.core.isDraft) {
     events.push({

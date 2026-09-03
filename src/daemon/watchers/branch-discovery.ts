@@ -37,8 +37,21 @@ export class BranchDiscoveryWatcher {
         }
 
         const pr = result.pr
-        this.store.recordBranchAssociation(target.repo, target.branch, pr?.number ?? null, now)
-
+        if (pr && target.pr_number !== null && pr.number !== target.pr_number) {
+          const previousSnapshot = this.store.getSnapshot(target.repo, target.pr_number)
+          const previousState = previousSnapshot?.core.state
+          if (previousState !== "MERGED" && previousState !== "CLOSED") {
+            this.logger.info("deferring branch reassociation until prior PR reaches a terminal state", {
+              repo: target.repo,
+              branch: target.branch,
+              previousPrNumber: target.pr_number,
+              nextPrNumber: pr.number,
+              previousState: previousState ?? null,
+            })
+            continue
+          }
+        }
+        this.store.recordBranchAssociation(target.repo, target.branch, pr?.number ?? target.pr_number, now)
         if (!pr) continue
         if (target.pr_number === pr.number) continue
 
