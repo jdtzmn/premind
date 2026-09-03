@@ -39,6 +39,11 @@ const makeReattachingDaemon = (knownSessionIds: Set<string> = new Set()) => {
     resumeSession: async (sessionId: string) => {
       requireKnown(sessionId, "resume")
     },
+    activateWorktree: async ({ sessionId }: { sessionId: string }) => {
+      requireKnown(sessionId, "activate")
+    },
+    subscribe: async () => undefined,
+    unsubscribe: async () => undefined,
     getPendingReminder: async (_sessionId: string) => ({ batch: null }),
     ackReminder: async () => undefined,
     setGlobalDisabled: async (disabled: boolean) => ({ disabled }),
@@ -112,11 +117,12 @@ describe("reactive session re-attach", () => {
 
     // Expected sequence:
     // 1. first busy update fails (SESSION_NOT_FOUND)
-    // 2. withReattach calls registerSession
+    // 2. withReattach registers and activates the worktree
     // 3. retry the busy update — succeeds
     assert.deepEqual(daemon._operations, [
       "update:busy:resumed-session",
       "register:resumed-session",
+      "activate:resumed-session",
       "update:busy:resumed-session",
     ])
   })
@@ -130,6 +136,7 @@ describe("reactive session re-attach", () => {
     assert.deepEqual(daemon._operations, [
       "update:idle:resumed-session",
       "register:resumed-session",
+      "activate:resumed-session",
       "update:idle:resumed-session",
     ])
   })
@@ -148,6 +155,7 @@ describe("reactive session re-attach", () => {
     assert.deepEqual(daemon._operations, [
       "update:busy:resumed-session",
       "register:resumed-session",
+      "activate:resumed-session",
       "update:busy:resumed-session",
     ])
   })
@@ -190,10 +198,11 @@ describe("reactive session re-attach", () => {
     const result = await runtime.tool.premind_pause.execute({}, { sessionID: "resumed-session" })
     assert.match(result, /premind paused/)
 
-    // Sequence: pause fails, re-attach, pause retried successfully.
+    // Sequence: pause fails, re-attach activates its worktree, then pause retries.
     assert.deepEqual(daemon._operations, [
       "pause:resumed-session",
       "register:resumed-session",
+      "activate:resumed-session",
       "pause:resumed-session",
     ])
   })
@@ -285,6 +294,9 @@ describe("NotFoundError handling", () => {
       },
       pauseSession: async () => undefined,
       resumeSession: async () => undefined,
+      activateWorktree: async () => undefined,
+      subscribe: async () => undefined,
+      unsubscribe: async () => undefined,
       getPendingReminder: async (sessionId: string) => ({
         batch: batchAvailable
           ? {
@@ -403,6 +415,9 @@ describe("attachSession skips nonexistent sessions", () => {
       unregisterSession: async (sessionId: string) => { operations.push(`unregister:${sessionId}`) },
       pauseSession: async () => undefined,
       resumeSession: async () => undefined,
+      activateWorktree: async () => undefined,
+      subscribe: async () => undefined,
+      unsubscribe: async () => undefined,
       getPendingReminder: async () => ({ batch: null }),
       ackReminder: async () => undefined,
       setGlobalDisabled: async (d: boolean) => ({ disabled: d }),
@@ -491,6 +506,9 @@ describe("chat.message session registration", () => {
       unregisterSession: async () => undefined,
       pauseSession: async () => undefined,
       resumeSession: async () => undefined,
+      activateWorktree: async () => undefined,
+      subscribe: async () => undefined,
+      unsubscribe: async () => undefined,
       getPendingReminder: async () => ({ batch: null }),
       ackReminder: async () => undefined,
       setGlobalDisabled: async (d: boolean) => ({ disabled: d }),
@@ -569,6 +587,9 @@ describe("child session caching", () => {
       unregisterSession: async (sessionId: string) => { daemonCalls.push(`unregister:${sessionId}`) },
       pauseSession: async () => undefined,
       resumeSession: async () => undefined,
+      activateWorktree: async () => undefined,
+      subscribe: async () => undefined,
+      unsubscribe: async () => undefined,
       getPendingReminder: async () => ({ batch: null }),
       ackReminder: async () => undefined,
       setGlobalDisabled: async (d: boolean) => ({ disabled: d }),

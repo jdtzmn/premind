@@ -24,6 +24,9 @@ const makeDaemon = () => {
     unregisterSession: async () => undefined,
     pauseSession: async () => undefined,
     resumeSession: async () => undefined,
+    activateWorktree: async () => undefined,
+    subscribe: async () => undefined,
+    unsubscribe: async () => undefined,
     getPendingReminder: async (_sessionId: string): Promise<{ batch: ReminderBatch | null }> => ({ batch: null }),
     ackReminder: async () => undefined,
     debugStatus: async () => ({

@@ -28,6 +28,9 @@ type DaemonClientLike = {
   unregisterSession: (sessionId: string) => Promise<unknown>
   pauseSession: (sessionId: string) => Promise<unknown>
   resumeSession: (sessionId: string) => Promise<unknown>
+  activateWorktree: (payload: import("../shared/schema.ts").ActivateWorktreePayload) => Promise<unknown>
+  subscribe: (payload: import("../shared/schema.ts").SubscribePayload) => Promise<unknown>
+  unsubscribe: (payload: import("../shared/schema.ts").UnsubscribePayload) => Promise<unknown>
   getPendingReminder: (sessionId: string) => Promise<{ batch: import("../shared/schema.ts").ReminderBatch | null }>
   ackReminder: (payload: import("../shared/schema.ts").AckReminderPayload) => Promise<unknown>
   setGlobalDisabled: (disabled: boolean) => Promise<{ disabled: boolean }>
@@ -268,6 +271,7 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
       status: "active",
       busyState: "idle",
     })
+    await daemon.activateWorktree({ sessionId: sessionID, path: root })
     lastPrimarySessionId = sessionID
     ownedSessions.add(sessionID)
     knownRootSessions.add(sessionID)
@@ -817,6 +821,56 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
           ownedSessions.add(sessionId)
           await withReattach(sessionId, () => daemon.resumeSession(sessionId))
           return `premind resumed for session ${sessionId}`
+        },
+      }),
+      premind_activate_worktree: tool({
+        description: "Activate a Git worktree for the current premind session.",
+        args: {
+          path: tool.schema.string().min(1).describe("Absolute or project-relative path to the Git worktree"),
+        },
+        async execute(args, ctx) {
+          const sessionId = ctx.sessionID ?? lastPrimarySessionId
+          if (!sessionId) return "premind worktree activation failed: no active session"
+          ownedSessions.add(sessionId)
+          const activated = await withReattach(sessionId, () =>
+            daemon.activateWorktree({ sessionId, path: args.path }),
+          )
+          if (!activated) return `premind worktree activation failed for session ${sessionId}`
+          return `premind activated worktree ${args.path}.`
+        },
+      }),
+      premind_subscribe: tool({
+        description: "Subscribe the current premind session to a pull request.",
+        args: {
+          prNumber: tool.schema.number().int().positive().describe("Pull request number"),
+          repo: tool.schema.string().min(1).optional().describe("Optional owner/repository; defaults to the active worktree repository"),
+        },
+        async execute(args, ctx) {
+          const sessionId = ctx.sessionID ?? lastPrimarySessionId
+          if (!sessionId) return "premind subscribe failed: no active session"
+          ownedSessions.add(sessionId)
+          const subscribed = await withReattach(sessionId, () =>
+            daemon.subscribe({ sessionId, ...args }),
+          )
+          if (!subscribed) return `premind subscribe failed for session ${sessionId}`
+          return `premind subscribed to ${args.repo ?? "active worktree"}#${args.prNumber}.`
+        },
+      }),
+      premind_unsubscribe: tool({
+        description: "Unsubscribe the current premind session from a pull request.",
+        args: {
+          prNumber: tool.schema.number().int().positive().describe("Pull request number"),
+          repo: tool.schema.string().min(1).optional().describe("Optional owner/repository; defaults to the active worktree repository"),
+        },
+        async execute(args, ctx) {
+          const sessionId = ctx.sessionID ?? lastPrimarySessionId
+          if (!sessionId) return "premind unsubscribe failed: no active session"
+          ownedSessions.add(sessionId)
+          const unsubscribed = await withReattach(sessionId, () =>
+            daemon.unsubscribe({ sessionId, ...args }),
+          )
+          if (!unsubscribed) return `premind unsubscribe failed for session ${sessionId}`
+          return `premind unsubscribed from ${args.repo ?? "active worktree"}#${args.prNumber}.`
         },
       }),
       premind_send_now: tool({
