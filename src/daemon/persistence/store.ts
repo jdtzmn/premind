@@ -722,7 +722,11 @@ export class StateStore {
 			)
 			.get(repo, prNumber) as { snapshot_json: string } | undefined;
 		if (!row) return null;
-		return JSON.parse(row.snapshot_json) as PullRequestSnapshot;
+		try {
+			return JSON.parse(row.snapshot_json) as PullRequestSnapshot;
+		} catch {
+			return null;
+		}
 	}
 
 	/**
@@ -954,12 +958,16 @@ export class StateStore {
 			)
 			.get(sessionId) as ReminderRow | undefined;
 		if (!row || row.state === "confirmed") return null;
-		return {
-			batchId: row.batch_id,
-			sessionId: row.session_id,
-			reminderText: row.reminder_text,
-			events: JSON.parse(row.events_json) as ReminderEvent[],
-		};
+		try {
+			return {
+				batchId: row.batch_id,
+				sessionId: row.session_id,
+				reminderText: row.reminder_text,
+				events: JSON.parse(row.events_json) as ReminderEvent[],
+			};
+		} catch {
+			return null;
+		}
 	}
 
 	ackReminder(payload: AckReminderPayload, now = Date.now()) {
