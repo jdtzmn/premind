@@ -108,7 +108,7 @@ export class StateStore {
 		this.db.close();
 	}
 
-	private transaction<T>(operation: () => T): T {
+	transaction<T>(operation: () => T): T {
 		// SQLite resolves duplicate savepoint names to the most recently opened one,
 		// which makes this safe for nested store operations without dynamic SQL.
 		this.db.exec("SAVEPOINT premind_transaction");
@@ -658,6 +658,27 @@ export class StateStore {
 				.prepare(`SELECT 1 FROM automatic_subscription_opt_outs WHERE session_id = :sessionId AND git_dir = :gitDir AND repo = :repo AND branch = :branch AND pr_number = :prNumber`)
 				.get(input),
 		);
+	}
+
+	getAutomaticSubscriptionOptOutForBinding(input: {
+		sessionId: string;
+		gitDir: string;
+		repo: string;
+		branch: string;
+	}): { prNumber: number; createdAt: number } | null {
+		const row = this.db
+			.prepare(
+				`SELECT pr_number, created_at
+				 FROM automatic_subscription_opt_outs
+				 WHERE session_id = :sessionId
+				   AND git_dir = :gitDir
+				   AND repo = :repo
+				   AND branch = :branch
+				 ORDER BY created_at DESC, pr_number DESC
+				 LIMIT 1`,
+			)
+			.get(input) as { pr_number: number; created_at: number } | undefined;
+		return row ? { prNumber: row.pr_number, createdAt: row.created_at } : null;
 	}
 
 	/**

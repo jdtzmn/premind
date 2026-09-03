@@ -6,10 +6,12 @@ import type { PremindResponse } from "../../shared/ipc.ts";
 import { PREMIND_SOCKET_PATH } from "../../shared/constants.ts";
 import { Router } from "./router.ts";
 import { StateStore } from "../persistence/store.ts";
+import { WorktreeBindingRegistry } from "../worktrees/worktree-binding-registry.ts";
 
 export class IpcServer {
 	private readonly logger = createLogger("daemon.ipc");
 	readonly store: StateStore;
+	readonly worktreeBindings: WorktreeBindingRegistry;
 	private readonly router: Router;
 	private readonly server = net.createServer((socket) => {
 		let buffer = "";
@@ -31,9 +33,13 @@ export class IpcServer {
 		});
 	});
 
-	constructor(store = new StateStore()) {
+	constructor(
+		store = new StateStore(),
+		worktreeBindings = new WorktreeBindingRegistry(store),
+	) {
 		this.store = store;
-		this.router = new Router(store);
+		this.worktreeBindings = worktreeBindings;
+		this.router = new Router(store, undefined, worktreeBindings);
 	}
 
 	async listen(socketPath = PREMIND_SOCKET_PATH) {
@@ -53,6 +59,7 @@ export class IpcServer {
 			});
 		});
 		if (fs.existsSync(socketPath)) fs.rmSync(socketPath);
+		this.worktreeBindings.close();
 		this.store.close();
 	}
 

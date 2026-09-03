@@ -1,6 +1,7 @@
 import { createLogger } from "../logging/logger.ts"
 import { StateStore } from "../persistence/store.ts"
 import type { GitHubClientLike } from "../github/client.ts"
+import { WorktreeBindingRegistry } from "../worktrees/worktree-binding-registry.ts"
 
 const BRANCH_PULLS_ETAG_SCOPE = "branch.pulls"
 
@@ -12,6 +13,7 @@ export class BranchDiscoveryWatcher {
   constructor(
     private readonly store: StateStore,
     private readonly github: GitHubClientLike,
+    private readonly worktreeBindings = new WorktreeBindingRegistry(store),
   ) {}
 
   async tick(now = Date.now()) {
@@ -66,7 +68,14 @@ export class BranchDiscoveryWatcher {
           pr?.number ?? target.pr_number,
           now,
         )
-        if (!pr) continue
+        if (!pr) {
+          for (const binding of targets) {
+            if (binding.git_dir !== "") {
+              this.worktreeBindings.pullRequestNotFound(binding.session_id, now)
+            }
+          }
+          continue
+        }
 
         this.store.insertEvents(target.repo, pr.number, [
           {
@@ -86,18 +95,13 @@ export class BranchDiscoveryWatcher {
         ], now)
 
         for (const binding of targets) {
-          if (this.store.hasAutomaticSubscriptionOptOut({
-            sessionId: binding.session_id,
-            gitDir: binding.git_dir,
-            repo: binding.repo,
-            branch: binding.branch,
-            prNumber: pr.number,
-          })) continue
-          this.store.baselineAutomaticSubscription({
-            sessionId: binding.session_id,
-            repo: binding.repo,
-            prNumber: pr.number,
-          }, now)
+          if (binding.git_dir !== "") {
+            this.worktreeBindings.pullRequestFound(
+              binding.session_id,
+              { repo: binding.repo, prNumber: pr.number },
+              now,
+            )
+          }
         }
       } catch (error) {
         this.logger.warn("branch discovery failed", {

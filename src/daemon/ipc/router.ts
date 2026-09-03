@@ -15,6 +15,7 @@ import type { PremindRequest, PremindResponse } from "../../shared/ipc.ts";
 import { createLogger } from "../logging/logger.ts";
 import { StateStore } from "../persistence/store.ts";
 import { resolveGitWorktree } from "../worktrees/git-resolver.ts";
+import { WorktreeBindingRegistry } from "../worktrees/worktree-binding-registry.ts";
 import type { ActiveWorktree } from "../worktrees/worktree-binding.ts";
 
 export type WorktreeResolver = (
@@ -27,6 +28,7 @@ export class Router {
 	constructor(
 		private readonly store: StateStore,
 		private readonly resolveWorktree: WorktreeResolver = resolveGitWorktree,
+		private readonly worktreeBindings = new WorktreeBindingRegistry(store),
 	) {}
 
 	async handle(request: PremindRequest): Promise<PremindResponse> {
@@ -104,6 +106,7 @@ export class Router {
 				return this.ok({ updated: true, revived: result.revived });
 			}
 			case "unregisterSession":
+				this.worktreeBindings.closeSession(request.payload.sessionId);
 				this.store.unregisterSession(request.payload.sessionId);
 				return this.ok({ unregistered: true });
 			case "pauseSession": {
@@ -189,23 +192,19 @@ export class Router {
 			);
 		}
 
-		let worktree: ActiveWorktree;
 		try {
-			worktree = await this.resolveWorktree(payload.path);
+			const binding = await this.worktreeBindings.activateWorktree(
+				payload.sessionId,
+				payload.path,
+				this.resolveWorktree,
+			);
+			return this.ok({ binding, watching: binding.branch !== null });
 		} catch (error) {
 			return this.fail(
 				"WORKTREE_RESOLUTION_FAILED",
 				error instanceof Error ? error.message : "Unable to resolve Git worktree",
 			);
 		}
-
-		const binding = this.store.activateWorktree({
-			sessionId: payload.sessionId,
-			...worktree,
-			state: worktree.branch ? "waiting_for_pr" : "detached_head",
-		});
-
-		return this.ok({ binding, watching: worktree.branch !== null });
 	}
 
 	private handleSubscribe(payload: SubscribePayload): PremindResponse {
@@ -255,29 +254,25 @@ export class Router {
 			repo,
 			payload.prNumber,
 		);
+		if (
+			subscription?.source === "automatic" &&
+			binding?.repo === repo &&
+			binding.branch !== null
+		) {
+			return this.ok(
+				this.worktreeBindings.unsubscribeAutomatic(payload.sessionId, {
+					repo,
+					prNumber: payload.prNumber,
+				}),
+			);
+		}
+
 		const unsubscribed = this.store.unsubscribe(
 			payload.sessionId,
 			repo,
 			payload.prNumber,
 		);
-		let automaticOptOutRecorded = false;
-		if (
-			unsubscribed &&
-			subscription?.source === "automatic" &&
-			binding?.repo === repo &&
-			binding.branch !== null
-		) {
-			this.store.recordAutomaticSubscriptionOptOut({
-				sessionId: payload.sessionId,
-				gitDir: binding.gitDir,
-				repo,
-				branch: binding.branch,
-				prNumber: payload.prNumber,
-			});
-			automaticOptOutRecorded = true;
-		}
-
-		return this.ok({ unsubscribed, automaticOptOutRecorded });
+		return this.ok({ unsubscribed, automaticOptOutRecorded: false });
 	}
 
 	private handleRegisterClient(payload: RegisterClientPayload) {

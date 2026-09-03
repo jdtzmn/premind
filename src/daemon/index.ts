@@ -17,7 +17,7 @@ async function main() {
   logger.info("daemon starting", { pid: process.pid, logFile: PREMIND_DAEMON_LOG_PATH })
   const server = new IpcServer()
   const github = new GitHubClient()
-  const discoveryWatcher = new BranchDiscoveryWatcher(server.store, github)
+  const discoveryWatcher = new BranchDiscoveryWatcher(server.store, github, server.worktreeBindings)
   // Adaptive per-PR scheduling: active PRs poll every 20s; quiet PRs stretch to
   // 5 minutes. Default tiers in AdaptiveSchedule match the documented cadence.
   const prSchedule = new AdaptiveSchedule()
@@ -37,6 +37,7 @@ async function main() {
   // Runs once at startup to clean up any backlog carried across daemon restarts,
   // and periodically while the daemon is up.
   const startupReap = server.store.reapStaleSessions(PREMIND_SESSION_STALE_MS)
+  server.worktreeBindings.closeInactiveSessions()
   if (startupReap.reaped > 0 || startupReap.oldestAgeMs !== null) {
     logger.info("startup reap", {
       reaped: startupReap.reaped,
@@ -106,6 +107,7 @@ async function main() {
 
   const reapInterval = setInterval(() => {
     const result = server.store.reapStaleSessions(PREMIND_SESSION_STALE_MS)
+    server.worktreeBindings.closeInactiveSessions()
     if (result.reaped > 0) {
       logger.info("reaped stale sessions", {
         reaped: result.reaped,

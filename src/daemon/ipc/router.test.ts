@@ -6,6 +6,7 @@ import { afterEach, describe, test } from "node:test"
 import { PREMIND_PROTOCOL_VERSION } from "../../shared/constants.ts"
 import { Router } from "./router.ts"
 import { StateStore } from "../persistence/store.ts"
+import { WorktreeBindingRegistry } from "../worktrees/worktree-binding-registry.ts"
 
 const tempPaths: string[] = []
 
@@ -54,10 +55,12 @@ describe("Router worktree subscription operations", () => {
       source: "automatic",
     })
     const requestedPaths: string[] = []
+    const worktreeBindings = new WorktreeBindingRegistry(store)
     const router = new Router(store, async (requestedPath) => {
       requestedPaths.push(requestedPath)
       return worktree
-    })
+    }, worktreeBindings)
+    assert.equal(worktreeBindings.has("session-1"), false)
 
     const response = await router.handle({
       type: "activateWorktree",
@@ -67,6 +70,8 @@ describe("Router worktree subscription operations", () => {
 
     assert.equal(response.ok, true)
     assert.deepEqual(requestedPaths, ["/repo/.trees/feature/src"])
+    assert.equal(worktreeBindings.has("session-1"), true)
+    assert.equal(worktreeBindings.getSnapshot("session-1").value, "waiting_for_pr")
     assert.deepEqual(store.getWorktreeBinding("session-1"), {
       sessionId: "session-1",
       ...worktree,
@@ -81,13 +86,20 @@ describe("Router worktree subscription operations", () => {
       store.listBranchWatchTargets().map((target) => [target.repo, target.branch]),
       [["acme/repo", "feature/worktree"]],
     )
+    await router.handle({
+      type: "unregisterSession",
+      protocolVersion: 1,
+      payload: { sessionId: "session-1" },
+    })
+    assert.equal(worktreeBindings.has("session-1"), false)
     store.close()
   })
 
   test("defaults subscriptions to the active repository and records automatic opt-outs", async () => {
     const store = createStore()
     registerSession(store)
-    const router = new Router(store, async () => worktree)
+    const worktreeBindings = new WorktreeBindingRegistry(store)
+    const router = new Router(store, async () => worktree, worktreeBindings)
     await router.handle({
       type: "activateWorktree",
       protocolVersion: 1,
@@ -133,6 +145,10 @@ describe("Router worktree subscription operations", () => {
       unsubscribed: true,
       automaticOptOutRecorded: true,
     })
+    assert.equal(
+      worktreeBindings.getSnapshot("session-1").value,
+      "automatic_pr_unsubscribed",
+    )
     assert.equal(
       store.hasAutomaticSubscriptionOptOut({
         sessionId: "session-1",
@@ -181,6 +197,23 @@ describe("Router worktree subscription operations", () => {
         code: "WORKTREE_NOT_ACTIVE",
         message: "An active worktree is required when repo is omitted",
       },
+    })
+    store.upsertSubscription({
+      sessionId: "session-1",
+      repo: "acme/repo",
+      prNumber: 13,
+      source: "automatic",
+    })
+    const legacyAutomatic = await router.handle({
+      type: "unsubscribe",
+      protocolVersion: 1,
+      payload: { sessionId: "session-1", repo: "acme/repo", prNumber: 13 },
+    })
+    assert.equal(legacyAutomatic.ok, true)
+    if (!legacyAutomatic.ok) throw new Error("legacy unsubscribe failed")
+    assert.deepEqual(legacyAutomatic.result, {
+      unsubscribed: true,
+      automaticOptOutRecorded: false,
     })
     store.close()
   })

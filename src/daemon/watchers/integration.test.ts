@@ -9,6 +9,7 @@ import { PullRequestWatcher } from "./pr-watcher.ts"
 import type { FindOpenPullRequestResult, GitHubClientLike, PullRequestSnapshotResult, PullRequestSummary } from "../github/client.ts"
 import type { PullRequestSnapshot } from "../github/types.ts"
 import { AdaptiveSchedule } from "./adaptive-schedule.ts"
+import { WorktreeBindingRegistry } from "../worktrees/worktree-binding-registry.ts"
 
 const tempPaths: string[] = []
 
@@ -109,7 +110,8 @@ describe("watcher integration", () => {
   test("branch discovery baselines an automatic subscription from an active worktree", async () => {
     const store = createStore()
     const github = new FixtureGitHubClient()
-    const watcher = new BranchDiscoveryWatcher(store, github)
+    const worktreeBindings = new WorktreeBindingRegistry(store)
+    const watcher = new BranchDiscoveryWatcher(store, github, worktreeBindings)
 
     store.registerClient("client-1", { pid: 1, projectRoot: "/tmp" })
     store.registerSession({
@@ -132,12 +134,17 @@ describe("watcher integration", () => {
     })
 
     github.prForBranch = null
+    assert.equal(worktreeBindings.has("session-1"), false)
     await watcher.tick()
+    assert.equal(worktreeBindings.has("session-1"), true)
+    assert.equal(worktreeBindings.getSnapshot("session-1").value, "waiting_for_pr")
     assert.equal(store.getSubscription("session-1", "acme/repo", 42), null)
 
     github.prForBranch = { number: 42, title: "Test PR", url: "https://github.com/acme/repo/pull/42", draft: false, state: "open" }
     await watcher.tick()
 
+    assert.equal(worktreeBindings.getSnapshot("session-1").value, "following_automatic_pr")
+    assert.equal(store.getWorktreeBinding("session-1")?.state, "following_automatic_pr")
     assert.equal(store.getSession("session-1")?.pr_number, null)
     const subscription = store.getSubscription("session-1", "acme/repo", 42)
     assert.equal(subscription?.source, "automatic")
