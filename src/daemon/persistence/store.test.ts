@@ -190,6 +190,176 @@ describe("StateStore", () => {
     store.close()
   })
 
+  test("ensureSessionControl recreates a missing session at the PR event high-water mark", () => {
+    const store = createStore()
+    store.recordBranchAssociation("acme/repo", "feature/recover", 11)
+    store.insertEvents("acme/repo", 11, [
+      {
+        dedupeKey: "issue_comment.created:1",
+        kind: "issue_comment.created",
+        priority: "high",
+        summary: "Historical comment",
+        payload: { commentId: 1 },
+      },
+      {
+        dedupeKey: "issue_comment.created:2",
+        kind: "issue_comment.created",
+        priority: "high",
+        summary: "Another historical comment",
+        payload: { commentId: 2 },
+      },
+    ])
+
+    const result = store.ensureSessionControl({
+      clientId: "client-recover",
+      sessionId: "session-recover",
+      repo: "acme/repo",
+      branch: "feature/recover",
+      isPrimary: true,
+      busyState: "idle",
+      paused: false,
+    })
+
+    assert.deepEqual(result, { created: true, superseded: 0 })
+    assert.equal(store.getSession("session-recover")?.last_delivered_event_seq, 2)
+    assert.equal(store.buildReminderBatch("session-recover"), null)
+
+    store.insertEvents("acme/repo", 11, [
+      {
+        dedupeKey: "check.failed:build:sha-11",
+        kind: "check.failed",
+        priority: "high",
+        summary: "Check failed after recovery",
+        payload: { name: "build" },
+      },
+    ])
+
+    const batch = store.buildReminderBatch("session-recover")
+    assert.ok(batch)
+    assert.deepEqual(batch.events.map((event) => event.eventId), ["3"])
+    store.close()
+  })
+
+  test("ensureSessionControl preserves an existing delivery cursor", () => {
+    const store = createStore()
+    store.registerSession({
+      clientId: "client-existing",
+      sessionId: "session-existing",
+      repo: "acme/repo",
+      branch: "feature/existing",
+      isPrimary: true,
+      status: "active",
+      busyState: "idle",
+    })
+    store.recordBranchAssociation("acme/repo", "feature/existing", 12)
+    store.insertEvents("acme/repo", 12, [
+      {
+        dedupeKey: "issue_comment.created:12",
+        kind: "issue_comment.created",
+        priority: "high",
+        summary: "Delivered comment",
+        payload: { commentId: 12 },
+      },
+    ])
+    const delivered = store.buildReminderBatch("session-existing")
+    assert.ok(delivered)
+    store.ackReminder({
+      batchId: delivered.batchId,
+      sessionId: "session-existing",
+      state: "confirmed",
+    })
+    store.insertEvents("acme/repo", 12, [
+      {
+        dedupeKey: "issue_comment.created:13",
+        kind: "issue_comment.created",
+        priority: "high",
+        summary: "New comment",
+        payload: { commentId: 13 },
+      },
+    ])
+
+    const result = store.ensureSessionControl({
+      clientId: "client-existing",
+      sessionId: "session-existing",
+      repo: "acme/repo",
+      branch: "feature/existing",
+      isPrimary: true,
+      busyState: "idle",
+      paused: false,
+    })
+
+    assert.deepEqual(result, { created: false, superseded: 0 })
+    assert.equal(store.getSession("session-existing")?.last_delivered_event_seq, 1)
+    const batch = store.buildReminderBatch("session-existing")
+    assert.ok(batch)
+    assert.deepEqual(batch.events.map((event) => event.eventId), ["2"])
+    store.close()
+  })
+
+  test("ensureSessionControl resets PR state when a session changes branches", () => {
+    const store = createStore()
+    store.registerSession({
+      clientId: "client-branch-change",
+      sessionId: "session-branch-change",
+      repo: "acme/repo",
+      branch: "feature/old",
+      isPrimary: true,
+      status: "active",
+      busyState: "idle",
+    })
+    store.recordBranchAssociation("acme/repo", "feature/old", 13)
+    store.insertEvents("acme/repo", 13, [
+      {
+        dedupeKey: "issue_comment.created:old",
+        kind: "issue_comment.created",
+        priority: "high",
+        summary: "Old branch comment",
+        payload: { commentId: 13 },
+      },
+    ])
+    assert.ok(store.buildReminderBatch("session-branch-change"))
+
+    store.recordBranchAssociation("acme/repo", "feature/new", 14)
+    store.insertEvents("acme/repo", 14, [
+      {
+        dedupeKey: "issue_comment.created:historical-new",
+        kind: "issue_comment.created",
+        priority: "high",
+        summary: "Historical new branch comment",
+        payload: { commentId: 14 },
+      },
+    ])
+
+    store.ensureSessionControl({
+      clientId: "client-branch-change",
+      sessionId: "session-branch-change",
+      repo: "acme/repo",
+      branch: "feature/new",
+      isPrimary: true,
+      busyState: "idle",
+      paused: false,
+    })
+
+    const session = store.getSession("session-branch-change")
+    assert.equal(session?.pr_number, 14)
+    assert.equal(session?.last_delivered_event_seq, 2)
+    assert.equal(store.getPendingReminder("session-branch-change"), null)
+
+    store.insertEvents("acme/repo", 14, [
+      {
+        dedupeKey: "check.failed:new:sha-14",
+        kind: "check.failed",
+        priority: "high",
+        summary: "New branch check failed",
+        payload: { name: "build" },
+      },
+    ])
+    const batch = store.buildReminderBatch("session-branch-change")
+    assert.ok(batch)
+    assert.deepEqual(batch.events.map((event) => event.eventId), ["3"])
+    store.close()
+  })
+
   test("global disable flag defaults to false and persists when toggled", () => {
     const store = createStore()
 

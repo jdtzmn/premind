@@ -10,6 +10,7 @@ import {
 } from "../shared/ipc.ts"
 import type {
   AckReminderPayload,
+  EnsureSessionControlPayload,
   RegisterSessionPayload,
   UpdateSessionStatePayload,
 } from "../shared/schema.ts"
@@ -66,6 +67,30 @@ export class PremindDaemonClient {
       protocolVersion: PREMIND_PROTOCOL_VERSION,
       payload: { ...payload, clientId: this.clientId },
     })
+  }
+
+  async ensureSessionControl(
+    payload: Omit<EnsureSessionControlPayload, "clientId">,
+  ) {
+    try {
+      await this.requestWithRetry({
+        type: "ensureSessionControl",
+        protocolVersion: PREMIND_PROTOCOL_VERSION,
+        payload: { ...payload, clientId: this.clientId },
+      })
+    } catch (error) {
+      // A long-lived daemon from a pre-control-operation package reports the new
+      // request as BAD_REQUEST. Fall back to its compatible registration path so
+      // clients keep working until that daemon exits naturally.
+      if (!(error instanceof Error) || !error.message.startsWith("BAD_REQUEST:")) {
+        throw error
+      }
+      const { paused, ...session } = payload
+      await this.registerSession({
+        ...session,
+        status: paused ? "paused" : "active",
+      })
+    }
   }
 
   async updateSessionState(payload: UpdateSessionStatePayload) {

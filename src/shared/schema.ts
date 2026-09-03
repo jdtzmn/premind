@@ -78,13 +78,23 @@ export const unregisterSessionPayloadSchema = z
     sessionId: z.string().min(1),
   })
   .strict()
+export const ensureSessionControlPayloadSchema = z
+  .object({
+    clientId: z.string().min(1),
+    sessionId: z.string().min(1),
+    repo: z.string().min(1),
+    branch: z.string().min(1),
+    isPrimary: z.boolean().default(true),
+    busyState: busyStateSchema.default("idle"),
+    paused: z.boolean(),
+  })
+  .strict()
 
 export const sessionControlPayloadSchema = z
   .object({
     sessionId: z.string().min(1),
   })
   .strict()
-
 export const reminderEventSchema = z
   .object({
     eventId: z.string().min(1),
@@ -170,6 +180,9 @@ export type RegisterClientPayload = z.infer<typeof registerClientPayloadSchema>
 export type HeartbeatClientPayload = z.infer<typeof heartbeatClientPayloadSchema>
 export type ReleaseClientPayload = z.infer<typeof releaseClientPayloadSchema>
 export type RegisterSessionPayload = z.infer<typeof registerSessionPayloadSchema>
+export type EnsureSessionControlPayload = z.infer<
+  typeof ensureSessionControlPayloadSchema
+>
 export type UpdateSessionStatePayload = z.infer<typeof updateSessionStatePayloadSchema>
 export type UnregisterSessionPayload = z.infer<typeof unregisterSessionPayloadSchema>
 export type SessionControlPayload = z.infer<typeof sessionControlPayloadSchema>
