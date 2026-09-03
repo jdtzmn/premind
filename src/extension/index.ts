@@ -12,6 +12,7 @@ import { detectGitContext } from "../plugin/git-context.ts";
 import type {
 	AckReminderPayload,
 	DebugStatusResponse,
+	EnsureSessionControlPayload,
 	RegisterSessionPayload,
 	ReminderBatch,
 } from "../shared/schema.ts";
@@ -36,8 +37,9 @@ type DaemonClientLike = {
 		payload: Omit<RegisterSessionPayload, "clientId">,
 	) => Promise<unknown>;
 	unregisterSession: (sessionId: string) => Promise<unknown>;
-	pauseSession: (sessionId: string) => Promise<unknown>;
-	resumeSession: (sessionId: string) => Promise<unknown>;
+	ensureSessionControl: (
+		payload: Omit<EnsureSessionControlPayload, "clientId">,
+	) => Promise<unknown>;
 	updateSessionState: (payload: {
 		sessionId: string;
 		busyState: "busy" | "idle";
@@ -273,12 +275,34 @@ export const createPremindPiExtension = (
 			return result as PruneClosedSessionsResult;
 		};
 
-		const pauseCurrentSession = async (sessionId: string) => {
-			await getClient().pauseSession(sessionId);
-		};
-
-		const resumeCurrentSession = async (sessionId: string) => {
-			await getClient().resumeSession(sessionId);
+		const controlCurrentSession = async (
+			ctx: {
+				cwd: string;
+				sessionManager?: { getSessionFile?: () => string | undefined };
+			},
+			paused: boolean,
+		) => {
+			const generation = sessionGeneration;
+			const sessionId = currentSessionId ?? getPiSessionId(ctx);
+			const client = sessionClient ?? createDaemonClient();
+			const git = await detectGit(ctx.cwd);
+			await client.registerClient(ctx.cwd, SESSION_SOURCE);
+			if (generation !== sessionGeneration) {
+				throw new Error("Pi session changed before premind session control completed");
+			}
+			await client.ensureSessionControl({
+				sessionId,
+				repo: git.repo,
+				branch: git.branch,
+				isPrimary: true,
+				busyState: "idle",
+				paused,
+			});
+			if (generation !== sessionGeneration) {
+				throw new Error("Pi session changed before premind session control completed");
+			}
+			sessionClient = client;
+			currentSessionId = sessionId;
 		};
 
 		const setStatus = (
@@ -607,9 +631,8 @@ export const createPremindPiExtension = (
 		pi.registerCommand("premind:pause", {
 			description: "Pause premind reminders for the current session",
 			handler: async (_args, ctx) => {
-				const sessionId = currentSessionId ?? getPiSessionId(ctx);
 				try {
-					await pauseCurrentSession(sessionId);
+					await controlCurrentSession(ctx, true);
 					setStatus(ctx, `${PR_ICON} paused`);
 					ctx.ui.notify("premind paused for this session.", "info");
 				} catch (error) {
@@ -624,9 +647,8 @@ export const createPremindPiExtension = (
 		pi.registerCommand("premind:resume", {
 			description: "Resume premind reminders for the current session",
 			handler: async (_args, ctx) => {
-				const sessionId = currentSessionId ?? getPiSessionId(ctx);
 				try {
-					await resumeCurrentSession(sessionId);
+					await controlCurrentSession(ctx, false);
 					await refreshStatusbar(ctx);
 					ctx.ui.notify("premind resumed for this session.", "info");
 				} catch (error) {
@@ -671,8 +693,7 @@ export const createPremindPiExtension = (
 				"Pause premind PR reminders for the current session. Events still accumulate while paused.",
 			parameters: Type.Object({}),
 			async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
-				const sessionId = currentSessionId ?? getPiSessionId(ctx);
-				await pauseCurrentSession(sessionId);
+				await controlCurrentSession(ctx, true);
 				return {
 					content: [
 						{ type: "text" as const, text: "premind paused for this session." },
@@ -688,8 +709,7 @@ export const createPremindPiExtension = (
 			description: "Resume premind PR reminders for the current session.",
 			parameters: Type.Object({}),
 			async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
-				const sessionId = currentSessionId ?? getPiSessionId(ctx);
-				await resumeCurrentSession(sessionId);
+				await controlCurrentSession(ctx, false);
 				return {
 					content: [
 						{

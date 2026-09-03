@@ -195,6 +195,15 @@ const createClient = (
 					`registerSession:${payload.sessionId}:${payload.repo}:${payload.branch}`,
 				);
 			},
+			ensureSessionControl: async ({
+				sessionId,
+				paused,
+			}: {
+				sessionId: string;
+				paused: boolean;
+			}) => {
+				operations.push(`ensureSessionControl:${sessionId}:${paused}`);
+			},
 			unregisterSession: async (sessionId: string) => {
 				operations.push(`unregisterSession:${sessionId}`);
 			},
@@ -619,8 +628,10 @@ describe("premind Pi extension", () => {
 		await resume.handler("", createCommandContext(notifications));
 
 		assert.deepEqual(client.operations, [
-			"pauseSession:/tmp/session.jsonl",
-			"resumeSession:/tmp/session.jsonl",
+			"registerClient:/tmp/project:pi-extension",
+			"ensureSessionControl:/tmp/session.jsonl:true",
+			"registerClient:/tmp/project:pi-extension",
+			"ensureSessionControl:/tmp/session.jsonl:false",
 		]);
 		assert.deepEqual(
 			notifications.map((notification) => notification.message),
@@ -656,8 +667,10 @@ describe("premind Pi extension", () => {
 		);
 
 		assert.deepEqual(client.operations, [
-			"pauseSession:/tmp/session.jsonl",
-			"resumeSession:/tmp/session.jsonl",
+			"registerClient:/tmp/project:pi-extension",
+			"ensureSessionControl:/tmp/session.jsonl:true",
+			"registerClient:/tmp/project:pi-extension",
+			"ensureSessionControl:/tmp/session.jsonl:false",
 		]);
 	});
 
