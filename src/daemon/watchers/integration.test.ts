@@ -154,7 +154,11 @@ describe("watcher integration", () => {
     const subscription = store.getSubscription("session-1", "acme/repo", 42)
     assert.equal(subscription?.source, "automatic")
     assert.equal(subscription?.state, "active")
-    assert.equal(store.listUndeliveredEventsForSubscription(subscription!.subscriptionId).length, 0)
+    assert.deepEqual(
+      store.listUndeliveredEventsForSubscription(subscription!.subscriptionId)
+        .map((event) => event.kind),
+      ["pr.discovered"],
+    )
 
     store.close()
   })

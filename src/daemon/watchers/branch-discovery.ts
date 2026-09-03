@@ -77,6 +77,19 @@ export class BranchDiscoveryWatcher {
           continue
         }
 
+        // Establish each automatic subscription at the existing stream high-water mark
+        // before appending the discovery event, so the new association itself remains
+        // pending for every session that just began following this PR.
+        for (const binding of targets) {
+          if (binding.git_dir !== "") {
+            this.worktreeBindings.pullRequestFound(
+              binding.session_id,
+              { repo: binding.repo, prNumber: pr.number },
+              now,
+            )
+          }
+        }
+
         this.store.insertEvents(target.repo, pr.number, [
           {
             dedupeKey: `pr.discovered:${target.repo}:${target.branch}:${pr.number}`,
@@ -93,16 +106,6 @@ export class BranchDiscoveryWatcher {
             },
           },
         ], now)
-
-        for (const binding of targets) {
-          if (binding.git_dir !== "") {
-            this.worktreeBindings.pullRequestFound(
-              binding.session_id,
-              { repo: binding.repo, prNumber: pr.number },
-              now,
-            )
-          }
-        }
       } catch (error) {
         this.logger.warn("branch discovery failed", {
           repo: target.repo,
