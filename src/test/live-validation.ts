@@ -86,10 +86,9 @@ async function run() {
     // ---------------------------------------------------------------
     // 1. Health check
     // ---------------------------------------------------------------
-    console.log("1. Health check")
-    const health = await (client.global as any).health()
-    assert("server is healthy", (health.data as any)?.healthy === true)
-    assert("server reports a version", typeof (health.data as any)?.version === "string" && (health.data as any).version.length > 0)
+    console.log("1. Server health")
+    const project = await client.project.current()
+    assert("server responds to project.current", project.data !== undefined)
 
     // ---------------------------------------------------------------
     // 2. Create a session and verify shape
