@@ -92,6 +92,27 @@ export function diffSnapshot(previous: PullRequestSnapshot | null, next: PullReq
     const summary = blockers.length > 0 ? `${baseSummary} — ${blockers.join("; ")}` : baseSummary
 
     return [
+      ...(next.core.state === "MERGED"
+        ? [
+            {
+              dedupeKey: `pr.merged:${next.core.url}`,
+              kind: "pr.merged",
+              priority: "high" as const,
+              summary: `Branch ${next.core.headRefName} was merged via PR #${next.core.number}: ${next.core.title}`,
+              referenceLink: next.core.url,
+              payload: {
+                prNumber: next.core.number,
+                title: next.core.title,
+                url: next.core.url,
+                branch: next.core.headRefName,
+                baseBranch: next.core.baseRefName,
+                headSha: next.core.headRefOid,
+                previousState: null,
+                state: next.core.state,
+              },
+            },
+          ]
+        : []),
       {
         dedupeKey: `pr.snapshot.initial:${next.core.number}:${next.core.headRefOid}`,
         kind: "pr.snapshot.initialized",
@@ -112,6 +133,26 @@ export function diffSnapshot(previous: PullRequestSnapshot | null, next: PullReq
   }
 
   const events: NormalizedPrEvent[] = []
+
+  if (previous.core.state !== "MERGED" && next.core.state === "MERGED") {
+    events.push({
+      dedupeKey: `pr.merged:${next.core.url}`,
+      kind: "pr.merged",
+      priority: "high",
+      summary: `Branch ${next.core.headRefName} was merged via PR #${next.core.number}: ${next.core.title}`,
+      referenceLink: next.core.url,
+      payload: {
+        prNumber: next.core.number,
+        title: next.core.title,
+        url: next.core.url,
+        branch: next.core.headRefName,
+        baseBranch: next.core.baseRefName,
+        headSha: next.core.headRefOid,
+        previousState: previous.core.state,
+        state: next.core.state,
+      },
+    })
+  }
 
   if (previous.core.isDraft && !next.core.isDraft) {
     events.push({

@@ -360,4 +360,46 @@ describe("diffSnapshot", () => {
     )
     assert.ok(events4.some((event) => event.kind === "merge_conflict.cleared"))
   })
+  test("emits a merge reminder when a PR becomes merged", () => {
+    const previous = baseSnapshot()
+    const next = { ...previous, core: { ...previous.core, state: "MERGED" } }
+
+    const merged = diffSnapshot(previous, next).find((event) => event.kind === "pr.merged")
+
+    assert.ok(merged)
+    assert.equal(merged.priority, "high")
+    assert.equal(merged.dedupeKey, "pr.merged:https://github.com/acme/repo/pull/42")
+    assert.equal(merged.payload.previousState, "OPEN")
+    assert.equal(merged.payload.state, "MERGED")
+  })
+
+  test("surfaces an already-merged initial snapshot", () => {
+    const next = { ...baseSnapshot(), core: { ...baseSnapshot().core, state: "MERGED" } }
+
+    const merged = diffSnapshot(null, next).find((event) => event.kind === "pr.merged")
+
+    assert.ok(merged)
+    assert.equal(merged.payload.previousState, null)
+  })
+
+  test("does not report an unmerged closed PR as merged", () => {
+    const previous = baseSnapshot()
+    const next = { ...previous, core: { ...previous.core, state: "CLOSED" } }
+
+    assert.ok(!diffSnapshot(previous, next).some((event) => event.kind === "pr.merged"))
+  })
+
+  test("uses a repository-qualified merge dedupe key", () => {
+    const previous = baseSnapshot()
+    const first = { ...previous, core: { ...previous.core, state: "MERGED" } }
+    const second = { ...previous, core: { ...previous.core, url: "https://github.com/other/repo/pull/42", state: "MERGED" } }
+
+    const firstMerge = diffSnapshot(previous, first).find((event) => event.kind === "pr.merged")
+    const secondMerge = diffSnapshot(previous, second).find((event) => event.kind === "pr.merged")
+
+    assert.ok(firstMerge)
+    assert.ok(secondMerge)
+    assert.notEqual(firstMerge.dedupeKey, secondMerge.dedupeKey)
+  })
+
 })

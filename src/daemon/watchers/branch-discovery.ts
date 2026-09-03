@@ -37,8 +37,9 @@ export class BranchDiscoveryWatcher {
         }
 
         const pr = result.pr
-        this.store.recordBranchAssociation(target.repo, target.branch, pr?.number ?? null, now)
-
+        if (pr || target.pr_number === null) {
+          this.store.recordBranchAssociation(target.repo, target.branch, pr?.number ?? null, now)
+        }
         if (!pr) continue
         if (target.pr_number === pr.number) continue
 

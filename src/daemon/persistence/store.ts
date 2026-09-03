@@ -779,44 +779,71 @@ export class StateStore {
 			});
 	}
 
+	saveSnapshotAndEvents(
+		repo: string,
+		prNumber: number,
+		snapshot: PullRequestSnapshot,
+		events: NormalizedPrEvent[],
+		now = Date.now(),
+	) {
+		this.db.exec("BEGIN");
+		try {
+			this.saveSnapshot(repo, prNumber, snapshot);
+			this.insertEventsInTransaction(repo, prNumber, events, now);
+			this.db.exec("COMMIT");
+		} catch (error) {
+			this.db.exec("ROLLBACK");
+			throw error;
+		}
+	}
+
 	insertEvents(
 		repo: string,
 		prNumber: number,
 		events: NormalizedPrEvent[],
 		now = Date.now(),
 	) {
-		const insert = this.db.prepare(
-			`
-        INSERT OR IGNORE INTO pr_events (repo, pr_number, dedupe_key, kind, priority, summary, reference_link, payload_json, created_at)
-        VALUES (:repo, :prNumber, :dedupeKey, :kind, :priority, :summary, :referenceLink, :payloadJson, :now)
-      `,
-		);
-
 		this.db.exec("BEGIN");
 		try {
-			for (const event of events) {
-				// Prefer the local detail file (rich body content for comments and
-				// reviews). When the writer skips the file (no rich content for this
-				// kind, e.g. check.*), fall back to the GitHub URL the event was
-				// built with so the reminder still carries an actionable link.
-				const localPath = this.detailFiles.write(repo, prNumber, event);
-				const referenceLink = localPath ?? event.referenceLink ?? null;
-				insert.run({
-					repo,
-					prNumber,
-					dedupeKey: event.dedupeKey,
-					kind: event.kind,
-					priority: event.priority,
-					summary: event.summary,
-					referenceLink,
-					payloadJson: JSON.stringify(event.payload),
-					now,
-				});
-			}
+			this.insertEventsInTransaction(repo, prNumber, events, now);
 			this.db.exec("COMMIT");
 		} catch (error) {
 			this.db.exec("ROLLBACK");
 			throw error;
+		}
+	}
+
+	private insertEventsInTransaction(
+		repo: string,
+		prNumber: number,
+		events: NormalizedPrEvent[],
+		now: number,
+	) {
+		const insert = this.db.prepare(
+			`
+				INSERT OR IGNORE INTO pr_events (repo, pr_number, dedupe_key, kind, priority, summary, reference_link, payload_json, created_at)
+				VALUES (:repo, :prNumber, :dedupeKey, :kind, :priority, :summary, :referenceLink, :payloadJson, :now)
+			`,
+		);
+
+		for (const event of events) {
+			// Prefer the local detail file (rich body content for comments and
+			// reviews). When the writer skips the file (no rich content for this
+			// kind, e.g. check.*), fall back to the GitHub URL the event was
+			// built with so the reminder still carries an actionable link.
+			const localPath = this.detailFiles.write(repo, prNumber, event);
+			const referenceLink = localPath ?? event.referenceLink ?? null;
+			insert.run({
+				repo,
+				prNumber,
+				dedupeKey: event.dedupeKey,
+				kind: event.kind,
+				priority: event.priority,
+				summary: event.summary,
+				referenceLink,
+				payloadJson: JSON.stringify(event.payload),
+				now,
+			});
 		}
 	}
 

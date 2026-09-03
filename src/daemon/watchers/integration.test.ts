@@ -140,6 +140,53 @@ describe("watcher integration", () => {
     store.close()
   })
 
+
+  test("keeps a resolved PR attached until its merge snapshot is delivered", async () => {
+    const store = createStore()
+    const github = new FixtureGitHubClient()
+    const branchWatcher = new BranchDiscoveryWatcher(store, github)
+    const prWatcher = new PullRequestWatcher(store, github)
+
+    store.registerClient("client-merged", { pid: 2, projectRoot: "/tmp" })
+    store.registerSession({
+      clientId: "client-merged",
+      sessionId: "session-merged",
+      repo: "acme/repo",
+      branch: "feature/test",
+      isPrimary: true,
+      status: "active",
+      busyState: "idle",
+    })
+    store.recordBranchAssociation("acme/repo", "feature/test", 42)
+
+    github.pushSnapshot(makeSnapshot())
+    await prWatcher.tick()
+    const initialBatch = store.getPendingReminder("session-merged")
+    assert.ok(initialBatch)
+    store.ackReminder({
+      batchId: initialBatch.batchId,
+      sessionId: "session-merged",
+      state: "confirmed",
+    })
+
+
+    // The open-PR query no longer finds the PR after it merges, but that must
+    // not detach the existing session before the PR snapshot is diffed.
+    github.pushBranchResult(null)
+    await branchWatcher.tick()
+    assert.equal(store.getSession("session-merged")?.pr_number, 42)
+
+    const mergedSnapshot = makeSnapshot()
+    github.pushSnapshot({ ...mergedSnapshot, core: { ...mergedSnapshot.core, state: "MERGED" } })
+    await prWatcher.tick()
+
+    const batch = store.buildReminderBatch("session-merged")
+    assert.ok(batch)
+    assert.ok(batch.events.some((event) => event.kind === "pr.merged"))
+    assert.match(batch.reminderText, /Branch feature\/test was merged/)
+
+    store.close()
+  })
   test("PR watcher detects new comments and check failures across ticks", async () => {
     const store = createStore()
     const github = new FixtureGitHubClient()
