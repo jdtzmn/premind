@@ -98,14 +98,12 @@ Earlier versions documented a top-level `premind` key inside `opencode.jsonc`. T
 
 premind registers these slash commands automatically:
 
-- `/premind-status` — show current daemon state, attached sessions, and pending reminder counts
-- `/premind-pause` — pause reminders for the current session (events still accumulate)
-- `/premind-resume` — resume reminders for the current session
-- `/premind-send-now` — send pending PR updates to the current session immediately, skipping the idle countdown
-- `/premind-disable` — disable premind globally (stops GitHub polling across all sessions and projects — useful if you hit API rate limits)
-- `/premind-enable` — re-enable premind globally; polling resumes on the next scheduler tick
+- `/premind-status` — show current daemon state, active worktrees, subscriptions, and pending reminder counts
+- `/premind-send-now` — send one pending PR update immediately, skipping the idle countdown
+- `/premind-disable` — disable GitHub polling globally
+- `/premind-enable` — re-enable GitHub polling globally
 
-These also work as tools that the model can call directly (e.g., if you ask "show premind status" or "disable premind — I'm hitting rate limits").
+Worktree and subscription lifecycle replaces per-session pause/resume. OpenCode exposes `premind_activate_worktree`, `premind_subscribe`, and `premind_unsubscribe` model tools. The Pi package exposes the same tools plus `/premind:activate-worktree`, `/premind:subscribe`, and `/premind:unsubscribe` commands. Manual subscriptions may target an external `owner/repo`; status and reminders use fully qualified `owner/repo#number` identities.
 
 `/premind-disable` is a daemon-wide kill switch: the daemon stays up and sessions keep registering, but no GitHub API calls are made until you re-enable. The flag is persisted in SQLite, so it survives daemon restarts. Queued events are preserved and delivered as normal once you re-enable.
 
