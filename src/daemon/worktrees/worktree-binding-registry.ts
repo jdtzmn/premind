@@ -86,6 +86,7 @@ export class WorktreeBindingRegistry {
 			});
 
 		const actor = this.getOrCreate(sessionId);
+		if (actor.getSnapshot().value === "resolving_worktree") return null;
 		const previousPullRequest = actor.getSnapshot().context.automaticPullRequest;
 		actor.send({ type: "PR_FOUND", pullRequest });
 		if (optedOut) {
@@ -116,6 +117,7 @@ export class WorktreeBindingRegistry {
 		if (!this.store.getWorktreeBinding(sessionId)) return null;
 
 		const actor = this.getOrCreate(sessionId);
+		if (actor.getSnapshot().value === "resolving_worktree") return null;
 		actor.send({ type: "PR_NOT_FOUND" });
 		return this.persist(sessionId, () =>
 			this.store.upsertWorktreeBinding(

@@ -104,6 +104,51 @@ describe("WorktreeBindingRegistry", () => {
 		store.close();
 	});
 
+	test("ignores stale discovery while a replacement worktree resolves", async () => {
+		const store = createStore();
+		registerSession(store);
+		const registry = new WorktreeBindingRegistry(store);
+		await registry.activateWorktree(
+			"session-1",
+			worktree.root,
+			async () => worktree,
+		);
+
+		const replacement = {
+			...worktree,
+			root: "/repo/.trees/replacement",
+			gitDir: "/repo/.git/worktrees/replacement",
+			branch: "feature/replacement",
+			headSha: "def456",
+		};
+		let finishResolution!: (value: typeof worktree) => void;
+		const activation = registry.activateWorktree(
+			"session-1",
+			replacement.root,
+			() => new Promise((resolve) => { finishResolution = resolve; }),
+		);
+
+		assert.equal(registry.getSnapshot("session-1").value, "resolving_worktree");
+		assert.equal(registry.pullRequestFound("session-1", pullRequest, 10), null);
+		assert.equal(registry.pullRequestNotFound("session-1", 10), null);
+
+		finishResolution(replacement);
+		const activated = await activation;
+		assert.deepEqual(activated, {
+			sessionId: "session-1",
+			...replacement,
+			state: "waiting_for_pr",
+			updatedAt: activated.updatedAt,
+		});
+		assert.equal(Number.isInteger(activated.updatedAt), true);
+		assert.equal(
+			store.getWorktreeBinding("session-1")?.root,
+			replacement.root,
+		);
+		registry.close();
+		store.close();
+	});
+
 	test("discards a transitioned actor when persistence fails", async () => {
 		const store = createStore();
 		registerSession(store);
