@@ -1139,7 +1139,7 @@ One possible layout:
 
 ```text
 premind/
-  PLAN.md
+  docs/plans/initial-implementation.md
   package.json
   tsconfig.json
   src/

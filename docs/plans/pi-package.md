@@ -140,8 +140,9 @@ The current `src/shared` schemas and constants should be reused by both the exte
 
 ```text
 premind/
-  PI_PLAN.md
-  PLAN.md
+  docs/plans/
+    pi-package.md
+    initial-implementation.md
   package.json
   tsconfig.json
   extensions/
@@ -723,7 +724,7 @@ The defining feature should be: when the PR changes underneath an active coding 
 
 ## 23. Issue #13: Worktree and Subscription Controls
 
-The Pi extension must use the shared worktree-aware subscription architecture in `PLAN.md` §35. Pi's startup `ctx.cwd` is only the initial worktree; it cannot reliably infer a later shell-local `cd` into a linked or nested worktree.
+The Pi extension must use the shared worktree-aware subscription architecture in [the initial implementation plan](./initial-implementation.md#35-issue-13-worktree-aware-subscription-architecture). Pi's startup `ctx.cwd` is only the initial worktree; it cannot reliably infer a later shell-local `cd` into a linked or nested worktree.
 
 Expose these Pi commands and model tools in place of pause/resume controls:
 

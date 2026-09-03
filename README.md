@@ -135,7 +135,7 @@ ls /var/folders/*/*/*/T/premind.sock 2>/dev/null
 
 ## Architecture
 
-See [PLAN.md](./PLAN.md) for the full design document.
+See [the initial implementation plan](./docs/plans/initial-implementation.md) for the full design document.
 
 The system has two runtime components:
 
