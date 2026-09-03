@@ -44,6 +44,28 @@ export class BranchDiscoveryWatcher {
         }
 
         const pr = result.pr
+        if (pr && target.pr_number !== null && pr.number !== target.pr_number) {
+          const previousState = this.store.getSnapshot(target.repo, target.pr_number)?.core.state
+          if (previousState !== "MERGED" && previousState !== "CLOSED") {
+            this.logger.info("deferring branch reassociation until prior PR reaches a terminal state", {
+              repo: target.repo,
+              branch: target.branch,
+              previousPrNumber: target.pr_number,
+              nextPrNumber: pr.number,
+              previousState: previousState ?? null,
+            })
+            continue
+          }
+        }
+        // Keep the legacy attachment synchronized during the subscription migration.
+        // A missing open PR must not detach a previously resolved PR before its
+        // terminal snapshot has been observed and delivered.
+        this.store.recordBranchAssociation(
+          target.repo,
+          target.branch,
+          pr?.number ?? target.pr_number,
+          now,
+        )
         if (!pr) continue
 
         this.store.insertEvents(target.repo, pr.number, [

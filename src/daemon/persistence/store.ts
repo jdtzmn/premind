@@ -300,6 +300,7 @@ export class StateStore {
 					this.db
 						.prepare(`DELETE FROM reminder_batches WHERE session_id = ?`)
 						.run(payload.sessionId);
+					this.deactivateAutomaticSubscriptions(payload.sessionId, now);
 				}
 				this.db
 					.prepare(
@@ -348,6 +349,13 @@ export class StateStore {
 					});
 			}
 
+			if (attachedPrNumber !== null) {
+				this.baselineAutomaticSubscription({
+					sessionId: payload.sessionId,
+					repo: payload.repo,
+					prNumber: attachedPrNumber,
+				}, now);
+			}
 			this.touchBranchWatcher(payload.repo, payload.branch, now);
 			const superseded = this.closeSupersededSessions(
 				payload.repo,
@@ -943,19 +951,32 @@ export class StateStore {
 		this.pruneExpiredClients(now);
 		return this.db
 			.prepare(
-				`SELECT sessions.session_id, worktree_bindings.git_dir, worktree_bindings.repo, worktree_bindings.branch
+				`SELECT sessions.session_id, worktree_bindings.git_dir, worktree_bindings.repo, worktree_bindings.branch, branch_watchers.pr_number
 				 FROM worktree_bindings
 				 INNER JOIN sessions ON sessions.session_id = worktree_bindings.session_id
+				 LEFT JOIN branch_watchers
+				   ON branch_watchers.repo = worktree_bindings.repo
+				  AND branch_watchers.branch = worktree_bindings.branch
 				 WHERE sessions.status != 'closed'
 				   AND worktree_bindings.branch IS NOT NULL
 				   AND worktree_bindings.state != 'detached_head'
-				 ORDER BY worktree_bindings.updated_at ASC`,
+				 UNION ALL
+				 SELECT sessions.session_id, '' AS git_dir, sessions.repo, sessions.branch, branch_watchers.pr_number
+				 FROM sessions
+				 LEFT JOIN worktree_bindings ON worktree_bindings.session_id = sessions.session_id
+				 LEFT JOIN branch_watchers
+				   ON branch_watchers.repo = sessions.repo
+				  AND branch_watchers.branch = sessions.branch
+				 WHERE sessions.status != 'closed'
+				   AND worktree_bindings.session_id IS NULL
+				 `
 			)
 			.all() as Array<{
 			session_id: string;
 			git_dir: string;
 			repo: string;
 			branch: string;
+			pr_number: number | null;
 		}>;
 	}
 
@@ -1349,11 +1370,12 @@ export class StateStore {
 					this.db
 						.prepare(`UPDATE session_subscriptions SET last_delivered_event_seq = :seq, updated_at = :now WHERE subscription_id = :subscriptionId`)
 						.run({ seq: row.max_event_seq, now, subscriptionId: row.subscription_id });
-				} else {
-					this.db
-						.prepare(`UPDATE sessions SET last_delivered_event_seq = :seq, updated_at = :now WHERE session_id = :sessionId`)
-						.run({ seq: row.max_event_seq, now, sessionId: payload.sessionId });
 				}
+				// Keep the legacy session cursor synchronized until all adapters and
+				// migrations exclusively consume subscription-owned cursors.
+				this.db
+					.prepare(`UPDATE sessions SET last_delivered_event_seq = :seq, updated_at = :now WHERE session_id = :sessionId`)
+					.run({ seq: row.max_event_seq, now, sessionId: payload.sessionId });
 			}
 			this.db.prepare(`DELETE FROM reminder_batches WHERE batch_id = ?`).run(payload.batchId);
 			return true;

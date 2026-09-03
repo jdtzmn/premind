@@ -249,9 +249,9 @@ const controlRequest = (clientId: string) => ({
 })
 
 describe("ensureSessionControl router", () => {
-  test("rejects control from an unknown client without creating a session", () => {
+  test("rejects control from an unknown client without creating a session", async () => {
     const store = createStore()
-    const response = new Router(store).handle(controlRequest("missing-client"))
+    const response = await new Router(store).handle(controlRequest("missing-client"))
 
     assert.deepEqual(response, {
       ok: false,
@@ -265,11 +265,11 @@ describe("ensureSessionControl router", () => {
     store.close()
   })
 
-  test("allows a registered client to attach and control its session", () => {
+  test("allows a registered client to attach and control its session", async () => {
     const store = createStore()
     store.registerClient("client-1", { pid: 123, projectRoot: "/tmp/project" })
 
-    const response = new Router(store).handle(controlRequest("client-1"))
+    const response = await new Router(store).handle(controlRequest("client-1"))
 
     assert.deepEqual(response, {
       ok: true,
