@@ -79,9 +79,8 @@ export class PullRequestWatcher {
         // Real changes landed — reset adaptive cadence to the active tier.
         this.schedule?.recordActivity(key, now)
 
-        const sessions = this.store.listSessionsForPr(target.repo, target.pr_number)
-        for (const session of sessions) {
-          this.store.buildReminderBatch(session.session_id, now)
+        for (const subscription of this.store.listActiveSubscriptionsForPr(target.repo, target.pr_number)) {
+          this.store.buildReminderBatchForSubscription(subscription.subscriptionId, now)
         }
       } catch (error) {
         this.logger.warn("pr watcher failed", {

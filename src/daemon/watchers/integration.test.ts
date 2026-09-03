@@ -106,7 +106,7 @@ const makeSnapshot = (overrides: Partial<PullRequestSnapshot> = {}): PullRequest
 })
 
 describe("watcher integration", () => {
-  test("branch discovery finds a PR and attaches sessions", async () => {
+  test("branch discovery baselines an automatic subscription from an active worktree", async () => {
     const store = createStore()
     const github = new FixtureGitHubClient()
     const watcher = new BranchDiscoveryWatcher(store, github)
@@ -116,30 +116,85 @@ describe("watcher integration", () => {
       clientId: "client-1",
       sessionId: "session-1",
       repo: "acme/repo",
-      branch: "feature/test",
+      branch: "legacy-branch",
       isPrimary: true,
       status: "active",
       busyState: "idle",
     })
+    store.upsertWorktreeBinding({
+      sessionId: "session-1",
+      root: "/tmp/worktree",
+      gitDir: "/tmp/.git/worktrees/test",
+      repo: "acme/repo",
+      branch: "feature/test",
+      headSha: "abc123",
+      state: "waiting_for_pr",
+    })
 
-    // First tick: no PR yet.
     github.prForBranch = null
     await watcher.tick()
-    assert.equal(store.getSession("session-1")?.pr_number, null)
+    assert.equal(store.getSubscription("session-1", "acme/repo", 42), null)
 
-    // Second tick: PR appears.
     github.prForBranch = { number: 42, title: "Test PR", url: "https://github.com/acme/repo/pull/42", draft: false, state: "open" }
     await watcher.tick()
-    assert.equal(store.getSession("session-1")?.pr_number, 42)
 
-    // A pr.discovered event should exist.
-    const events = store.listUndeliveredEvents("session-1")
-    assert.ok(events.length > 0)
-    assert.ok(events.some((e) => e.kind === "pr.discovered"))
+    assert.equal(store.getSession("session-1")?.pr_number, null)
+    const subscription = store.getSubscription("session-1", "acme/repo", 42)
+    assert.equal(subscription?.source, "automatic")
+    assert.equal(subscription?.state, "active")
+    assert.equal(store.listUndeliveredEventsForSubscription(subscription!.subscriptionId).length, 0)
 
     store.close()
   })
 
+  test("branch discovery honors automatic opt-outs without touching manual subscriptions", async () => {
+    const store = createStore()
+    const github = new FixtureGitHubClient()
+    const watcher = new BranchDiscoveryWatcher(store, github)
+
+    store.registerClient("client-opt-out", { pid: 1, projectRoot: "/tmp" })
+    store.registerSession({
+      clientId: "client-opt-out",
+      sessionId: "session-opt-out",
+      repo: "acme/repo",
+      branch: "legacy-branch",
+      isPrimary: true,
+      status: "active",
+      busyState: "idle",
+    })
+    const binding = store.upsertWorktreeBinding({
+      sessionId: "session-opt-out",
+      root: "/tmp/worktree-opt-out",
+      gitDir: "/tmp/.git/worktrees/opt-out",
+      repo: "acme/repo",
+      branch: "feature/opt-out",
+      headSha: "abc123",
+      state: "waiting_for_pr",
+    })
+    github.prForBranch = { number: 42, title: "Test PR", url: "https://github.com/acme/repo/pull/42", draft: false, state: "open" }
+    await watcher.tick()
+
+    assert.equal(store.unsubscribe("session-opt-out", "acme/repo", 42), true)
+    store.recordAutomaticSubscriptionOptOut({
+      sessionId: "session-opt-out",
+      gitDir: binding.gitDir,
+      repo: binding.repo,
+      branch: binding.branch!,
+      prNumber: 42,
+    })
+    store.upsertSubscription({
+      sessionId: "session-opt-out",
+      repo: "other/repo",
+      prNumber: 99,
+      source: "manual",
+    })
+
+    await watcher.tick()
+
+    assert.equal(store.getSubscription("session-opt-out", "acme/repo", 42)?.state, "unsubscribed")
+    assert.equal(store.getSubscription("session-opt-out", "other/repo", 99)?.state, "active")
+    store.close()
+  })
 
   test("keeps a resolved PR attached until its merge snapshot is delivered", async () => {
     const store = createStore()
@@ -392,8 +447,8 @@ describe("watcher integration", () => {
       status: "active",
       busyState: "idle",
     })
-    store.recordBranchAssociation("acme/repo", "feature/test", 42)
-    store.recordBranchAssociation("acme/repo", "feature/test-worktree", 42)
+    store.upsertSubscription({ sessionId: "session-a", repo: "acme/repo", prNumber: 42, source: "manual" })
+    store.upsertSubscription({ sessionId: "session-b", repo: "acme/repo", prNumber: 42, source: "manual" })
 
     // Tick 1: initial snapshot — produces pr.snapshot.initialized event.
     github.pushSnapshot(makeSnapshot())
@@ -444,6 +499,15 @@ describe("watcher integration", () => {
       isPrimary: true,
       status: "active",
       busyState: "idle",
+    })
+    store.upsertWorktreeBinding({
+      sessionId: "session-be",
+      root: "/tmp/worktree-etag",
+      gitDir: "/tmp/.git/worktrees/etag",
+      repo: "acme/repo",
+      branch: "feature/etag",
+      headSha: "etag-sha",
+      state: "waiting_for_pr",
     })
 
     // Tick 1: first real response, returns etag.

@@ -15,8 +15,16 @@ export class BranchDiscoveryWatcher {
   ) {}
 
   async tick(now = Date.now()) {
-    const targets = this.store.listBranchWatchTargets(now)
-    for (const target of targets) {
+    const targetsByBranch = new Map<string, ReturnType<StateStore["listActiveWorktreeBranchTargets"]>>()
+    for (const target of this.store.listActiveWorktreeBranchTargets(now)) {
+      const key = etagKey(target.repo, target.branch)
+      const targets = targetsByBranch.get(key)
+      if (targets) targets.push(target)
+      else targetsByBranch.set(key, [target])
+    }
+
+    for (const targets of targetsByBranch.values()) {
+      const target = targets[0]!
       try {
         const cachedEtag = this.store.getEtag(BRANCH_PULLS_ETAG_SCOPE, etagKey(target.repo, target.branch))
         const result = await this.github.findOpenPullRequestForBranch(target.repo, target.branch, {
@@ -31,29 +39,12 @@ export class BranchDiscoveryWatcher {
           continue
         }
 
-        // result.kind === "ok"
         if (result.etag !== null) {
           this.store.saveEtag(BRANCH_PULLS_ETAG_SCOPE, etagKey(target.repo, target.branch), result.etag, now)
         }
 
         const pr = result.pr
-        if (pr && target.pr_number !== null && pr.number !== target.pr_number) {
-          const previousSnapshot = this.store.getSnapshot(target.repo, target.pr_number)
-          const previousState = previousSnapshot?.core.state
-          if (previousState !== "MERGED" && previousState !== "CLOSED") {
-            this.logger.info("deferring branch reassociation until prior PR reaches a terminal state", {
-              repo: target.repo,
-              branch: target.branch,
-              previousPrNumber: target.pr_number,
-              nextPrNumber: pr.number,
-              previousState: previousState ?? null,
-            })
-            continue
-          }
-        }
-        this.store.recordBranchAssociation(target.repo, target.branch, pr?.number ?? target.pr_number, now)
         if (!pr) continue
-        if (target.pr_number === pr.number) continue
 
         this.store.insertEvents(target.repo, pr.number, [
           {
@@ -72,9 +63,19 @@ export class BranchDiscoveryWatcher {
           },
         ], now)
 
-        const sessions = this.store.listSessionsForBranch(target.repo, target.branch)
-        for (const session of sessions) {
-          this.store.buildReminderBatch(session.session_id, now)
+        for (const binding of targets) {
+          if (this.store.hasAutomaticSubscriptionOptOut({
+            sessionId: binding.session_id,
+            gitDir: binding.git_dir,
+            repo: binding.repo,
+            branch: binding.branch,
+            prNumber: pr.number,
+          })) continue
+          this.store.baselineAutomaticSubscription({
+            sessionId: binding.session_id,
+            repo: binding.repo,
+            prNumber: pr.number,
+          }, now)
         }
       } catch (error) {
         this.logger.warn("branch discovery failed", {
