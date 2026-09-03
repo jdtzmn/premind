@@ -187,6 +187,32 @@ export const debugStatusResponseSchema = z
           status: sessionStatusSchema,
           busyState: busyStateSchema,
           pendingReminderCount: z.number().int().nonnegative(),
+          worktreeBinding: z
+            .object({
+              root: z.string().min(1),
+              gitDir: z.string().min(1),
+              repo: z.string().min(1),
+              branch: z.string().min(1).nullable(),
+              headSha: z.string().min(1),
+              state: z.string().min(1),
+              updatedAt: z.number().int(),
+            })
+            .strict()
+            .nullable()
+            .optional(),
+          subscriptions: z
+            .array(
+              z
+                .object({
+                  repo: z.string().min(1),
+                  prNumber: z.number().int().positive(),
+                  source: z.enum(["automatic", "manual"]),
+                  state: z.enum(["active", "unsubscribed"]),
+                  pendingEventCount: z.number().int().nonnegative(),
+                })
+                .strict(),
+            )
+            .optional(),
         })
         .strict(),
     ),

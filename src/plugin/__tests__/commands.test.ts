@@ -30,6 +30,38 @@ describe("plugin commands", () => {
     assert.ok(!/globally disabled/.test(rendered))
   })
 
+
+  test("renders worktree and qualified subscription status when available", () => {
+    const rendered = renderPremindStatus({
+      daemon: { protocolVersion: 1 },
+      activeClients: 1,
+      activeSessions: 1,
+      activeWatchers: 2,
+      lastReapAt: null,
+      lastReapCount: 0,
+      sessions: [{
+        sessionId: "session-1",
+        repo: "acme/repo",
+        branch: "feature/x",
+        prNumber: null,
+        status: "active",
+        busyState: "idle",
+        pendingReminderCount: 3,
+        worktreeBinding: {
+          root: "/repo/.trees/feature",
+          repo: "acme/repo",
+          branch: "feature/x",
+          state: "watching",
+        },
+        subscriptions: [
+          { repo: "acme/repo", prNumber: 42, source: "automatic", state: "active", pendingEventCount: 2 },
+          { repo: "other/repo", prNumber: 99, source: "manual", state: "unsubscribed", pendingEventCount: 0 },
+        ],
+      }],
+    })
+    assert.match(rendered, /worktree acme\/repo @ feature\/x \(watching\)/)
+    assert.match(rendered, /subscriptions acme\/repo#42 \(automatic\/active, pending 2\), other\/repo#99 \(manual\/unsubscribed, pending 0\)/)
+  })
   test("shows globally-disabled banner when flag is set", () => {
     const rendered = renderPremindStatus({
       daemon: { protocolVersion: 1 },

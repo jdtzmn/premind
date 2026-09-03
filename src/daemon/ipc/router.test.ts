@@ -184,6 +184,54 @@ describe("Router worktree subscription operations", () => {
     })
     store.close()
   })
+
+  test("includes each session worktree binding and subscriptions in debug status", async () => {
+    const store = createStore()
+    registerSession(store)
+    store.upsertWorktreeBinding({
+      sessionId: "session-1",
+      ...worktree,
+      state: "watching",
+    }, 1)
+    store.upsertSubscription({ sessionId: "session-1", repo: "acme/repo", prNumber: 42, source: "automatic" }, 1)
+    store.upsertSubscription({ sessionId: "session-1", repo: "other/repo", prNumber: 99, source: "manual" }, 1)
+    store.unsubscribe("session-1", "other/repo", 99, 2)
+    store.insertEvents("acme/repo", 42, [{
+      dedupeKey: "issue_comment.created:42",
+      kind: "issue_comment.created",
+      priority: "high",
+      summary: "New comment",
+      payload: {},
+    }], 3)
+    const router = new Router(store)
+    const response = await router.handle({
+      type: "debugStatus",
+      protocolVersion: 1,
+      payload: {},
+    })
+    assert.equal(response.ok, true)
+    if (!response.ok) throw new Error("debugStatus failed")
+    const result = response.result as { sessions: Array<{
+      worktreeBinding: { root: string; repo: string; branch: string | null; state: string } | null
+      subscriptions: Array<{ repo: string; prNumber: number; source: string; state: string; pendingEventCount: number }>
+    }> }
+    const session = result.sessions[0]
+    assert.deepEqual(session.worktreeBinding, {
+      root: worktree.root,
+      gitDir: worktree.gitDir,
+      repo: worktree.repo,
+      branch: worktree.branch,
+      headSha: worktree.headSha,
+      state: "watching",
+      updatedAt: 1,
+    })
+    assert.deepEqual(session.subscriptions, [
+      { repo: "acme/repo", prNumber: 42, source: "automatic", state: "active", pendingEventCount: 1 },
+      { repo: "other/repo", prNumber: 99, source: "manual", state: "unsubscribed", pendingEventCount: 0 },
+    ])
+    store.close()
+  })
+
 })
 
 const controlRequest = (clientId: string) => ({

@@ -181,7 +181,19 @@ export const renderPremindPiStatus = (status: DebugStatusResponse) => {
 	const header = `premind: ${activeLabel}`;
 	const sessions = status.sessions.map((session) => {
 		const pr = session.prNumber ? ` (PR #${session.prNumber})` : "";
-		return `- ${session.repo} @ ${session.branch}${pr} | ${session.status}/${session.busyState} | pending ${session.pendingReminderCount} | session ${formatSessionId(session.sessionId)}`;
+		const worktree = session.worktreeBinding
+			? ` | worktree ${session.worktreeBinding.repo} @ ${session.worktreeBinding.branch ?? "detached"} (${session.worktreeBinding.state})`
+			: "";
+		const subscriptions = (session.subscriptions ?? [])
+			.map(
+				(subscription) =>
+					`${subscription.repo}#${subscription.prNumber} (${subscription.source}/${subscription.state}, pending ${subscription.pendingEventCount})`,
+			)
+			.join(", ");
+		const subscriptionSummary = subscriptions
+			? ` | subscriptions ${subscriptions}`
+			: "";
+		return `- ${session.repo} @ ${session.branch}${pr} | ${session.status}/${session.busyState} | pending ${session.pendingReminderCount}${worktree}${subscriptionSummary} | session ${formatSessionId(session.sessionId)}`;
 	});
 	return [
 		header,

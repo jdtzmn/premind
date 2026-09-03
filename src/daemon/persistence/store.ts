@@ -797,20 +797,35 @@ export class StateStore {
 		}>;
 
 		return sessions.map((session) => {
-			const pendingReminderCount =
-				session.pr_number === null
-					? 0
-					: (
-							this.db
-								.prepare(
-									`SELECT COUNT(*) AS count FROM pr_events WHERE repo = :repo AND pr_number = :prNumber AND seq > :lastDeliveredEventSeq`,
+			const subscriptions = this.listSessionSubscriptions(session.session_id).map(
+				(subscription) => ({
+					repo: subscription.repo,
+					prNumber: subscription.prNumber,
+					source: subscription.source,
+					state: subscription.state,
+					pendingEventCount:
+						subscription.state === "active"
+							? this.countPendingEvents(
+									subscription.repo,
+									subscription.prNumber,
+									subscription.lastDeliveredEventSeq,
 								)
-								.get({
-									repo: session.repo,
-									prNumber: session.pr_number,
-									lastDeliveredEventSeq: session.last_delivered_event_seq,
-								}) as { count: number }
-						).count;
+							: 0,
+				}),
+			);
+			const pendingReminderCount =
+				subscriptions.length > 0
+					? subscriptions
+							.filter((subscription) => subscription.state === "active")
+							.reduce((count, subscription) => count + subscription.pendingEventCount, 0)
+					: session.pr_number === null
+							? 0
+							: this.countPendingEvents(
+									session.repo,
+									session.pr_number,
+									session.last_delivered_event_seq,
+								);
+			const binding = this.getWorktreeBinding(session.session_id);
 
 			return {
 				sessionId: session.session_id,
@@ -820,8 +835,30 @@ export class StateStore {
 				status: session.status,
 				busyState: session.busy_state,
 				pendingReminderCount,
+				worktreeBinding: binding
+					? {
+							root: binding.root,
+							gitDir: binding.gitDir,
+							repo: binding.repo,
+							branch: binding.branch,
+							headSha: binding.headSha,
+							state: binding.state,
+							updatedAt: binding.updatedAt,
+						}
+					: null,
+				subscriptions,
 			};
 		});
+	}
+
+	private countPendingEvents(repo: string, prNumber: number, lastDeliveredEventSeq: number) {
+		return (
+			this.db
+				.prepare(
+					`SELECT COUNT(*) AS count FROM pr_events WHERE repo = :repo AND pr_number = :prNumber AND seq > :lastDeliveredEventSeq`,
+				)
+				.get({ repo, prNumber, lastDeliveredEventSeq }) as { count: number }
+		).count;
 	}
 
 	setSessionPaused(sessionId: string, paused: boolean, now = Date.now()) {

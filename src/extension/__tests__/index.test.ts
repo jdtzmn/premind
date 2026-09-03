@@ -365,6 +365,35 @@ describe("premind Pi extension", () => {
 		);
 	});
 
+	test("renders Pi status worktree and qualified subscriptions", () => {
+		assert.match(
+
+			renderPremindPiStatus({
+				...status,
+				sessions: [{
+					...status.sessions[0],
+					worktreeBinding: {
+						root: "/repo/.trees/pi",
+						gitDir: "/repo/.git/worktrees/pi",
+						repo: "owner/repo",
+						branch: "feature/pi",
+						headSha: "abc123",
+						state: "watching",
+						updatedAt: 1,
+					},
+					subscriptions: [{
+						repo: "other/repo",
+						prNumber: 456,
+						source: "manual",
+						state: "active",
+						pendingEventCount: 4,
+					}],
+				}],
+			}),
+			/worktree owner\/repo @ feature\/pi \(watching\) \| subscriptions other\/repo#456 \(manual\/active, pending 4\)/,
+		);
+	});
+
 	test("session_start registers the Pi session with repo and branch", async () => {
 		const mock = createMockPi();
 		const client = createClient();
