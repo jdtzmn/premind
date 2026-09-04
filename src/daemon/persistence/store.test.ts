@@ -88,7 +88,7 @@ describe("StateStore", () => {
     assert.equal(batch.events.length, 2)
     assert.match(
       batch.reminderText,
-      /Action required: investigate and address the failing checks or merge conflicts above/,
+      /Action required: resolve the failing check\(s\)\/merge conflict\(s\) on HEAD before continuing/,
     )
 
     const pending = store.getPendingReminder("session-1")
@@ -98,6 +98,130 @@ describe("StateStore", () => {
 
     assert.equal(store.getPendingReminder("session-1"), null)
     assert.equal(store.buildReminderBatch("session-1"), null)
+
+    store.close()
+  })
+
+  test("supersedes check.failed/check.cancelled events from a replaced commit into one low-priority summary", () => {
+    const store = createStore()
+
+    store.registerClient("client-1", { pid: 123, projectRoot: "/tmp/project" })
+    store.registerSession({
+      clientId: "client-1",
+      sessionId: "session-1",
+      repo: "acme/repo",
+      branch: "feature/x",
+      isPrimary: true,
+      status: "active",
+      busyState: "idle",
+    })
+    store.recordBranchAssociation("acme/repo", "feature/x", 7)
+    // The PR has already moved on to sha-new; these events were recorded
+    // while sha-old was still HEAD (e.g. before the agent pushed a fix).
+    store.saveSnapshot("acme/repo", 7, { ...snapshot(), core: { ...snapshot().core, headRefOid: "sha-new" } })
+    store.insertEvents("acme/repo", 7, [
+      {
+        dedupeKey: "check.failed:lint:sha-old",
+        kind: "check.failed",
+        priority: "high",
+        summary: "Check failed: lint",
+        payload: { name: "lint", headSha: "sha-old" },
+      },
+      {
+        dedupeKey: "check.cancelled:build:sha-old",
+        kind: "check.cancelled",
+        priority: "low",
+        summary: "Check cancelled: build",
+        payload: { name: "build", headSha: "sha-old" },
+      },
+    ])
+
+    const batch = store.buildReminderBatch("session-1")
+    assert.ok(batch)
+    assert.equal(batch.events.length, 1)
+    assert.equal(batch.events[0]!.kind, "check.superseded")
+    assert.match(batch.events[0]!.summary, /1 failed, 1 cancelled on sha-old \(superseded by sha-new\)/)
+    assert.doesNotMatch(batch.reminderText, /Changes:/)
+    assert.match(batch.reminderText, /Superseded:/)
+    assert.doesNotMatch(batch.reminderText, /Action required/)
+
+    store.close()
+  })
+
+  test("keeps a live check.failed on HEAD actionable while a superseded one from the prior commit is summarized", () => {
+    const store = createStore()
+
+    store.registerClient("client-1", { pid: 123, projectRoot: "/tmp/project" })
+    store.registerSession({
+      clientId: "client-1",
+      sessionId: "session-1",
+      repo: "acme/repo",
+      branch: "feature/x",
+      isPrimary: true,
+      status: "active",
+      busyState: "idle",
+    })
+    store.recordBranchAssociation("acme/repo", "feature/x", 7)
+    store.saveSnapshot("acme/repo", 7, { ...snapshot(), core: { ...snapshot().core, headRefOid: "sha-new" } })
+    store.insertEvents("acme/repo", 7, [
+      {
+        dedupeKey: "check.failed:lint:sha-old",
+        kind: "check.failed",
+        priority: "high",
+        summary: "Check failed: lint",
+        payload: { name: "lint", headSha: "sha-old" },
+      },
+      {
+        dedupeKey: "check.failed:build:sha-new",
+        kind: "check.failed",
+        priority: "high",
+        summary: "Check failed: build",
+        payload: { name: "build", headSha: "sha-new" },
+      },
+    ])
+
+    const batch = store.buildReminderBatch("session-1")
+    assert.ok(batch)
+    assert.equal(batch.events.length, 2)
+    assert.ok(batch.events.some((event) => event.kind === "check.failed" && event.summary.includes("build")))
+    assert.ok(batch.events.some((event) => event.kind === "check.superseded" && event.summary.includes("lint") === false))
+    assert.match(batch.reminderText, /Changes:\n1\. check\.failed - Check failed: build/)
+    assert.match(batch.reminderText, /Superseded:\n1\. check\.superseded - 1 failed on sha-old \(superseded by sha-new\)/)
+    assert.match(batch.reminderText, /Action required: resolve the failing check\(s\)\/merge conflict\(s\) on HEAD before continuing/)
+
+    store.close()
+  })
+
+  test("treats check.failed events with no recorded headSha as live (backward compatible)", () => {
+    const store = createStore()
+
+    store.registerClient("client-1", { pid: 123, projectRoot: "/tmp/project" })
+    store.registerSession({
+      clientId: "client-1",
+      sessionId: "session-1",
+      repo: "acme/repo",
+      branch: "feature/x",
+      isPrimary: true,
+      status: "active",
+      busyState: "idle",
+    })
+    store.recordBranchAssociation("acme/repo", "feature/x", 7)
+    store.saveSnapshot("acme/repo", 7, { ...snapshot(), core: { ...snapshot().core, headRefOid: "sha-new" } })
+    store.insertEvents("acme/repo", 7, [
+      {
+        dedupeKey: "check.failed:lint:unknown",
+        kind: "check.failed",
+        priority: "high",
+        summary: "Check failed: lint",
+        payload: { name: "lint" },
+      },
+    ])
+
+    const batch = store.buildReminderBatch("session-1")
+    assert.ok(batch)
+    assert.equal(batch.events.length, 1)
+    assert.equal(batch.events[0]!.kind, "check.failed")
+    assert.match(batch.reminderText, /Action required/)
 
     store.close()
   })
@@ -1444,7 +1568,7 @@ describe("StateStore", () => {
     assert.ok(staleBatch)
     assert.match(staleBatch.reminderText, /manually subscribed/)
     assert.match(staleBatch.reminderText, /Do not make changes unless the user explicitly asks/)
-    assert.match(staleBatch.reminderText, /wait for explicit authorization before making changes/)
+    assert.match(staleBatch.reminderText, /wait for authorization before making changes/)
     ;(store as any).db
       .prepare(`UPDATE session_subscriptions SET state = 'unsubscribed' WHERE subscription_id = ?`)
       .run(manual.subscriptionId)
