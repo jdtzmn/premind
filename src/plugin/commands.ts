@@ -1,3 +1,5 @@
+import { PREMIND_VERSION_LABEL } from "../shared/version.ts"
+
 const RELATIVE_TIME_UNITS: Array<{ unit: Intl.RelativeTimeFormatUnit; ms: number }> = [
   { unit: "year", ms: 365 * 24 * 60 * 60 * 1000 },
   { unit: "month", ms: 30 * 24 * 60 * 60 * 1000 },
@@ -55,12 +57,12 @@ export const renderPremindStatus = (status: {
       pendingEventCount: number
     }>
   }>
-}, now = Date.now()) => {
+}, now = Date.now(), versionLabel = PREMIND_VERSION_LABEL) => {
   const lastReapLine = status.lastReapAt === null
     ? "- last reap: never"
     : `- last reap: ${formatRelativeTime(status.lastReapAt, now)} (${status.lastReapCount} reaped)`
 
-  const lines = ["premind status"]
+  const lines = [`premind status ${versionLabel}`]
   if (status.globallyDisabled) {
     lines.push("- globally disabled: yes (no GitHub polling — run /premind-enable to resume)")
   }

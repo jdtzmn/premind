@@ -24,7 +24,7 @@ describe("plugin commands", () => {
       ],
     })
 
-    assert.match(rendered, /premind status/)
+    assert.match(rendered, /premind status v\d+\.\d+\.\d+ \([0-9a-f]{6}\)/)
     assert.match(rendered, /session session-1: acme\/repo @ feature\/x \(PR #42\) \| active\/idle \| pending 3/)
     // When not disabled, the disabled line should not appear.
     assert.ok(!/globally disabled/.test(rendered))
