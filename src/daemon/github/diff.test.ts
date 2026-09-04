@@ -508,4 +508,111 @@ describe("diffSnapshot", () => {
     assert.equal(failed.kind, "check.failed")
     assert.equal(failed.priority, "high")
   })
+
+  test("stays quiet when a matrix shard succeeds while sibling shards are still running", () => {
+    const previous: PullRequestSnapshot = {
+      ...baseSnapshot(),
+      checks: [
+        { name: "unit-tests (shard 1)", state: "queued", workflow: "CI" },
+        { name: "unit-tests (shard 2)", state: "queued", workflow: "CI" },
+      ],
+    }
+    const next: PullRequestSnapshot = {
+      ...previous,
+      checks: [
+        { name: "unit-tests (shard 1)", state: "success", workflow: "CI" },
+        { name: "unit-tests (shard 2)", state: "in_progress", workflow: "CI" },
+      ],
+    }
+
+    const events = diffSnapshot(previous, next)
+
+    assert.ok(!events.some((event) => event.payload.name === "unit-tests (shard 1)"))
+  })
+
+  test("rolls a matrix job up into one summary once every shard finishes green", () => {
+    const previous: PullRequestSnapshot = {
+      ...baseSnapshot(),
+      checks: [
+        { name: "unit-tests (shard 1)", state: "success", workflow: "CI" },
+        { name: "unit-tests (shard 2)", state: "in_progress", workflow: "CI" },
+      ],
+    }
+    const next: PullRequestSnapshot = {
+      ...previous,
+      checks: [
+        { name: "unit-tests (shard 1)", state: "success", workflow: "CI" },
+        { name: "unit-tests (shard 2)", state: "success", workflow: "CI" },
+      ],
+    }
+
+    const events = diffSnapshot(previous, next)
+    const rollup = events.find((event) => event.kind === "check.succeeded")
+
+    assert.ok(rollup)
+    assert.match(rollup.summary, /2\/2 shards succeeded: unit-tests/)
+    assert.ok(!events.some((event) => event.payload.name === "unit-tests (shard 1)" && event !== rollup))
+  })
+
+  test("still reports a failing shard immediately while sibling shards are still running", () => {
+    const previous: PullRequestSnapshot = {
+      ...baseSnapshot(),
+      checks: [
+        { name: "unit-tests (shard 1)", state: "queued", workflow: "CI" },
+        { name: "unit-tests (shard 2)", state: "queued", workflow: "CI" },
+      ],
+    }
+    const next: PullRequestSnapshot = {
+      ...previous,
+      checks: [
+        { name: "unit-tests (shard 1)", state: "fail", workflow: "CI", link: "https://ci.example/shard-1" },
+        { name: "unit-tests (shard 2)", state: "in_progress", workflow: "CI" },
+      ],
+    }
+
+    const failed = diffSnapshot(previous, next).find((event) => event.payload.name === "unit-tests (shard 1)")
+
+    assert.ok(failed)
+    assert.equal(failed.kind, "check.failed")
+    assert.equal(failed.priority, "high")
+  })
+
+  test("does not re-announce remaining shards once a sibling in the same matrix job already failed", () => {
+    const previous: PullRequestSnapshot = {
+      ...baseSnapshot(),
+      checks: [
+        { name: "unit-tests (shard 1)", state: "fail", workflow: "CI" },
+        { name: "unit-tests (shard 2)", state: "in_progress", workflow: "CI" },
+      ],
+    }
+    const next: PullRequestSnapshot = {
+      ...previous,
+      checks: [
+        { name: "unit-tests (shard 1)", state: "fail", workflow: "CI" },
+        { name: "unit-tests (shard 2)", state: "success", workflow: "CI" },
+      ],
+    }
+
+    const events = diffSnapshot(previous, next)
+
+    assert.ok(!events.some((event) => event.payload.name === "unit-tests (shard 2)"))
+  })
+
+  test("suppresses per-shard started/queued noise for matrix jobs", () => {
+    const previous: PullRequestSnapshot = {
+      ...baseSnapshot(),
+      checks: [{ name: "unit-tests (shard 1)", state: "queued", workflow: "CI" }],
+    }
+    const next: PullRequestSnapshot = {
+      ...previous,
+      checks: [
+        { name: "unit-tests (shard 1)", state: "in_progress", workflow: "CI" },
+        { name: "unit-tests (shard 2)", state: "queued", workflow: "CI" },
+      ],
+    }
+
+    const events = diffSnapshot(previous, next)
+
+    assert.equal(events.length, 0)
+  })
 })

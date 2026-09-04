@@ -484,6 +484,26 @@ export function diffSnapshot(previous: PullRequestSnapshot | null, next: PullReq
     if (checkKind(check.state) === "check.cancelled" && check.workflow) cancelledWorkflows.add(check.workflow)
   }
 
+  // Matrix/shard jobs ("unit-tests (shard 1)", "test (ubuntu-latest)", ...) are
+  // detected by stripping a trailing "(...)"/"[...]" segment from the name;
+  // checks in the same workflow that reduce to the same base name are treated
+  // as one job's shards. Quiet on green: an individual shard turning green
+  // while siblings are still running is not worth waking the agent for, and
+  // is rolled up into one summary once the whole job finishes clean. Loud on
+  // first red: a failing shard is always reported immediately, uncondensed,
+  // so the agent can start fixing it without waiting on the rest.
+  const matrixBaseName = (name: string) => name.replace(/\s*[([][^()[\]]*[)\]]\s*$/, "").trim() || name
+  const matrixGroupKey = (check: PullRequestCheck) => `${check.workflow ?? ""}::${matrixBaseName(check.name)}`
+  const groupsByMatrixKey = new Map<string, PullRequestCheck[]>()
+  for (const checks of nextChecksByName.values()) {
+    const representative = representativeCheck(checks)
+    const key = matrixGroupKey(representative)
+    const bucket = groupsByMatrixKey.get(key)
+    if (bucket) bucket.push(representative)
+    else groupsByMatrixKey.set(key, [representative])
+  }
+  const TERMINAL_CHECK_KINDS = new Set(["check.succeeded", "check.failed", "check.cancelled"])
+
   for (const checks of nextChecksByName.values()) {
     const check = representativeCheck(checks)
     const prev = previousChecks.get(check.name)
@@ -494,6 +514,21 @@ export function diffSnapshot(previous: PullRequestSnapshot | null, next: PullReq
     if (kind === "check.failed" && check.workflow && cancelledWorkflows.has(check.workflow)) {
       kind = "check.cancelled"
       summary = `Check cancelled (a sibling job in the same workflow run was cancelled): ${check.name || "unnamed check"}`
+    }
+
+    const matrixGroup = groupsByMatrixKey.get(matrixGroupKey(check)) ?? [check]
+    if (matrixGroup.length > 1) {
+      if (kind === "check.succeeded") {
+        const allTerminal = matrixGroup.every((sibling) => TERMINAL_CHECK_KINDS.has(checkKind(sibling.state)))
+        const anyFailed = matrixGroup.some((sibling) => checkKind(sibling.state) === "check.failed")
+        if (!allTerminal) continue // other shards still running — stay quiet
+        if (anyFailed) continue // a red shard already got its own loud event
+        summary = `${matrixGroup.length}/${matrixGroup.length} shards succeeded: ${matrixBaseName(check.name)}`
+      } else if (kind === "check.in_progress" || kind === "check.queued" || kind === "check.created") {
+        continue // per-shard start/queue noise — only a red shard is worth surfacing
+      }
+      // check.failed and check.cancelled always fall through and are reported
+      // immediately, uncondensed — loud on first red.
     }
 
     events.push({
