@@ -408,4 +408,38 @@ describe("diffSnapshot", () => {
     assert.notEqual(firstMerge.dedupeKey, secondMerge.dedupeKey)
   })
 
+  test("maps a cancelled check conclusion to check.cancelled at low priority, not check.created", () => {
+    const previous: PullRequestSnapshot = {
+      ...baseSnapshot(),
+      checks: [{ name: "ai-review", state: "queued" }],
+    }
+    const next: PullRequestSnapshot = {
+      ...previous,
+      checks: [{ name: "ai-review", state: "cancelled", link: "https://ci.example/ai-review" }],
+    }
+
+    const cancelled = diffSnapshot(previous, next).find((event) => event.kind === "check.cancelled")
+
+    assert.ok(cancelled)
+    assert.equal(cancelled.priority, "low")
+    assert.match(cancelled.summary, /cancelled/i)
+    assert.ok(!diffSnapshot(previous, next).some((event) => event.kind === "check.created"))
+  })
+
+  test("tags check events with the head SHA they were observed on", () => {
+    const previous: PullRequestSnapshot = {
+      ...baseSnapshot(),
+      checks: [{ name: "build", state: "queued" }],
+    }
+    const next: PullRequestSnapshot = {
+      ...previous,
+      core: { ...previous.core, headRefOid: "sha-2" },
+      checks: [{ name: "build", state: "fail", link: "https://ci.example/build" }],
+    }
+
+    const failed = diffSnapshot(previous, next).find((event) => event.kind === "check.failed")
+
+    assert.ok(failed)
+    assert.equal(failed.payload.headSha, "sha-2")
+  })
 })

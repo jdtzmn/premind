@@ -15,6 +15,7 @@ const checkKind = (state?: string) => {
   const normalized = (state ?? "").toLowerCase()
   if (["pass", "success", "succeeded"].includes(normalized)) return "check.succeeded"
   if (["fail", "failed", "failure"].includes(normalized)) return "check.failed"
+  if (["cancelled", "canceled"].includes(normalized)) return "check.cancelled"
   if (["pending", "queued"].includes(normalized)) return "check.queued"
   if (["running", "in_progress"].includes(normalized)) return "check.in_progress"
   return "check.created"
@@ -30,6 +31,7 @@ const checkSummary = (check: PullRequestCheck, kind: string) => {
   const name = check.name || "unnamed check"
   if (kind === "check.failed") return `Check failed: ${name}`
   if (kind === "check.succeeded") return `Check passed: ${name}`
+  if (kind === "check.cancelled") return `Check cancelled: ${name}`
   if (kind === "check.in_progress") return `Check started: ${name}`
   if (kind === "check.queued") return `Check queued: ${name}`
   return `New check detected: ${name}`
@@ -52,6 +54,7 @@ const groupKinds = new Set([
   "check.in_progress",
   "check.succeeded",
   "check.failed",
+  "check.cancelled",
   "issue_comment.created",
   "issue_comment.edited",
   "issue_comment.deleted",
@@ -461,6 +464,7 @@ export function diffSnapshot(previous: PullRequestSnapshot | null, next: PullReq
         state: check.state ?? null,
         workflow: check.workflow ?? null,
         event: check.event ?? null,
+        headSha: next.core.headRefOid,
       },
     })
   }
