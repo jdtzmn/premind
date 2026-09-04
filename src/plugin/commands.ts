@@ -78,8 +78,11 @@ export const renderPremindStatus = (status: {
     `- active watchers: ${status.activeWatchers}`,
     lastReapLine,
     ...status.sessions.map((session) => {
+      const worktreeState = session.worktreeBinding?.state === "foreign_pr"
+        ? "foreign PR; automatic watching disabled"
+        : session.worktreeBinding?.state
       const worktree = session.worktreeBinding
-        ? ` | worktree ${session.worktreeBinding.repo} @ ${session.worktreeBinding.branch ?? "detached"} (${session.worktreeBinding.state})`
+        ? ` | worktree ${session.worktreeBinding.repo} @ ${session.worktreeBinding.branch ?? "detached"} (${worktreeState})`
         : ""
       const subscriptions = (session.subscriptions ?? [])
         .map(

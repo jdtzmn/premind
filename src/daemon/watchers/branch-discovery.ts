@@ -3,7 +3,8 @@ import { StateStore } from "../persistence/store.ts"
 import type { GitHubClientLike } from "../github/client.ts"
 import { WorktreeBindingRegistry } from "../worktrees/worktree-binding-registry.ts"
 
-const BRANCH_PULLS_ETAG_SCOPE = "branch.pulls"
+const BRANCH_PULLS_ETAG_SCOPE = "branch.pulls.author-gate.v1"
+// New scope intentionally forces one owner-aware discovery after upgrading from pre-gate releases.
 
 const etagKey = (repo: string, branch: string) => `${repo}#${branch}`
 
@@ -25,6 +26,23 @@ export class BranchDiscoveryWatcher {
       else targetsByBranch.set(key, [target])
     }
 
+    if (targetsByBranch.size === 0) return
+
+    let viewerLogin: string | null
+    try {
+      viewerLogin = await this.github.getViewerLogin()
+    } catch (error) {
+      this.store.suspendAutomaticSubscriptions(now)
+      this.logger.warn("unable to identify authenticated GitHub user; skipping automatic PR discovery", {
+        error: error instanceof Error ? error.message : String(error),
+      })
+      return
+    }
+    if (!viewerLogin) {
+      this.store.suspendAutomaticSubscriptions(now)
+      this.logger.warn("authenticated GitHub user has no login; skipping automatic PR discovery")
+      return
+    }
     for (const targets of targetsByBranch.values()) {
       const target = targets[0]!
       try {
@@ -46,6 +64,32 @@ export class BranchDiscoveryWatcher {
         }
 
         const pr = result.pr
+        if (pr && pr.authorLogin?.toLowerCase() !== viewerLogin.toLowerCase()) {
+          this.logger.info("automatic PR watch disabled for a foreign-authored PR", {
+            repo: target.repo,
+            branch: target.branch,
+            prNumber: pr.number,
+            authorLogin: pr.authorLogin,
+            viewerLogin,
+          })
+          for (const binding of targets) {
+            if (binding.git_dir !== "") {
+              this.worktreeBindings.pullRequestNotOwned(
+                binding.session_id,
+                { repo: binding.repo, prNumber: pr.number },
+                now,
+              )
+            } else {
+              this.store.rejectAutomaticPullRequest(
+                binding.session_id,
+                binding.repo,
+                pr.number,
+                now,
+              )
+            }
+          }
+          continue
+        }
         if (pr && target.pr_number !== null && pr.number !== target.pr_number) {
           const previousState = this.store.getSnapshot(target.repo, target.pr_number)?.core.state
           if (previousState !== "MERGED" && previousState !== "CLOSED") {

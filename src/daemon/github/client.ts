@@ -9,6 +9,7 @@ export type PullRequestSummary = {
   url: string
   draft: boolean
   state: string
+  authorLogin?: string | null
 }
 
 export type GitHubClientLike = {
@@ -22,6 +23,7 @@ export type GitHubClientLike = {
     prNumber: number,
     context?: FetchSnapshotContext,
   ): Promise<PullRequestSnapshotResult>
+  getViewerLogin(): Promise<string | null>
 }
 
 /**
@@ -56,6 +58,7 @@ type PullsListResponse = Array<{
   html_url: string
   draft: boolean
   state: string
+  user: { login?: string | null } | null
 }>
 
 /**
@@ -69,12 +72,23 @@ type PullsListResponse = Array<{
 export class GitHubClient implements GitHubClientLike {
   readonly http: GitHubHttpClient
   readonly rateLimit: RateLimitTracker
+  private viewerLogin: Promise<string | null> | null = null
 
   constructor(options: GitHubClientOptions = {}) {
     this.http = options.http ?? new GitHubHttpClient()
     this.rateLimit = this.http.rateLimit
   }
 
+  async getViewerLogin(): Promise<string | null> {
+    this.viewerLogin ??= this.http
+      .get<{ login?: string | null }>("user")
+      .then((response) => (response.kind === "ok" ? response.data.login ?? null : null))
+      .catch((error) => {
+        this.viewerLogin = null
+        throw error
+      })
+    return this.viewerLogin
+  }
   async findOpenPullRequestForBranch(
     repo: string,
     branch: string,
@@ -105,6 +119,7 @@ export class GitHubClient implements GitHubClientLike {
         url: first.html_url,
         draft: first.draft,
         state: first.state,
+        authorLogin: first.user?.login ?? null,
       },
       etag: response.etag,
     }

@@ -12,6 +12,7 @@ const durableBindingStates = new Set([
 	"waiting_for_pr",
 	"following_automatic_pr",
 	"automatic_pr_unsubscribed",
+	"foreign_pr",
 	"detached_head",
 ]);
 
@@ -112,6 +113,27 @@ export class WorktreeBindingRegistry {
 			}),
 		);
 	}
+
+  pullRequestNotOwned(
+    sessionId: string,
+    pullRequest: PullRequestRef,
+    now = Date.now(),
+  ): WorktreeBinding | null {
+    if (!this.store.getWorktreeBinding(sessionId)) return null;
+
+    const actor = this.getOrCreate(sessionId);
+    if (actor.getSnapshot().value === "resolving_worktree") return null;
+    actor.send({ type: "PR_NOT_OWNED", pullRequest });
+    return this.persist(sessionId, () =>
+      this.store.transaction(() => {
+        this.store.rejectAutomaticPullRequest(sessionId, pullRequest.repo, pullRequest.prNumber, now);
+        return this.store.upsertWorktreeBinding(
+          this.bindingFromActor(sessionId, actor),
+          now,
+        );
+      }),
+    );
+  }
 
 	pullRequestNotFound(sessionId: string, now = Date.now()): WorktreeBinding | null {
 		if (!this.store.getWorktreeBinding(sessionId)) return null;

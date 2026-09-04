@@ -25,6 +25,20 @@ describe("worktree binding machine", () => {
     actor.send({ type: "PR_NOT_FOUND" })
     assert.equal(actor.getSnapshot().value, "waiting_for_pr")
   })
+  test("blocks automatic watching for a foreign PR until the PR becomes owned", () => {
+    const actor = createWorktreeBindingActor()
+    actor.start()
+    actor.send({ type: "ACTIVATE_WORKTREE", path: worktree.root })
+    actor.send({ type: "WORKTREE_RESOLVED", worktree })
+    actor.send({ type: "PR_NOT_OWNED", pullRequest: { repo: "owner/repo", prNumber: 13 } })
+
+    assert.equal(actor.getSnapshot().value, "foreign_pr")
+    assert.deepEqual(actor.getSnapshot().context.automaticPullRequest, { repo: "owner/repo", prNumber: 13 })
+
+    actor.send({ type: "PR_FOUND", pullRequest: { repo: "owner/repo", prNumber: 13 } })
+    assert.equal(actor.getSnapshot().value, "following_automatic_pr")
+  })
+
 
   test("follows a discovered PR and persists an automatic opt-out until another worktree activates", () => {
     const actor = createWorktreeBindingActor()

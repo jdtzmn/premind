@@ -48,8 +48,8 @@ ln -s "$(pwd)/src/plugin/index.ts" .opencode/plugins/premind.ts
 ## How it works
 
 1. When OpenCode loads premind, the plugin starts a local daemon process.
-2. The daemon discovers the open PR for your current branch.
-3. It polls GitHub for new comments, reviews, check results, merge conflicts, and other changes.
+2. The daemon discovers the open PR for your current branch and automatically watches it only when it was authored by the GitHub account Premind is authenticated as.
+3. It polls watched PRs for new comments, reviews, check results, merge conflicts, and other changes.
 4. When changes arrive while the session is busy, they are queued.
 5. When the session becomes idle, premind injects a single `<system-reminder>` message with the incremental changes.
 6. OpenCode processes the reminder like a normal follow-up prompt, and your existing notification setup fires when the model completes.
@@ -103,7 +103,7 @@ premind registers these slash commands automatically:
 - `/premind-disable` — disable GitHub polling globally
 - `/premind-enable` — re-enable GitHub polling globally
 
-Worktree and subscription lifecycle replaces per-session pause/resume. OpenCode exposes `premind_activate_worktree`, `premind_subscribe`, and `premind_unsubscribe` model tools. The Pi package exposes the same tools plus `/premind:activate-worktree`, `/premind:subscribe`, and `/premind:unsubscribe` commands. Manual subscriptions may target an external `owner/repo`; status and reminders use fully qualified `owner/repo#number` identities.
+Worktree and subscription lifecycle replaces per-session pause/resume. OpenCode exposes `premind_activate_worktree`, `premind_subscribe`, and `premind_unsubscribe` model tools. The Pi package exposes the same tools plus `/premind:activate-worktree`, `/premind:subscribe`, and `/premind:unsubscribe` commands. Automatic watches are limited to PRs authored by Premind's authenticated GitHub account. Manual subscriptions may intentionally target an external `owner/repo`; their reminders include a guard that changes require explicit user instruction, and status/reminders use fully qualified `owner/repo#number` identities.
 
 `/premind-disable` is a daemon-wide kill switch: the daemon stays up and sessions keep registering, but no GitHub API calls are made until you re-enable. The flag is persisted in SQLite, so it survives daemon restarts. Queued events are preserved and delivered as normal once you re-enable.
 
