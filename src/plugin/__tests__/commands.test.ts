@@ -62,6 +62,34 @@ describe("plugin commands", () => {
     assert.match(rendered, /worktree acme\/repo @ feature\/x \(watching\)/)
     assert.match(rendered, /subscriptions acme\/repo#42 \(automatic\/active, pending 2\), other\/repo#99 \(manual\/unsubscribed, pending 0\)/)
   })
+
+  test("explains when automatic watching is disabled for a foreign PR", () => {
+    const rendered = renderPremindStatus({
+      daemon: { protocolVersion: 1 },
+      activeClients: 1,
+      activeSessions: 1,
+      activeWatchers: 0,
+      lastReapAt: null,
+      lastReapCount: 0,
+      sessions: [{
+        sessionId: "session-foreign",
+        repo: "acme/repo",
+        branch: "feature/foreign",
+        prNumber: null,
+        status: "active",
+        busyState: "idle",
+        pendingReminderCount: 0,
+        worktreeBinding: {
+          root: "/repo/.trees/foreign",
+          repo: "acme/repo",
+          branch: "feature/foreign",
+          state: "foreign_pr",
+        },
+      }],
+    })
+
+    assert.match(rendered, /foreign PR; automatic watching disabled/)
+  })
   test("shows globally-disabled banner when flag is set", () => {
     const rendered = renderPremindStatus({
       daemon: { protocolVersion: 1 },

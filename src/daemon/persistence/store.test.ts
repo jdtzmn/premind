@@ -1378,6 +1378,29 @@ describe("StateStore", () => {
     assert.equal(store.listUndeliveredEvents("manual-session").length, 1)
     store.close()
   })
+  test("rejecting an automatic PR clears legacy reminder delivery", () => {
+    const store = createStore()
+    store.registerClient("client-reject", { pid: 1, projectRoot: "/tmp/project" })
+    store.registerSession({
+      clientId: "client-reject", sessionId: "session-reject", repo: "acme/repo",
+      branch: "feature/reject", isPrimary: true, status: "active", busyState: "idle",
+    })
+    store.recordBranchAssociation("acme/repo", "feature/reject", 42)
+    assert.equal(store.unsubscribe("session-reject", "acme/repo", 42), true)
+    store.insertEvents("acme/repo", 42, [{
+      dedupeKey: "legacy-foreign-event", kind: "review.approved", priority: "high",
+      summary: "legacy foreign event", payload: {},
+    }])
+    assert.ok(store.buildReminderBatch("session-reject"))
+
+    store.rejectAutomaticPullRequest("session-reject", "acme/repo", 42)
+
+    assert.equal(store.getSession("session-reject")?.pr_number, null)
+    assert.equal(store.getPendingReminder("session-reject"), null)
+    assert.equal(store.buildReminderBatch("session-reject"), null)
+    store.close()
+  })
+
   test("scopes event deduplication to repository and pull request", () => {
     const store = createStore()
     const event = {
@@ -1414,11 +1437,14 @@ describe("StateStore", () => {
       sessionId: "batch-session", repo: "external/repo", prNumber: 10, source: "manual",
     })
     store.insertEvents("external/repo", 10, [{
-      dedupeKey: "manual-event", kind: "review.approved", priority: "high",
+      dedupeKey: "manual-event", kind: "check.failed", priority: "high",
       summary: "manual event", payload: {},
     }])
     const staleBatch = store.buildReminderBatchForSubscription(manual.subscriptionId)
     assert.ok(staleBatch)
+    assert.match(staleBatch.reminderText, /manually subscribed/)
+    assert.match(staleBatch.reminderText, /Do not make changes unless the user explicitly asks/)
+    assert.match(staleBatch.reminderText, /wait for explicit authorization before making changes/)
     ;(store as any).db
       .prepare(`UPDATE session_subscriptions SET state = 'unsubscribed' WHERE subscription_id = ?`)
       .run(manual.subscriptionId)

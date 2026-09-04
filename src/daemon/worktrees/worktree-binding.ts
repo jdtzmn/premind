@@ -25,6 +25,7 @@ export type WorktreeBindingEvent =
   | { type: "WORKTREE_RESOLUTION_FAILED" }
   | { type: "PR_FOUND"; pullRequest: PullRequestRef }
   | { type: "PR_NOT_FOUND" }
+  | { type: "PR_NOT_OWNED"; pullRequest: PullRequestRef }
   | { type: "UNSUBSCRIBE_AUTOMATIC"; pullRequest: PullRequestRef }
   | { type: "SESSION_CLOSED" }
 
@@ -117,6 +118,12 @@ export const worktreeBindingMachine = setup({
             automaticPullRequest: ({ event }) => event.pullRequest,
           }),
         },
+        PR_NOT_OWNED: {
+          target: "foreign_pr",
+          actions: assign({
+            automaticPullRequest: ({ event }) => event.pullRequest,
+          }),
+        },
         PR_NOT_FOUND: {},
         ACTIVATE_WORKTREE: {
           target: "resolving_worktree",
@@ -135,9 +142,42 @@ export const worktreeBindingMachine = setup({
             automaticPullRequest: ({ event }) => event.pullRequest,
           }),
         },
+        PR_NOT_OWNED: {
+          target: "foreign_pr",
+          actions: assign({
+            automaticPullRequest: ({ event }) => event.pullRequest,
+          }),
+        },
         UNSUBSCRIBE_AUTOMATIC: {
           guard: "isCurrentAutomaticPullRequest",
           target: "automatic_pr_unsubscribed",
+        },
+        ACTIVATE_WORKTREE: {
+          target: "resolving_worktree",
+          actions: assign({
+            requestedPath: ({ event }) => event.path,
+            worktree: null,
+            automaticPullRequest: null,
+          }),
+        },
+      },
+    },
+    foreign_pr: {
+      on: {
+        PR_FOUND: {
+          target: "following_automatic_pr",
+          actions: assign({
+            automaticPullRequest: ({ event }) => event.pullRequest,
+          }),
+        },
+        PR_NOT_OWNED: {
+          actions: assign({
+            automaticPullRequest: ({ event }) => event.pullRequest,
+          }),
+        },
+        PR_NOT_FOUND: {
+          target: "waiting_for_pr",
+          actions: assign({ automaticPullRequest: null }),
         },
         ACTIVATE_WORKTREE: {
           target: "resolving_worktree",

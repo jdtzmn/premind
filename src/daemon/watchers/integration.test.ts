@@ -42,7 +42,16 @@ class FixtureGitHubClient implements GitHubClientLike {
   results: FixtureResult[] = []
   lastBranchEtag: string | null | undefined = undefined
   private resultIndex = 0
+  viewerLogin: string | null = "octocat"
   private branchIndex = 0
+
+  async getViewerLogin(): Promise<string | null> {
+    return this.viewerLogin
+  }
+
+  private withAuthor(pr: PullRequestSummary | null): PullRequestSummary | null {
+    return pr ? { ...pr, authorLogin: pr.authorLogin ?? this.viewerLogin } : null
+  }
 
   async findOpenPullRequestForBranch(
     _repo: string,
@@ -53,12 +62,12 @@ class FixtureGitHubClient implements GitHubClientLike {
     if (this.branchIndex < this.branchResults.length) {
       const next = this.branchResults[this.branchIndex++]
       if (next.kind === "ok") {
-        return { kind: "ok", pr: next.pr, etag: next.etag ?? null }
+        return { kind: "ok", pr: this.withAuthor(next.pr), etag: next.etag ?? null }
       }
       return next
     }
     // Fallback to the legacy `prForBranch` field for older tests that set it.
-    return { kind: "ok", pr: this.prForBranch, etag: null }
+    return { kind: "ok", pr: this.withAuthor(this.prForBranch), etag: null }
   }
 
   async fetchPullRequestSnapshot(): Promise<PullRequestSnapshotResult> {
@@ -162,6 +171,87 @@ describe("watcher integration", () => {
 
     store.close()
   })
+
+  test("does not automatically watch a PR authored by another GitHub user", async () => {
+    const store = createStore()
+    const github = new FixtureGitHubClient()
+    const watcher = new BranchDiscoveryWatcher(store, github)
+
+    store.registerClient("client-foreign", { pid: 1, projectRoot: "/tmp" })
+    store.registerSession({
+      clientId: "client-foreign",
+      sessionId: "session-foreign",
+      repo: "acme/repo",
+      branch: "feature/foreign",
+      isPrimary: true,
+      status: "active",
+      busyState: "idle",
+    })
+    store.upsertWorktreeBinding({
+      sessionId: "session-foreign",
+      root: "/tmp/worktree-foreign",
+      gitDir: "/tmp/.git/worktrees/foreign",
+      repo: "acme/repo",
+      branch: "feature/foreign",
+      headSha: "abc123",
+      state: "waiting_for_pr",
+    })
+    store.upsertSubscription({
+      sessionId: "session-foreign",
+      repo: "acme/repo",
+      prNumber: 99,
+      source: "manual",
+    })
+    github.prForBranch = {
+      number: 42,
+      title: "Foreign PR",
+      url: "https://github.com/acme/repo/pull/42",
+      draft: false,
+      state: "open",
+      authorLogin: "someone-else",
+    }
+
+    await watcher.tick()
+
+    assert.equal(store.getWorktreeBinding("session-foreign")?.state, "foreign_pr")
+    assert.equal(store.getSubscription("session-foreign", "acme/repo", 42), null)
+    assert.equal(store.getSubscription("session-foreign", "acme/repo", 99)?.source, "manual")
+    assert.equal(store.listPrWatchTargets().some((target) => target.pr_number === 42), false)
+    store.close()
+  })
+  test("revokes legacy automatic subscriptions for foreign-authored PRs", async () => {
+    const store = createStore()
+    const github = new FixtureGitHubClient()
+    const watcher = new BranchDiscoveryWatcher(store, github)
+
+    store.registerClient("client-legacy-foreign", { pid: 1, projectRoot: "/tmp" })
+    store.registerSession({
+      clientId: "client-legacy-foreign",
+      sessionId: "session-legacy-foreign",
+      repo: "acme/repo",
+      branch: "feature/legacy-foreign",
+      isPrimary: true,
+      status: "active",
+      busyState: "idle",
+    })
+    store.recordBranchAssociation("acme/repo", "feature/legacy-foreign", 42)
+    github.prForBranch = {
+      number: 42,
+      title: "Foreign PR",
+      url: "https://github.com/acme/repo/pull/42",
+      draft: false,
+      state: "open",
+      authorLogin: "someone-else",
+    }
+
+    await watcher.tick()
+
+    assert.equal(store.getSubscription("session-legacy-foreign", "acme/repo", 42)?.state, "unsubscribed")
+    assert.equal(store.getSession("session-legacy-foreign")?.pr_number, null)
+    assert.equal(store.listPrWatchTargets().some((target) => target.pr_number === 42), false)
+    store.close()
+  })
+
 
   test("branch discovery honors automatic opt-outs without touching manual subscriptions", async () => {
     const store = createStore()
@@ -518,18 +608,18 @@ describe("watcher integration", () => {
     github.pushBranchResult(null, 'W/"branch-1"')
     await watcher.tick()
     assert.equal(github.lastBranchEtag, null, "first poll should send no If-None-Match")
-    assert.equal(store.getEtag("branch.pulls", "acme/repo#feature/etag"), 'W/"branch-1"')
+    assert.equal(store.getEtag("branch.pulls.author-gate.v1", "acme/repo#feature/etag"), 'W/"branch-1"')
 
     // Tick 2: server returns 304, etag preserved.
     github.pushBranchNotModified('W/"branch-1"')
     await watcher.tick()
     assert.equal(github.lastBranchEtag, 'W/"branch-1"', "subsequent poll should send If-None-Match")
-    assert.equal(store.getEtag("branch.pulls", "acme/repo#feature/etag"), 'W/"branch-1"')
+    assert.equal(store.getEtag("branch.pulls.author-gate.v1", "acme/repo#feature/etag"), 'W/"branch-1"')
 
     // Tick 3: server rotates etag on 304 — we persist the new one.
     github.pushBranchNotModified('W/"branch-2"')
     await watcher.tick()
-    assert.equal(store.getEtag("branch.pulls", "acme/repo#feature/etag"), 'W/"branch-2"')
+    assert.equal(store.getEtag("branch.pulls.author-gate.v1", "acme/repo#feature/etag"), 'W/"branch-2"')
 
     store.close()
   })

@@ -72,6 +72,10 @@ class FixtureGitHubClient implements GitHubClientLike {
   readonly results: PullRequestSnapshotResult[] = []
   fetchCount = 0
 
+
+  async getViewerLogin(): Promise<string | null> {
+    return "octocat"
+  }
   async findOpenPullRequestForBranch(): Promise<FindOpenPullRequestResult> {
     return { kind: "ok", pr: null, etag: null }
   }
