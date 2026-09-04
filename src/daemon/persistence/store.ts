@@ -113,6 +113,7 @@ type EventRow = {
 	priority: "high" | "medium" | "low";
 	summary: string;
 	reference_link: string | null;
+	payload_json: string;
 };
 
 type GroupedReminderEvent = ReminderEvent & {
@@ -125,6 +126,15 @@ const priorityRank: Record<ReminderEvent["priority"], number> = {
 	medium: 1,
 	low: 2,
 };
+
+// Check kinds that only matter on the PR's current HEAD. A push supersedes
+// every check-run on the previous commit, and GitHub never retracts those
+// old check-runs — it just leaves them failed/cancelled forever. Without
+// this, an agent that already pushed a fix keeps getting "Action required"
+// reminders for commits it has already replaced.
+const SUPERSEDABLE_CHECK_KINDS = new Set(["check.failed", "check.cancelled"]);
+
+const shortSha = (sha: string) => sha.slice(0, 7);
 
 export class StateStore {
 	private readonly db: DatabaseSync;
@@ -1545,7 +1555,7 @@ export class StateStore {
 	) {
 		return this.db
 			.prepare(
-				`SELECT seq, kind, priority, summary, reference_link
+				`SELECT seq, kind, priority, summary, reference_link, payload_json
 				 FROM pr_events
 				 WHERE repo = :repo
 				   AND pr_number = :prNumber
@@ -1830,6 +1840,10 @@ export class StateStore {
 			(subscription.sessionId !== sessionId || subscription.state !== "active")
 		) return null;
 
+		const targetRepo = subscription?.repo ?? session.repo;
+		const targetPrNumber = subscription?.prNumber ?? session.pr_number;
+		const qualifiedTarget = targetPrNumber ? `${targetRepo}#${targetPrNumber}` : targetRepo;
+
 		const existing = subscription
 			? this.getPendingReminderForSubscription(subscription.subscriptionId)
 			: this.getPendingReminder(sessionId);
@@ -1840,17 +1854,53 @@ export class StateStore {
 			: this.listUndeliveredEvents(sessionId);
 		if (events.length === 0) return null;
 		const maxEventSeq = events.at(-1)!.seq;
+		const currentHeadSha = targetPrNumber
+			? this.getSnapshot(targetRepo, targetPrNumber)?.core.headRefOid
+			: undefined;
 
-		const reminderEvents: GroupedReminderEvent[] = events.map((event) => ({
-			eventId: String(event.seq),
-			kind: event.kind,
-			priority: event.priority,
-			summary: event.summary,
-			referenceLink: event.reference_link ?? undefined,
-		}));
+		const reminderEvents: Array<GroupedReminderEvent & { headSha?: string }> = events.map((event) => {
+			let headSha: string | undefined;
+			try {
+				const payload = JSON.parse(event.payload_json) as Record<string, unknown>;
+				if (typeof payload.headSha === "string") headSha = payload.headSha;
+			} catch {
+				// Malformed payload JSON should never block reminder delivery.
+			}
+			return {
+				eventId: String(event.seq),
+				kind: event.kind,
+				priority: event.priority,
+				summary: event.summary,
+				referenceLink: event.reference_link ?? undefined,
+				...(headSha ? { headSha } : {}),
+			};
+		});
+
+		// Option C: a check.failed/check.cancelled event whose headSha no longer
+		// matches the PR's current HEAD cannot be fixed directly — the commit it
+		// ran on is already gone. Pull those out before grouping so they never
+		// reach the live "Changes" list or the actionable-blocker check; they
+		// are summarized once per superseded commit instead (see below).
+		const liveEvents: GroupedReminderEvent[] = [];
+		const supersededByHeadSha = new Map<string, GroupedReminderEvent[]>();
+		for (const event of reminderEvents) {
+			const { headSha, ...reminderEvent } = event;
+			const isSuperseded =
+				currentHeadSha !== undefined &&
+				headSha !== undefined &&
+				headSha !== currentHeadSha &&
+				SUPERSEDABLE_CHECK_KINDS.has(reminderEvent.kind);
+			if (isSuperseded) {
+				const bucket = supersededByHeadSha.get(headSha);
+				if (bucket) bucket.push(reminderEvent);
+				else supersededByHeadSha.set(headSha, [reminderEvent]);
+				continue;
+			}
+			liveEvents.push(reminderEvent);
+		}
 
 		const grouped = new Map<string, GroupedReminderEvent[]>();
-		for (const event of reminderEvents) {
+		for (const event of liveEvents) {
 			const key =
 				event.priority === "low" || event.priority === "medium"
 					? `${event.priority}:${event.kind}`
@@ -1860,7 +1910,7 @@ export class StateStore {
 			else grouped.set(key, [event]);
 		}
 
-		const condensed = Array.from(grouped.values()).map((bucket) => {
+		const condensedLive = Array.from(grouped.values()).map((bucket) => {
 			if (bucket.length === 1 || bucket[0].priority === "high")
 				return bucket[0];
 			return {
@@ -1873,45 +1923,63 @@ export class StateStore {
 				samples: bucket.slice(0, 2).map((event) => event.summary),
 			};
 		});
-
-		condensed.sort((left, right) => {
+		condensedLive.sort((left, right) => {
 			const priorityDelta =
 				priorityRank[left.priority] - priorityRank[right.priority];
 			if (priorityDelta !== 0) return priorityDelta;
 			return Number(left.eventId) - Number(right.eventId);
 		});
+
+		// One informational line per superseded commit, e.g. "2 failed on 03f8a47
+		// (superseded by 87c8827)" — never an actionable blocker, never repeated
+		// per check.
+		const supersededSummaries: GroupedReminderEvent[] = Array.from(supersededByHeadSha.entries()).map(
+			([oldHeadSha, bucket]) => {
+				const failedCount = bucket.filter((event) => event.kind === "check.failed").length;
+				const cancelledCount = bucket.filter((event) => event.kind === "check.cancelled").length;
+				const parts: string[] = [];
+				if (failedCount > 0) parts.push(`${failedCount} failed`);
+				if (cancelledCount > 0) parts.push(`${cancelledCount} cancelled`);
+				const description = parts.join(", ") || `${bucket.length} check${bucket.length === 1 ? "" : "s"} resolved`;
+				return {
+					eventId: bucket.at(-1)!.eventId,
+					kind: "check.superseded",
+					priority: "low" as const,
+					summary: `${description} on ${shortSha(oldHeadSha)}${currentHeadSha ? ` (superseded by ${shortSha(currentHeadSha)})` : ""}`,
+					count: bucket.length,
+				};
+			},
+		);
+
+		const condensed = [...condensedLive, ...supersededSummaries];
 		const hasActionableBlocker = condensed.some((event) =>
 			["check.failed", "merge_conflict.detected"].includes(event.kind),
 		);
-		const targetRepo = subscription?.repo ?? session.repo;
-		const targetPrNumber = subscription?.prNumber ?? session.pr_number;
-		const qualifiedTarget = targetPrNumber ? `${targetRepo}#${targetPrNumber}` : targetRepo;
+		const renderEvent = (event: GroupedReminderEvent, index: number) =>
+			`${index + 1}. ${event.kind} - ${event.summary}${event.referenceLink ? ` (${event.referenceLink})` : ""}`;
 		const reminderText = [
 			"<system-reminder>",
-			`New pull request context was detected for ${qualifiedTarget} since the last reminder.`,
+			currentHeadSha
+				? `PR update for ${qualifiedTarget} (HEAD: ${shortSha(currentHeadSha)}):`
+				: `PR update for ${qualifiedTarget}:`,
 			...(subscription?.source === "manual"
 				? [
 					"",
 					"This PR is manually subscribed. Do not make changes unless the user explicitly asks you to.",
 				]
 				: []),
-			"",
-			"Changes:",
-			...condensed.map(
-
-				(event, index) =>
-					`${index + 1}. ${event.kind} - ${event.summary}${event.referenceLink ? ` (${event.referenceLink})` : ""}`,
-			),
+			...(condensedLive.length > 0 ? ["", "Changes:", ...condensedLive.map(renderEvent)] : []),
+			...(supersededSummaries.length > 0 ? ["", "Superseded:", ...supersededSummaries.map(renderEvent)] : []),
 			...(hasActionableBlocker
 				? [
 					"",
 					subscription?.source === "manual"
-						? "Action required: report the failing checks or merge conflicts above to the user and wait for explicit authorization before making changes."
-						: "Action required: investigate and address the failing checks or merge conflicts above before continuing the current task. If you cannot resolve them, explain why.",
+						? "Action required: report the failing check(s)/merge conflict(s) above and wait for authorization before making changes."
+						: "Action required: resolve the failing check(s)/merge conflict(s) on HEAD before continuing. If you can't, explain why.",
 				]
 				: []),
 			"",
-			"Please incorporate only the new information above into your reasoning and continue the current task.",
+			"Incorporate only the above into your reasoning and continue.",
 			"</system-reminder>",
 		].join("\n");
 		const batchId = this.createOrReplaceReminder(
