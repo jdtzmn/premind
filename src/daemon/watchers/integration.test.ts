@@ -219,6 +219,39 @@ describe("watcher integration", () => {
     assert.equal(store.listPrWatchTargets().some((target) => target.pr_number === 42), false)
     store.close()
   })
+  test("revokes legacy automatic subscriptions for foreign-authored PRs", async () => {
+    const store = createStore()
+    const github = new FixtureGitHubClient()
+    const watcher = new BranchDiscoveryWatcher(store, github)
+
+    store.registerClient("client-legacy-foreign", { pid: 1, projectRoot: "/tmp" })
+    store.registerSession({
+      clientId: "client-legacy-foreign",
+      sessionId: "session-legacy-foreign",
+      repo: "acme/repo",
+      branch: "feature/legacy-foreign",
+      isPrimary: true,
+      status: "active",
+      busyState: "idle",
+    })
+    store.recordBranchAssociation("acme/repo", "feature/legacy-foreign", 42)
+    github.prForBranch = {
+      number: 42,
+      title: "Foreign PR",
+      url: "https://github.com/acme/repo/pull/42",
+      draft: false,
+      state: "open",
+      authorLogin: "someone-else",
+    }
+
+    await watcher.tick()
+
+    assert.equal(store.getSubscription("session-legacy-foreign", "acme/repo", 42)?.state, "unsubscribed")
+    assert.equal(store.getSession("session-legacy-foreign")?.pr_number, null)
+    assert.equal(store.listPrWatchTargets().some((target) => target.pr_number === 42), false)
+    store.close()
+  })
+
 
   test("branch discovery honors automatic opt-outs without touching manual subscriptions", async () => {
     const store = createStore()

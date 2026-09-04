@@ -32,12 +32,14 @@ export class BranchDiscoveryWatcher {
     try {
       viewerLogin = await this.github.getViewerLogin()
     } catch (error) {
+      this.store.suspendAutomaticSubscriptions(now)
       this.logger.warn("unable to identify authenticated GitHub user; skipping automatic PR discovery", {
         error: error instanceof Error ? error.message : String(error),
       })
       return
     }
     if (!viewerLogin) {
+      this.store.suspendAutomaticSubscriptions(now)
       this.logger.warn("authenticated GitHub user has no login; skipping automatic PR discovery")
       return
     }
@@ -75,6 +77,13 @@ export class BranchDiscoveryWatcher {
               this.worktreeBindings.pullRequestNotOwned(
                 binding.session_id,
                 { repo: binding.repo, prNumber: pr.number },
+                now,
+              )
+            } else {
+              this.store.rejectAutomaticPullRequest(
+                binding.session_id,
+                binding.repo,
+                pr.number,
                 now,
               )
             }

@@ -375,13 +375,6 @@ export class StateStore {
 					});
 			}
 
-			if (attachedPrNumber !== null) {
-				this.baselineAutomaticSubscription({
-					sessionId: payload.sessionId,
-					repo: payload.repo,
-					prNumber: attachedPrNumber,
-				}, now);
-			}
 			this.touchBranchWatcher(payload.repo, payload.branch, now);
 			this.db.exec("COMMIT");
 			// Preserve the main-compatible response shape without closing peer sessions.
@@ -679,6 +672,60 @@ export class StateStore {
 			if ((result.changes as number) > 0) this.refreshWatcherCounts(now);
 			return result.changes as number;
 		});
+	}
+
+	rejectAutomaticPullRequest(
+		sessionId: string,
+		repo: string,
+		prNumber: number,
+		now = Date.now(),
+	) {
+		return this.transaction(() => {
+			this.db
+				.prepare(
+					`DELETE FROM reminder_batches
+					 WHERE session_id = :sessionId AND subscription_id IS NULL`,
+				)
+				.run({ sessionId });
+			this.db
+				.prepare(
+					`UPDATE sessions
+					 SET pr_number = NULL, last_delivered_event_seq = 0, updated_at = :now
+					 WHERE session_id = :sessionId AND repo = :repo AND pr_number = :prNumber`,
+				)
+				.run({ sessionId, repo, prNumber, now });
+			this.db
+				.prepare(
+					`UPDATE branch_watchers
+					 SET pr_number = NULL, updated_at = :now
+					 WHERE repo = :repo AND pr_number = :prNumber
+					   AND branch = (SELECT branch FROM sessions WHERE session_id = :sessionId)`,
+				)
+				.run({ sessionId, repo, prNumber, now });
+			return this.deactivateAutomaticSubscriptions(sessionId, now);
+		});
+	}
+
+	suspendAutomaticSubscriptions(now = Date.now()) {
+		const subscriptions = this.db
+			.prepare(
+				`SELECT session_id, repo, pr_number
+				 FROM session_subscriptions
+				 WHERE source = 'automatic' AND state = 'active'`,
+			)
+			.all() as Array<{ session_id: string; repo: string; pr_number: number }>;
+		for (const subscription of subscriptions) {
+			this.rejectAutomaticPullRequest(
+				subscription.session_id,
+				subscription.repo,
+				subscription.pr_number,
+				now,
+			);
+		}
+		this.db
+			.prepare(`UPDATE branch_watchers SET pr_number = NULL, updated_at = :now WHERE pr_number IS NOT NULL`)
+			.run({ now });
+		return subscriptions.length;
 	}
 
 	recordAutomaticSubscriptionOptOut(
@@ -1856,11 +1903,12 @@ export class StateStore {
 					`${index + 1}. ${event.kind} - ${event.summary}${event.referenceLink ? ` (${event.referenceLink})` : ""}`,
 			),
 			...(hasActionableBlocker
-
 				? [
-						"",
-						"Action required: investigate and address the failing checks or merge conflicts above before continuing the current task. If you cannot resolve them, explain why.",
-					]
+					"",
+					subscription?.source === "manual"
+						? "Action required: report the failing checks or merge conflicts above to the user and wait for explicit authorization before making changes."
+						: "Action required: investigate and address the failing checks or merge conflicts above before continuing the current task. If you cannot resolve them, explain why.",
+				]
 				: []),
 			"",
 			"Please incorporate only the new information above into your reasoning and continue the current task.",

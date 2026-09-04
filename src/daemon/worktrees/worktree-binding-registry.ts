@@ -126,7 +126,7 @@ export class WorktreeBindingRegistry {
     actor.send({ type: "PR_NOT_OWNED", pullRequest });
     return this.persist(sessionId, () =>
       this.store.transaction(() => {
-        this.store.deactivateAutomaticSubscriptions(sessionId, now);
+        this.store.rejectAutomaticPullRequest(sessionId, pullRequest.repo, pullRequest.prNumber, now);
         return this.store.upsertWorktreeBinding(
           this.bindingFromActor(sessionId, actor),
           now,

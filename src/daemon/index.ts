@@ -30,6 +30,13 @@ async function main() {
     recoveredPrWatchers: recovery.recoveredPrWatchers,
   })
 
+
+  const suspendedAutomaticSubscriptions = server.store.suspendAutomaticSubscriptions()
+  if (suspendedAutomaticSubscriptions > 0) {
+    logger.info("suspended automatic subscriptions pending author verification", {
+      suspendedAutomaticSubscriptions,
+    })
+  }
   // Adaptive per-PR scheduling: active PRs poll every 20s; quiet PRs stretch to
   // 5 minutes. The registry reconstructs canonical actors from SQLite here.
   const prSchedule = new AdaptiveSchedule()
@@ -105,6 +112,10 @@ async function main() {
     }
   })
 
+
+  if (!server.store.isGloballyDisabled()) {
+    await discoveryWatcher.tick()
+  }
   discoveryScheduler.start()
   prScheduler.start()
 
