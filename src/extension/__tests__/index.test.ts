@@ -356,9 +356,9 @@ describe("premind Pi extension", () => {
 							"/Users/jacob/.pi/agent/sessions/project/2026-07-18T05-45-33-751Z_019f73c2-2f37-7098-88f3-a096cda8ea14.jsonl",
 					},
 				],
-			}),
+			}, "v0.1.0 (abcdef)"),
 			[
-				"premind: 1 active session",
+				"premind: v0.1.0 (abcdef) · 1 active session",
 				"clients 1 · watchers 1",
 				"- owner/repo @ feature/pi (PR #123) | active/idle | pending 2 | session …a096cda8ea14",
 			].join("\n"),
@@ -636,7 +636,7 @@ describe("premind Pi extension", () => {
 
 		assert.equal(notifications.length, 1);
 		assert.equal(notifications[0]?.level, "info");
-		assert.match(notifications[0]?.message ?? "", /premind: 1 active session/);
+		assert.match(notifications[0]?.message ?? "", /premind: v\d+\.\d+\.\d+ \([0-9a-f]{6}\) · 1 active session/);
 		assert.match(
 			notifications[0]?.message ?? "",
 			/owner\/repo @ feature\/pi \(PR #123\)/,
@@ -790,7 +790,7 @@ describe("premind Pi extension", () => {
 			undefined,
 			{},
 		);
-		assert.match(result.content[0].text, /premind: 1 active session/);
+		assert.match(result.content[0].text, /premind: v\d+\.\d+\.\d+ \([0-9a-f]{6}\) · 1 active session/);
 		assert.match(result.content[0].text, /pending 2/);
 	});
 });

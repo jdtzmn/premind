@@ -1,3 +1,4 @@
+import { PREMIND_VERSION_LABEL } from "../shared/version.ts"
 import {
 	CONFIG_DIR_NAME,
 	type ExtensionAPI,
@@ -174,9 +175,12 @@ const formatSessionId = (sessionId: string) => {
 	return `…${leaf.slice(-12)}`;
 };
 
-export const renderPremindPiStatus = (status: DebugStatusResponse) => {
+export const renderPremindPiStatus = (
+	status: DebugStatusResponse,
+	versionLabel = PREMIND_VERSION_LABEL,
+) => {
 	const activeLabel = `${status.activeSessions} active session${status.activeSessions === 1 ? "" : "s"}`;
-	const header = `premind: ${activeLabel}`;
+	const header = `premind: ${versionLabel} · ${activeLabel}`;
 	const sessions = status.sessions.map((session) => {
 		const pr = session.prNumber ? ` (PR #${session.prNumber})` : "";
 		const worktree = session.worktreeBinding
