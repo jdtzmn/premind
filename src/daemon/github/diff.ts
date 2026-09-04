@@ -467,18 +467,27 @@ export function diffSnapshot(previous: PullRequestSnapshot | null, next: PullReq
     if (checks.length === 1) return checks[0]!
     const active = checks.find((check) => ACTIVE_CHECK_KINDS.has(checkKind(check.state)))
     if (active) return active
-    // Multiple terminal results with no active rerun (rare) — prefer the
-    // worst outcome so a real failure never loses to a stale duplicate.
+    // Multiple terminal results with no active rerun (rare) — prefer a
+    // failed one over any other terminal kind so a real failure never loses
+    // to a stale success/cancellation. This is NOT a full best-to-worst
+    // ranking of every terminal kind: among non-failed duplicates (e.g. two
+    // "success" entries, or a "success" and a "cancelled" with no failure),
+    // the pick falls through to array order, which is arbitrary.
     return checks.find((check) => checkKind(check.state) === "check.failed") ?? checks[checks.length - 1]!
   }
 
-  // Correlate failures with sibling cancellations in the same workflow run.
-  // An aggregate gate (e.g. "Fail if any shard failed") often reports its
-  // own conclusion as FAILURE when a prerequisite job was cancelled by a
-  // concurrency group, rather than because any assertion actually failed.
-  // We don't have step-level output, so this is a best-effort heuristic:
-  // if any check in the same workflow was cancelled this tick, treat a
-  // sibling failure in that workflow as a cancellation artifact too.
+  // Correlate failures with sibling cancellations in the same workflow run,
+  // but ONLY for jobs that look like an aggregate gate ("Fail if any shard
+  // failed", "Required checks", ...). Those jobs commonly report their own
+  // conclusion as FAILURE when a prerequisite was cancelled by a concurrency
+  // group, rather than because any assertion actually failed — and we don't
+  // have step-level output to confirm that directly, so this is a
+  // best-effort, deliberately narrow heuristic. It must NOT match ordinary
+  // job names: a matrix shard failing for real routinely has its siblings
+  // cancelled by fail-fast, and an unrelated job failing for real can share
+  // a workflow with an unrelated cancellation — neither should ever be
+  // masked as a cancellation artifact.
+  const AGGREGATE_GATE_NAME_PATTERN = /\b(gate|required|fail[- ]?if|overall|rollup)\b/i
   const cancelledWorkflows = new Set<string>()
   for (const check of next.checks) {
     if (checkKind(check.state) === "check.cancelled" && check.workflow) cancelledWorkflows.add(check.workflow)
@@ -492,6 +501,14 @@ export function diffSnapshot(previous: PullRequestSnapshot | null, next: PullReq
   // is rolled up into one summary once the whole job finishes clean. Loud on
   // first red: a failing shard is always reported immediately, uncondensed,
   // so the agent can start fixing it without waiting on the rest.
+  //
+  // Known limitation: group membership (and therefore "allTerminal"/shard
+  // count) is recomputed from next.checks on every tick with no memory of
+  // prior ticks. If GitHub's rollup transiently drops a shard and it later
+  // reappears (dynamic matrix, re-dispatch, a flaky API response), the
+  // "N/N shards succeeded" rollup could fire once with an undercount and
+  // again later with the corrected count. This is considered an acceptable,
+  // rare edge case rather than something worth persisting group state for.
   const matrixBaseName = (name: string) => name.replace(/\s*[([][^()[\]]*[)\]]\s*$/, "").trim() || name
   const matrixGroupKey = (check: PullRequestCheck) => `${check.workflow ?? ""}::${matrixBaseName(check.name)}`
   const groupsByMatrixKey = new Map<string, PullRequestCheck[]>()
@@ -511,10 +528,6 @@ export function diffSnapshot(previous: PullRequestSnapshot | null, next: PullReq
 
     let kind = checkKind(check.state)
     let summary = checkSummary(check, kind)
-    if (kind === "check.failed" && check.workflow && cancelledWorkflows.has(check.workflow)) {
-      kind = "check.cancelled"
-      summary = `Check cancelled (a sibling job in the same workflow run was cancelled): ${check.name || "unnamed check"}`
-    }
 
     const matrixGroup = groupsByMatrixKey.get(matrixGroupKey(check)) ?? [check]
     if (matrixGroup.length > 1) {
@@ -528,7 +541,21 @@ export function diffSnapshot(previous: PullRequestSnapshot | null, next: PullReq
         continue // per-shard start/queue noise — only a red shard is worth surfacing
       }
       // check.failed and check.cancelled always fall through and are reported
-      // immediately, uncondensed — loud on first red.
+      // immediately, uncondensed — loud on first red. A real matrix-shard
+      // failure must never be downgraded by the cancellation heuristic below
+      // (fail-fast routinely cancels its siblings), so that heuristic only
+      // ever applies to a standalone job (matrixGroup.length === 1).
+    }
+
+    if (
+      kind === "check.failed" &&
+      matrixGroup.length === 1 &&
+      check.workflow &&
+      cancelledWorkflows.has(check.workflow) &&
+      AGGREGATE_GATE_NAME_PATTERN.test(check.name)
+    ) {
+      kind = "check.cancelled"
+      summary = `Check cancelled (a sibling job in the same workflow run was cancelled): ${check.name || "unnamed check"}`
     }
 
     events.push({

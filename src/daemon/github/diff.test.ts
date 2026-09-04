@@ -509,6 +509,61 @@ describe("diffSnapshot", () => {
     assert.equal(failed.priority, "high")
   })
 
+  test("does not mask an unrelated job's real failure just because something else in the workflow was cancelled", () => {
+    // "docs-build" fails for a real reason; "lint" happens to be cancelled in
+    // the same workflow for an unrelated reason. Neither name looks like an
+    // aggregate gate, so this must stay check.failed — the old (broken)
+    // heuristic keyed only on workflow name and would have masked this.
+    const previous: PullRequestSnapshot = {
+      ...baseSnapshot(),
+      checks: [
+        { name: "docs-build", state: "queued", workflow: "CI" },
+        { name: "lint", state: "queued", workflow: "CI" },
+      ],
+    }
+    const next: PullRequestSnapshot = {
+      ...previous,
+      checks: [
+        { name: "docs-build", state: "fail", workflow: "CI", link: "https://ci.example/docs" },
+        { name: "lint", state: "cancelled", workflow: "CI" },
+      ],
+    }
+
+    const failed = diffSnapshot(previous, next).find((event) => event.payload.name === "docs-build")
+
+    assert.ok(failed)
+    assert.equal(failed.kind, "check.failed")
+    assert.equal(failed.priority, "high")
+  })
+
+  test("does not mask a real matrix-shard failure whose siblings were fail-fast cancelled, even if it's named like a gate", () => {
+    // fail-fast is GitHub Actions' default for matrix strategies: shard 1
+    // fails for real and GitHub cancels shards 2/3 as a normal consequence.
+    // Even though "required-checks (shard 1)" matches the gate name pattern,
+    // it's part of a matrix group (matrixGroup.length > 1), so the
+    // cancellation heuristic must never apply to it.
+    const previous: PullRequestSnapshot = {
+      ...baseSnapshot(),
+      checks: [
+        { name: "required-checks (shard 1)", state: "queued", workflow: "CI" },
+        { name: "required-checks (shard 2)", state: "queued", workflow: "CI" },
+      ],
+    }
+    const next: PullRequestSnapshot = {
+      ...previous,
+      checks: [
+        { name: "required-checks (shard 1)", state: "fail", workflow: "CI", link: "https://ci.example/shard-1" },
+        { name: "required-checks (shard 2)", state: "cancelled", workflow: "CI" },
+      ],
+    }
+
+    const failed = diffSnapshot(previous, next).find((event) => event.payload.name === "required-checks (shard 1)")
+
+    assert.ok(failed)
+    assert.equal(failed.kind, "check.failed")
+    assert.equal(failed.priority, "high")
+  })
+
   test("stays quiet when a matrix shard succeeds while sibling shards are still running", () => {
     const previous: PullRequestSnapshot = {
       ...baseSnapshot(),

@@ -1843,9 +1843,6 @@ export class StateStore {
 		const targetRepo = subscription?.repo ?? session.repo;
 		const targetPrNumber = subscription?.prNumber ?? session.pr_number;
 		const qualifiedTarget = targetPrNumber ? `${targetRepo}#${targetPrNumber}` : targetRepo;
-		const currentHeadSha = targetPrNumber
-			? this.getSnapshot(targetRepo, targetPrNumber)?.core.headRefOid
-			: undefined;
 
 		const existing = subscription
 			? this.getPendingReminderForSubscription(subscription.subscriptionId)
@@ -1857,6 +1854,9 @@ export class StateStore {
 			: this.listUndeliveredEvents(sessionId);
 		if (events.length === 0) return null;
 		const maxEventSeq = events.at(-1)!.seq;
+		const currentHeadSha = targetPrNumber
+			? this.getSnapshot(targetRepo, targetPrNumber)?.core.headRefOid
+			: undefined;
 
 		const reminderEvents: Array<GroupedReminderEvent & { headSha?: string }> = events.map((event) => {
 			let headSha: string | undefined;
