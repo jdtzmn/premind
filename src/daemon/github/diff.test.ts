@@ -442,4 +442,70 @@ describe("diffSnapshot", () => {
     assert.ok(failed)
     assert.equal(failed.payload.headSha, "sha-2")
   })
+
+  test("an active rerun of a check supersedes a stale failure of the same name in the same tick", () => {
+    const previous: PullRequestSnapshot = {
+      ...baseSnapshot(),
+      checks: [{ name: "ai-review", state: "queued" }],
+    }
+    // Two check-runs named "ai-review" show up in the same rollup: the old
+    // run's failure from a race, and a fresh run already back in progress.
+    const next: PullRequestSnapshot = {
+      ...previous,
+      checks: [
+        { name: "ai-review", state: "fail", link: "https://ci.example/old-run" },
+        { name: "ai-review", state: "in_progress", link: "https://ci.example/new-run" },
+      ],
+    }
+
+    const events = diffSnapshot(previous, next)
+    const aiReviewEvents = events.filter((event) => event.payload.name === "ai-review")
+
+    assert.equal(aiReviewEvents.length, 1)
+    assert.equal(aiReviewEvents[0]!.kind, "check.in_progress")
+  })
+
+  test("a failing aggregate gate is treated as a cancellation artifact when a sibling in its workflow was cancelled", () => {
+    const previous: PullRequestSnapshot = {
+      ...baseSnapshot(),
+      checks: [
+        { name: "unit-tests (shard 1)", state: "cancelled", workflow: "CI" },
+        { name: "Fail if any shard failed", state: "queued", workflow: "CI" },
+      ],
+    }
+    const next: PullRequestSnapshot = {
+      ...previous,
+      checks: [
+        // unit-tests stays cancelled (no state change, so it emits no event
+        // of its own this tick — only the gate's state actually changes).
+        { name: "unit-tests (shard 1)", state: "cancelled", workflow: "CI" },
+        { name: "Fail if any shard failed", state: "fail", workflow: "CI", link: "https://ci.example/gate" },
+      ],
+    }
+
+    const events = diffSnapshot(previous, next)
+    const gate = events.find((event) => event.payload.name === "Fail if any shard failed")
+
+    assert.ok(gate)
+    assert.equal(gate.kind, "check.cancelled")
+    assert.equal(gate.priority, "low")
+    assert.match(gate.summary, /cancelled/i)
+  })
+
+  test("a genuine failure in a workflow with no cancellations stays check.failed", () => {
+    const previous: PullRequestSnapshot = {
+      ...baseSnapshot(),
+      checks: [{ name: "unit-tests", state: "queued", workflow: "CI" }],
+    }
+    const next: PullRequestSnapshot = {
+      ...previous,
+      checks: [{ name: "unit-tests", state: "fail", workflow: "CI", link: "https://ci.example/unit" }],
+    }
+
+    const failed = diffSnapshot(previous, next).find((event) => event.payload.name === "unit-tests")
+
+    assert.ok(failed)
+    assert.equal(failed.kind, "check.failed")
+    assert.equal(failed.priority, "high")
+  })
 })

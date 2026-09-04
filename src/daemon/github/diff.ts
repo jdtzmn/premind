@@ -449,15 +449,58 @@ export function diffSnapshot(previous: PullRequestSnapshot | null, next: PullReq
   }
 
   const previousChecks = new Map(previous.checks.map((check) => [check.name, check]))
+
+  // GitHub's statusCheckRollup can list more than one check-run per name in
+  // the same poll tick when two runs raced on this commit (e.g. a push and a
+  // label event both triggering CI). Group by name so a stale fail/cancelled
+  // entry never wins over an active rerun of the same check that's already
+  // in flight.
+  const nextChecksByName = new Map<string, PullRequestCheck[]>()
   for (const check of next.checks) {
+    const bucket = nextChecksByName.get(check.name)
+    if (bucket) bucket.push(check)
+    else nextChecksByName.set(check.name, [check])
+  }
+
+  const ACTIVE_CHECK_KINDS = new Set(["check.in_progress", "check.queued", "check.created"])
+  const representativeCheck = (checks: PullRequestCheck[]): PullRequestCheck => {
+    if (checks.length === 1) return checks[0]!
+    const active = checks.find((check) => ACTIVE_CHECK_KINDS.has(checkKind(check.state)))
+    if (active) return active
+    // Multiple terminal results with no active rerun (rare) — prefer the
+    // worst outcome so a real failure never loses to a stale duplicate.
+    return checks.find((check) => checkKind(check.state) === "check.failed") ?? checks[checks.length - 1]!
+  }
+
+  // Correlate failures with sibling cancellations in the same workflow run.
+  // An aggregate gate (e.g. "Fail if any shard failed") often reports its
+  // own conclusion as FAILURE when a prerequisite job was cancelled by a
+  // concurrency group, rather than because any assertion actually failed.
+  // We don't have step-level output, so this is a best-effort heuristic:
+  // if any check in the same workflow was cancelled this tick, treat a
+  // sibling failure in that workflow as a cancellation artifact too.
+  const cancelledWorkflows = new Set<string>()
+  for (const check of next.checks) {
+    if (checkKind(check.state) === "check.cancelled" && check.workflow) cancelledWorkflows.add(check.workflow)
+  }
+
+  for (const checks of nextChecksByName.values()) {
+    const check = representativeCheck(checks)
     const prev = previousChecks.get(check.name)
-    const kind = checkKind(check.state)
     if (prev && prev.state === check.state) continue
+
+    let kind = checkKind(check.state)
+    let summary = checkSummary(check, kind)
+    if (kind === "check.failed" && check.workflow && cancelledWorkflows.has(check.workflow)) {
+      kind = "check.cancelled"
+      summary = `Check cancelled (a sibling job in the same workflow run was cancelled): ${check.name || "unnamed check"}`
+    }
+
     events.push({
       dedupeKey: `${kind}:${check.name}:${next.core.headRefOid}`,
       kind,
       priority: checkPriority(kind),
-      summary: checkSummary(check, kind),
+      summary,
       referenceLink: check.link ?? next.core.url,
       payload: {
         name: check.name,
