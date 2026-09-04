@@ -1842,6 +1842,12 @@ export class StateStore {
 		const reminderText = [
 			"<system-reminder>",
 			`New pull request context was detected for ${qualifiedTarget} since the last reminder.`,
+			...(subscription?.source === "manual"
+				? [
+					"",
+					"This PR is manually subscribed. Do not make changes unless the user explicitly asks you to.",
+				]
+				: []),
 			"",
 			"Changes:",
 			...condensed.map(

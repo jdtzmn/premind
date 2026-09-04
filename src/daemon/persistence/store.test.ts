@@ -1419,6 +1419,8 @@ describe("StateStore", () => {
     }])
     const staleBatch = store.buildReminderBatchForSubscription(manual.subscriptionId)
     assert.ok(staleBatch)
+    assert.match(staleBatch.reminderText, /manually subscribed/)
+    assert.match(staleBatch.reminderText, /Do not make changes unless the user explicitly asks/)
     ;(store as any).db
       .prepare(`UPDATE session_subscriptions SET state = 'unsubscribed' WHERE subscription_id = ?`)
       .run(manual.subscriptionId)
