@@ -1858,11 +1858,18 @@ export class StateStore {
 			? this.getSnapshot(targetRepo, targetPrNumber)?.core.headRefOid
 			: undefined;
 
+		const initialBlockerEventIds = new Set<string>();
 		const reminderEvents: Array<GroupedReminderEvent & { headSha?: string }> = events.map((event) => {
 			let headSha: string | undefined;
 			try {
 				const payload = JSON.parse(event.payload_json) as Record<string, unknown>;
 				if (typeof payload.headSha === "string") headSha = payload.headSha;
+				if (
+					event.kind === "pr.snapshot.initialized" &&
+					(currentHeadSha === undefined || headSha === currentHeadSha) &&
+					(payload.hasMergeConflict === true ||
+						(Array.isArray(payload.failingChecks) && payload.failingChecks.length > 0))
+				) initialBlockerEventIds.add(String(event.seq));
 			} catch {
 				// Malformed payload JSON should never block reminder delivery.
 			}
@@ -1953,7 +1960,8 @@ export class StateStore {
 
 		const condensed = [...condensedLive, ...supersededSummaries];
 		const hasActionableBlocker = condensed.some((event) =>
-			["check.failed", "merge_conflict.detected"].includes(event.kind),
+			["check.failed", "merge_conflict.detected"].includes(event.kind) ||
+			initialBlockerEventIds.has(event.eventId),
 		);
 		const renderEvent = (event: GroupedReminderEvent, index: number) =>
 			`${index + 1}. ${event.kind} - ${event.summary}${event.referenceLink ? ` (${event.referenceLink})` : ""}`;

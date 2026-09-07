@@ -7,6 +7,7 @@ import { afterEach, describe, test } from "node:test"
 import { PREMIND_PR_STREAM_RETENTION_MS } from "../../shared/constants.ts"
 import { StateStore } from "./store.ts"
 import type { PullRequestSnapshot } from "../github/types.ts"
+import { diffSnapshot } from "../github/diff.ts"
 
 const tempPaths: string[] = []
 
@@ -51,6 +52,66 @@ afterEach(() => {
 })
 
 describe("StateStore", () => {
+  for (const scenario of [
+    { name: "initial failing check", failing: true, conflict: false, manual: false, stale: false },
+    { name: "initial conflict", failing: false, conflict: true, manual: false, stale: false },
+    { name: "clean initial snapshot", failing: false, conflict: false, manual: false, stale: false },
+    { name: "manual initial failing check", failing: true, conflict: false, manual: true, stale: false },
+    { name: "manual initial conflict", failing: false, conflict: true, manual: true, stale: false },
+    { name: "stale-head initial failing check", failing: true, conflict: false, manual: false, stale: true },
+    { name: "stale-head initial conflict", failing: false, conflict: true, manual: false, stale: true },
+  ]) {
+    test(`renders ${scenario.name} from persisted snapshot diff`, () => {
+      const store = createStore()
+      try {
+        store.registerClient("client-1", { pid: 123, projectRoot: "/tmp/project" })
+        store.registerSession({
+          clientId: "client-1", sessionId: "session-1", repo: "acme/repo",
+          branch: "feature/x", isPrimary: true, status: "active", busyState: "idle",
+        })
+        if (scenario.manual) {
+          store.upsertSubscription({
+            sessionId: "session-1", repo: "acme/repo", prNumber: 7, source: "manual",
+          })
+        } else {
+          store.recordBranchAssociation("acme/repo", "feature/x", 7)
+        }
+        const initial = snapshot()
+        initial.core.mergeStateStatus = scenario.conflict ? "DIRTY" : "CLEAN"
+        initial.checks = scenario.failing ? [{ name: "lint", state: "FAILURE" }] : []
+        const events = diffSnapshot(null, initial)
+        assert.deepEqual(events.map((event) => event.kind), ["pr.snapshot.initialized"])
+        store.saveSnapshotAndEvents("acme/repo", 7, initial, events)
+        if (scenario.stale) {
+          const current = snapshot()
+          current.core.headRefOid = "sha-new"
+          store.saveSnapshot("acme/repo", 7, current)
+        }
+
+        const batch = store.buildReminderBatch("session-1")
+        assert.ok(batch)
+        assert.equal(batch.events.length, 1)
+        assert.equal(batch.events[0]!.kind, "pr.snapshot.initialized")
+        assert.equal(batch.events[0]!.summary, events[0]!.summary)
+        assert.equal(batch.events[0]!.priority, events[0]!.priority)
+        assert.equal("headSha" in batch.events[0]!, false)
+        assert.equal("hasMergeConflict" in batch.events[0]!, false)
+        assert.equal("failingChecks" in batch.events[0]!, false)
+        if (scenario.stale || (!scenario.failing && !scenario.conflict)) {
+          assert.doesNotMatch(batch.reminderText, /Action required:/)
+        } else if (scenario.manual) {
+          assert.match(batch.reminderText, /Do not make changes unless the user explicitly asks you to/)
+          assert.match(batch.reminderText, /Action required: report .*wait for authorization before making changes/)
+          assert.doesNotMatch(batch.reminderText, /Action required: resolve/)
+        } else {
+          assert.match(batch.reminderText, /Action required: resolve the failing check\(s\)\/merge conflict\(s\) on HEAD before continuing/)
+        }
+      } finally {
+        store.close()
+      }
+    })
+  }
+
   test("advances delivery cursor after confirmed ack", () => {
     const store = createStore()
 
