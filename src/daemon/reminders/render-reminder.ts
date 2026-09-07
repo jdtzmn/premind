@@ -24,6 +24,7 @@ type Candidate = {
 type Reconciled = {
   event: RenderedReminderEvent
   actionable?: boolean
+  reviewAction?: boolean
   unverified?: boolean
   supersededHead?: string
 }
@@ -87,7 +88,7 @@ const reconcileInitial = (event: RenderedReminderEvent, snapshot: PullRequestSna
     currentCheckState({ name: check.name, workflow: check.workflow, event: check.event }, snapshot.checks) === "failed")
   const names = [...new Set(failingChecks.map((check) => check.name || "unnamed check"))]
   if (names.length) blockers.push(`${names.length} check${names.length === 1 ? "" : "s"} failing (${names.join(", ")})`)
-  // Review status remains informational until the review-action phase.
+  // Review feedback has a distinct assess/address policy, not a CI-fix imperative.
   if (snapshot.core.reviewDecision === "CHANGES_REQUESTED") blockers.push("changes requested")
   const uncertainChecks = snapshot.checks.some((check) =>
     currentCheckState({ name: check.name, workflow: check.workflow, event: check.event }, snapshot.checks) === "unverified")
@@ -97,12 +98,44 @@ const reconcileInitial = (event: RenderedReminderEvent, snapshot: PullRequestSna
     event: { ...event, summary: blockers.length ? `${base} — ${blockers.join("; ")}` : base,
       priority: state === "DIRTY" || names.length > 0 || snapshot.core.reviewDecision === "CHANGES_REQUESTED" ? "high" : "low" },
     actionable: state === "DIRTY" || names.length > 0,
+    reviewAction: snapshot.core.reviewDecision === "CHANGES_REQUESTED",
     unverified: uncertain,
   }
 }
 
+const reviewKinds = new Set(["review.changes_requested", "pr.review_decision.changes_requested"])
+const reconcileReview = ({ event, payload }: Candidate, snapshot: PullRequestSnapshot | null): Reconciled => {
+  if (!snapshot) return unverified(event, "review.unverified")
+  if (terminal(snapshot)) return informational(event, "review.historical",
+    `Historical review feedback — PR ${snapshot.core.state.toUpperCase()}; no review action required`)
+  const decision = snapshot.core.reviewDecision?.toUpperCase()
+  const resolved = () => informational(event, "review.resolved", `No longer requesting changes: ${event.summary}`)
+  if (decision === "APPROVED") return resolved()
+  if (event.kind === "pr.review_decision.changes_requested") {
+    if (decision === "CHANGES_REQUESTED") return { event, reviewAction: true }
+    if (decision === "REVIEW_REQUIRED") return resolved()
+    return unverified(event, "review.unverified")
+  }
+  const review = snapshot.reviews.find((candidate) => candidate.id === payload.reviewId)
+  if (!review) return unverified(event, "review.unverified")
+  if (["APPROVED", "DISMISSED"].includes((review.state ?? "").toUpperCase())) return resolved()
+  // A newer decisive review by the same author supersedes their old request.
+  // Do not order reviews by array position or assume IDs encode submission time.
+  const login = review.user?.login?.toLowerCase()
+  const submitted = Date.parse(review.submitted_at ?? "")
+  const newer = login && Number.isFinite(submitted) ? snapshot.reviews.filter((candidate) =>
+    candidate.user?.login?.toLowerCase() === login &&
+    Date.parse(candidate.submitted_at ?? "") > submitted &&
+    ["APPROVED", "CHANGES_REQUESTED"].includes((candidate.state ?? "").toUpperCase())) : []
+  const latest = newer.sort((left, right) => Date.parse(right.submitted_at!) - Date.parse(left.submitted_at!))[0]
+  if (latest?.state?.toUpperCase() === "APPROVED") return resolved()
+  if ((review.state ?? "").toUpperCase() === "CHANGES_REQUESTED") return { event, reviewAction: true }
+  return unverified(event, "review.unverified")
+}
+
 const reconcile = ({ event, payload }: Candidate, snapshot: PullRequestSnapshot | null): Reconciled => {
   if (event.kind === "pr.snapshot.initialized") return reconcileInitial(event, snapshot)
+  if (reviewKinds.has(event.kind)) return reconcileReview({ event, payload }, snapshot)
   if (!checkKinds.has(event.kind) && event.kind !== "merge_conflict.detected") return { event }
   if (snapshot && terminal(snapshot)) return informational(event, `${event.kind.split(".")[0]}.historical`,
     `Historical: ${event.summary} — PR ${snapshot.core.state.toUpperCase()}; no blocker action required`)
@@ -134,7 +167,7 @@ const expand = (row: ReminderSourceEvent): Candidate[] => {
     priority: row.priority, summary: row.summary,
     ...(row.reference_link ? { referenceLink: row.reference_link } : {}),
   }
-  if (checkKinds.has(row.kind) && Array.isArray(payload.events) && payload.events.length) {
+  if ((checkKinds.has(row.kind) || reviewKinds.has(row.kind)) && Array.isArray(payload.events) && payload.events.length) {
     return payload.events.map((child) => {
       const nested = object(child)
       return { event: { ...event, summary: typeof nested.summary === "string" ? nested.summary : row.summary },
@@ -188,6 +221,9 @@ export function renderReminder(
     ...(live.some((item) => item.actionable) ? ["", target.source === "manual"
       ? "Action required: report the failing check(s)/merge conflict(s) above and wait for authorization before making changes."
       : "Action required: resolve the failing check(s)/merge conflict(s) on HEAD before continuing. If you can't, explain why."] : []),
+    ...(live.some((item) => item.reviewAction) ? ["", target.source === "manual"
+      ? "Review action required: report the requested changes and wait for authorization before making changes."
+      : "Review action required: assess the requested changes, address actionable feedback, and explain anything you decline or cannot resolve."] : []),
     ...(live.some((item) => item.unverified) ? ["", "Verify current status before acting on UNVERIFIED history; it is not a confirmed current blocker."] : []),
     "", "Incorporate only the above into your reasoning and continue.", "</system-reminder>",
   ].join("\n")
