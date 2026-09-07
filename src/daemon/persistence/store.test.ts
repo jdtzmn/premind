@@ -92,8 +92,9 @@ describe("StateStore", () => {
         assert.ok(batch)
         assert.equal(batch.events.length, 1)
         assert.equal(batch.events[0]!.kind, "pr.snapshot.initialized")
-        assert.equal(batch.events[0]!.summary, events[0]!.summary)
-        assert.equal(batch.events[0]!.priority, events[0]!.priority)
+        const expected = scenario.stale ? diffSnapshot(null, store.getSnapshot("acme/repo", 7)!)[0]! : events[0]!
+        assert.equal(batch.events[0]!.summary, expected.summary)
+        assert.equal(batch.events[0]!.priority, expected.priority)
         assert.equal("headSha" in batch.events[0]!, false)
         assert.equal("hasMergeConflict" in batch.events[0]!, false)
         assert.equal("failingChecks" in batch.events[0]!, false)
@@ -126,7 +127,7 @@ describe("StateStore", () => {
       busyState: "idle",
     })
     store.recordBranchAssociation("acme/repo", "feature/x", 7)
-    store.saveSnapshot("acme/repo", 7, snapshot())
+    store.saveSnapshot("acme/repo", 7, { ...snapshot(), checks: [{ name: "lint", state: "FAILURE" }] })
     store.insertEvents("acme/repo", 7, [
       {
         dedupeKey: "issue_comment.created:11",
@@ -140,7 +141,7 @@ describe("StateStore", () => {
         kind: "check.failed",
         priority: "high",
         summary: "Check failed: lint",
-        payload: { name: "lint" },
+        payload: { name: "lint", headSha: "sha-7" },
       },
     ])
 
@@ -240,6 +241,8 @@ describe("StateStore", () => {
         payload: { name: "build", headSha: "sha-new" },
       },
     ])
+    store.saveSnapshot("acme/repo", 7, { ...snapshot(), core: { ...snapshot().core, headRefOid: "sha-new" },
+      checks: [{ name: "build", state: "FAILURE" }] })
 
     const batch = store.buildReminderBatch("session-1")
     assert.ok(batch)
@@ -253,7 +256,7 @@ describe("StateStore", () => {
     store.close()
   })
 
-  test("treats check.failed events with no recorded headSha as live (backward compatible)", () => {
+  test("retains check.failed history with no recorded headSha as unverified", () => {
     const store = createStore()
 
     store.registerClient("client-1", { pid: 123, projectRoot: "/tmp/project" })
@@ -281,8 +284,10 @@ describe("StateStore", () => {
     const batch = store.buildReminderBatch("session-1")
     assert.ok(batch)
     assert.equal(batch.events.length, 1)
-    assert.equal(batch.events[0]!.kind, "check.failed")
-    assert.match(batch.reminderText, /Action required/)
+    assert.equal(batch.events[0]!.kind, "check.unverified")
+    assert.match(batch.reminderText, /UNVERIFIED history: Check failed: lint/)
+    assert.match(batch.reminderText, /Verify current status before acting/)
+    assert.doesNotMatch(batch.reminderText, /Action required/)
 
     store.close()
   })
@@ -1621,9 +1626,10 @@ describe("StateStore", () => {
     const manual = store.upsertSubscription({
       sessionId: "batch-session", repo: "external/repo", prNumber: 10, source: "manual",
     })
+    store.saveSnapshot("external/repo", 10, { ...snapshot(), checks: [{ name: "manual", state: "FAILURE" }] })
     store.insertEvents("external/repo", 10, [{
       dedupeKey: "manual-event", kind: "check.failed", priority: "high",
-      summary: "manual event", payload: {},
+      summary: "manual event", payload: { name: "manual", headSha: "sha-7" },
     }])
     const staleBatch = store.buildReminderBatchForSubscription(manual.subscriptionId)
     assert.ok(staleBatch)
