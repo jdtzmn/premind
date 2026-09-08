@@ -117,6 +117,17 @@ type EventRow = {
 	payload_json: string;
 };
 
+type ReminderTarget = {
+	repo: string;
+	prNumber?: number;
+	source?: SubscriptionSource;
+};
+
+type ReminderEventWindow = {
+	sourceEventIds: number[];
+	maximumEventSequence: number;
+};
+
 export class StateStore {
 	private readonly db: DatabaseSync;
 	private readonly detailFiles = new DetailFileWriter();
@@ -1663,99 +1674,177 @@ export class StateStore {
 			return null;
 		}
 
-		const subscription = record.subscriptionId
-			? this.getSubscriptionById(record.subscriptionId)
-			: null;
-		const session = this.getSession(record.sessionId);
-		const repo = record.repo ?? session?.repo;
-		const prNumber = record.prNumber ?? session?.pr_number ?? undefined;
-		if (!repo) {
+		const target = this.resolveReminderTarget(record);
+		if (!target) {
 			return this.toReminderBatch(record);
 		}
 
-		const lastDeliveredEventSequence =
-			subscription?.lastDeliveredEventSeq ?? session?.last_delivered_event_seq ?? 0;
-		const sourceEvents = this.recoverReminderSourceEvents(
-			record,
-			repo,
-			prNumber,
-			lastDeliveredEventSequence,
-		);
-		const rendered = renderReminder(
-			sourceEvents,
-			prNumber ? this.getSnapshot(repo, prNumber) : null,
-			{ repo, prNumber, source: record.source },
-		);
+		const sourceEvents = this.loadBatchSourceEvents(record, target);
+		const currentSnapshot = this.loadReminderSnapshot(target);
+		const rendered = renderReminder(sourceEvents, currentSnapshot, target);
+
 		return this.persistRefreshedReminderBatch({
 			...record,
+			...target,
 			...rendered,
-			repo,
-			prNumber,
 		});
 	}
 
-	private recoverReminderSourceEvents(
+	private resolveReminderTarget(record: ReminderBatchRecord): ReminderTarget | null {
+		const session = this.getSession(record.sessionId);
+		const repo = record.repo ?? session?.repo;
+		if (!repo) {
+			return null;
+		}
+
+		return {
+			repo,
+			prNumber: record.prNumber ?? session?.pr_number ?? undefined,
+			source: record.source,
+		};
+	}
+
+	private loadReminderSnapshot(target: ReminderTarget): PullRequestSnapshot | null {
+		if (!target.prNumber) {
+			return null;
+		}
+		return this.getSnapshot(target.repo, target.prNumber);
+	}
+
+	private loadBatchSourceEvents(
 		record: ReminderBatchRecord,
-		repo: string,
-		prNumber: number | undefined,
-		lastDeliveredEventSequence: number,
+		target: ReminderTarget,
 	): EventRow[] {
 		const storedEvents = record.events as RenderedReminderEvent[];
-		const hasLegacyGroups = storedEvents.some(
-			(event) =>
-				!event.sourceEventIds?.length &&
-				((event.count ?? 1) > 1 || event.kind === "check.superseded"),
-		);
-		const sourceEventIds = new Set(
-			storedEvents
-				.flatMap((event) => event.sourceEventIds ?? [event.eventId])
-				.map(Number),
-		);
-		const maximumEventSequence =
-			record.maxEventSeq ??
-			Math.max(0, ...[...sourceEventIds].filter(Number.isSafeInteger));
+		const window = this.getReminderEventWindow(record);
+		let sourceEvents: EventRow[];
 
-		// Legacy condensation kept only a representative ID, so recover its original
-		// contiguous stream window. Never cross the batch's frozen high-water mark.
-		let sourceEvents: EventRow[] = [];
-		if (prNumber) {
-			sourceEvents = this.db
-				.prepare(
-					`SELECT seq, kind, priority, summary, reference_link, payload_json FROM pr_events
-					 WHERE repo = :repo AND pr_number = :prNumber AND seq <= :max
-					 AND (seq IN (SELECT value FROM json_each(:ids)) OR (:legacy = 1 AND seq > :cursor))
-					 ORDER BY seq ASC`,
-				)
-				.all({
-					repo,
-					prNumber,
-					max: maximumEventSequence,
-					ids: JSON.stringify([...sourceEventIds]),
-					legacy: hasLegacyGroups ? 1 : 0,
-					cursor: lastDeliveredEventSequence,
-				}) as EventRow[];
+		if (this.needsLegacyEventRecovery(storedEvents)) {
+			sourceEvents = this.recoverLegacyBatchEvents(record, target, window);
+		} else {
+			sourceEvents = this.loadEventsBySourceId(target, window);
 		}
 
-		// Missing/pruned legacy source rows still carry history, but no trustworthy
-		// payload identity. Render them with verification guidance, not an imperative.
-		const recoveredSourceEventIds = new Set(
-			sourceEvents.map((row) => String(row.seq)),
-		);
-		for (const event of storedEvents) {
-			const storedSourceEventIds = event.sourceEventIds ?? [event.eventId];
-			if (storedSourceEventIds.some((id) => recoveredSourceEventIds.has(id))) {
+		return this.preserveMissingEventHistory(storedEvents, sourceEvents);
+	}
+
+	private getReminderEventWindow(record: ReminderBatchRecord): ReminderEventWindow {
+		const sourceEventIds = new Set<number>();
+		for (const event of record.events as RenderedReminderEvent[]) {
+			for (const id of event.sourceEventIds ?? [event.eventId]) {
+				sourceEventIds.add(Number(id));
+			}
+		}
+
+		let maximumEventSequence = record.maxEventSeq;
+		if (maximumEventSequence === null) {
+			const validSequences = [...sourceEventIds].filter(Number.isSafeInteger);
+			maximumEventSequence = Math.max(0, ...validSequences);
+		}
+
+		return { sourceEventIds: [...sourceEventIds], maximumEventSequence };
+	}
+
+	private needsLegacyEventRecovery(events: RenderedReminderEvent[]): boolean {
+		for (const event of events) {
+			if (event.sourceEventIds?.length) {
 				continue;
 			}
-			sourceEvents.push({
-				seq: Number(event.eventId),
-				kind: event.kind,
-				priority: event.priority,
-				summary: event.summary,
-				reference_link: event.referenceLink ?? null,
-				payload_json: "{}",
-			});
+			if ((event.count ?? 1) > 1 || event.kind === "check.superseded") {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private loadEventsBySourceId(
+		target: ReminderTarget,
+		window: ReminderEventWindow,
+	): EventRow[] {
+		if (!target.prNumber) {
+			return [];
+		}
+
+		return this.db.prepare(
+			`SELECT seq, kind, priority, summary, reference_link, payload_json
+			 FROM pr_events
+			 WHERE repo = :repo AND pr_number = :prNumber
+			   AND seq <= :maximumSequence
+			   AND seq IN (SELECT value FROM json_each(:sourceEventIds))
+			 ORDER BY seq ASC`,
+		).all({
+			repo: target.repo,
+			prNumber: target.prNumber,
+			maximumSequence: window.maximumEventSequence,
+			sourceEventIds: JSON.stringify(window.sourceEventIds),
+		}) as EventRow[];
+	}
+
+	private recoverLegacyBatchEvents(
+		record: ReminderBatchRecord,
+		target: ReminderTarget,
+		window: ReminderEventWindow,
+	): EventRow[] {
+		if (!target.prNumber) {
+			return [];
+		}
+
+		// Older groups saved only a representative ID. Recover their original
+		// stream window, without including events that arrived after this batch.
+		return this.db.prepare(
+			`SELECT seq, kind, priority, summary, reference_link, payload_json
+			 FROM pr_events
+			 WHERE repo = :repo AND pr_number = :prNumber
+			   AND seq <= :maximumSequence
+			   AND (seq IN (SELECT value FROM json_each(:sourceEventIds))
+			        OR seq > :lastDeliveredSequence)
+			 ORDER BY seq ASC`,
+		).all({
+			repo: target.repo,
+			prNumber: target.prNumber,
+			maximumSequence: window.maximumEventSequence,
+			sourceEventIds: JSON.stringify(window.sourceEventIds),
+			lastDeliveredSequence: this.getReminderDeliveryCursor(record),
+		}) as EventRow[];
+	}
+
+	private getReminderDeliveryCursor(record: ReminderBatchRecord): number {
+		if (record.subscriptionId) {
+			const subscription = this.getSubscriptionById(record.subscriptionId);
+			if (subscription) {
+				return subscription.lastDeliveredEventSeq;
+			}
+		}
+		return this.getSession(record.sessionId)?.last_delivered_event_seq ?? 0;
+	}
+
+	private preserveMissingEventHistory(
+		storedEvents: RenderedReminderEvent[],
+		sourceEvents: EventRow[],
+	): EventRow[] {
+		const recoveredIds = new Set(sourceEvents.map((row) => String(row.seq)));
+		for (const event of storedEvents) {
+			const sourceIds = event.sourceEventIds ?? [event.eventId];
+			if (sourceIds.some((id) => recoveredIds.has(id))) {
+				continue;
+			}
+
+			// Preserve missing/pruned history without inventing payload identity.
+			// The renderer will request verification rather than assert a blocker.
+			sourceEvents.push(this.toUnverifiedSourceEvent(event));
 		}
 		return sourceEvents;
+	}
+
+	private toUnverifiedSourceEvent(event: RenderedReminderEvent): EventRow {
+		return {
+			seq: Number(event.eventId),
+			kind: event.kind,
+			priority: event.priority,
+			summary: event.summary,
+			reference_link: event.referenceLink ?? null,
+			payload_json: "{}",
+		};
 	}
 
 	private persistRefreshedReminderBatch(
