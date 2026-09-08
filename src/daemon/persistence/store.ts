@@ -1659,42 +1659,123 @@ export class StateStore {
 	}
 
 	private refreshPendingReminder(record: ReminderBatchRecord): ReminderBatch | null {
-		if (record.state !== "built" && record.state !== "failed") return null;
-		const subscription = record.subscriptionId ? this.getSubscriptionById(record.subscriptionId) : null;
+		if (record.state !== "built" && record.state !== "failed") {
+			return null;
+		}
+
+		const subscription = record.subscriptionId
+			? this.getSubscriptionById(record.subscriptionId)
+			: null;
 		const session = this.getSession(record.sessionId);
 		const repo = record.repo ?? session?.repo;
 		const prNumber = record.prNumber ?? session?.pr_number ?? undefined;
-		if (!repo) return this.toReminderBatch(record);
+		if (!repo) {
+			return this.toReminderBatch(record);
+		}
+
+		const lastDeliveredEventSequence =
+			subscription?.lastDeliveredEventSeq ?? session?.last_delivered_event_seq ?? 0;
+		const sourceEvents = this.recoverReminderSourceEvents(
+			record,
+			repo,
+			prNumber,
+			lastDeliveredEventSequence,
+		);
+		const rendered = renderReminder(
+			sourceEvents,
+			prNumber ? this.getSnapshot(repo, prNumber) : null,
+			{ repo, prNumber, source: record.source },
+		);
+		return this.persistRefreshedReminderBatch({
+			...record,
+			...rendered,
+			repo,
+			prNumber,
+		});
+	}
+
+	private recoverReminderSourceEvents(
+		record: ReminderBatchRecord,
+		repo: string,
+		prNumber: number | undefined,
+		lastDeliveredEventSequence: number,
+	): EventRow[] {
 		const storedEvents = record.events as RenderedReminderEvent[];
-		const hasLegacyGroups = storedEvents.some((event) => !event.sourceEventIds?.length &&
-			((event.count ?? 1) > 1 || event.kind === "check.superseded"));
-		const ids = new Set(storedEvents.flatMap((event) => event.sourceEventIds ?? [event.eventId]).map(Number));
-		const max = record.maxEventSeq ?? Math.max(0, ...[...ids].filter(Number.isSafeInteger));
+		const hasLegacyGroups = storedEvents.some(
+			(event) =>
+				!event.sourceEventIds?.length &&
+				((event.count ?? 1) > 1 || event.kind === "check.superseded"),
+		);
+		const sourceEventIds = new Set(
+			storedEvents
+				.flatMap((event) => event.sourceEventIds ?? [event.eventId])
+				.map(Number),
+		);
+		const maximumEventSequence =
+			record.maxEventSeq ??
+			Math.max(0, ...[...sourceEventIds].filter(Number.isSafeInteger));
+
 		// Legacy condensation kept only a representative ID, so recover its original
 		// contiguous stream window. Never cross the batch's frozen high-water mark.
-		const cursor = subscription?.lastDeliveredEventSeq ?? session?.last_delivered_event_seq ?? 0;
-		const covered = prNumber ? this.db.prepare(
-			`SELECT seq, kind, priority, summary, reference_link, payload_json FROM pr_events
-			 WHERE repo = :repo AND pr_number = :prNumber AND seq <= :max
-			 AND (seq IN (SELECT value FROM json_each(:ids)) OR (:legacy = 1 AND seq > :cursor))
-			 ORDER BY seq ASC`,
-		).all({ repo, prNumber, max, ids: JSON.stringify([...ids]), legacy: hasLegacyGroups ? 1 : 0, cursor }) as EventRow[] : [];
+		let sourceEvents: EventRow[] = [];
+		if (prNumber) {
+			sourceEvents = this.db
+				.prepare(
+					`SELECT seq, kind, priority, summary, reference_link, payload_json FROM pr_events
+					 WHERE repo = :repo AND pr_number = :prNumber AND seq <= :max
+					 AND (seq IN (SELECT value FROM json_each(:ids)) OR (:legacy = 1 AND seq > :cursor))
+					 ORDER BY seq ASC`,
+				)
+				.all({
+					repo,
+					prNumber,
+					max: maximumEventSequence,
+					ids: JSON.stringify([...sourceEventIds]),
+					legacy: hasLegacyGroups ? 1 : 0,
+					cursor: lastDeliveredEventSequence,
+				}) as EventRow[];
+		}
+
 		// Missing/pruned legacy source rows still carry history, but no trustworthy
 		// payload identity. Render them with verification guidance, not an imperative.
-		const recovered = new Set(covered.map((row) => String(row.seq)));
+		const recoveredSourceEventIds = new Set(
+			sourceEvents.map((row) => String(row.seq)),
+		);
 		for (const event of storedEvents) {
-			if ((event.sourceEventIds ?? [event.eventId]).some((id) => recovered.has(id))) continue;
-			covered.push({ seq: Number(event.eventId), kind: event.kind, priority: event.priority,
-				summary: event.summary, reference_link: event.referenceLink ?? null, payload_json: "{}" });
+			const storedSourceEventIds = event.sourceEventIds ?? [event.eventId];
+			if (storedSourceEventIds.some((id) => recoveredSourceEventIds.has(id))) {
+				continue;
+			}
+			sourceEvents.push({
+				seq: Number(event.eventId),
+				kind: event.kind,
+				priority: event.priority,
+				summary: event.summary,
+				reference_link: event.referenceLink ?? null,
+				payload_json: "{}",
+			});
 		}
-		const rendered = renderReminder(covered, prNumber ? this.getSnapshot(repo, prNumber) : null,
-			{ repo, prNumber, source: record.source });
-		const result = this.db.prepare(
-			`UPDATE reminder_batches SET reminder_text = :text, events_json = :events
-			 WHERE batch_id = :batchId AND session_id = :sessionId AND state IN ('built', 'failed')`,
-		).run({ text: rendered.reminderText, events: JSON.stringify(rendered.events),
-			batchId: record.batchId, sessionId: record.sessionId });
-		return result.changes ? this.toReminderBatch({ ...record, ...rendered, repo, prNumber }) : null;
+		return sourceEvents;
+	}
+
+	private persistRefreshedReminderBatch(
+		record: ReminderBatchRecord,
+	): ReminderBatch | null {
+		const result = this.db
+			.prepare(
+				`UPDATE reminder_batches SET reminder_text = :text, events_json = :events
+				 WHERE batch_id = :batchId AND session_id = :sessionId AND state IN ('built', 'failed')`,
+			)
+			.run({
+				text: record.reminderText,
+				events: JSON.stringify(record.events),
+				batchId: record.batchId,
+				sessionId: record.sessionId,
+			});
+		if (!result.changes) {
+			return null;
+		}
+		return this.toReminderBatch(record);
 	}
 
 	private toReminderBatch(record: ReminderBatchRecord): ReminderBatch {
@@ -1874,8 +1955,13 @@ export class StateStore {
 		if (events.length === 0) return null;
 		const maxEventSeq = events.at(-1)!.seq;
 		const { reminderText, events: condensed } = renderReminder(
-			events, targetPrNumber ? this.getSnapshot(targetRepo, targetPrNumber) : null,
-			{ repo: targetRepo, prNumber: targetPrNumber ?? undefined, source: subscription?.source },
+			events,
+			targetPrNumber ? this.getSnapshot(targetRepo, targetPrNumber) : null,
+			{
+				repo: targetRepo,
+				prNumber: targetPrNumber ?? undefined,
+				source: subscription?.source,
+			},
 		);
 		const batchId = this.createOrReplaceReminder(
 			sessionId,
