@@ -7,6 +7,7 @@ import { afterEach, describe, test } from "node:test"
 import { PREMIND_PR_STREAM_RETENTION_MS } from "../../shared/constants.ts"
 import { StateStore } from "./store.ts"
 import type { PullRequestSnapshot } from "../github/types.ts"
+import { diffSnapshot } from "../github/diff.ts"
 
 const tempPaths: string[] = []
 
@@ -51,6 +52,67 @@ afterEach(() => {
 })
 
 describe("StateStore", () => {
+  for (const scenario of [
+    { name: "initial failing check", failing: true, conflict: false, manual: false, stale: false },
+    { name: "initial conflict", failing: false, conflict: true, manual: false, stale: false },
+    { name: "clean initial snapshot", failing: false, conflict: false, manual: false, stale: false },
+    { name: "manual initial failing check", failing: true, conflict: false, manual: true, stale: false },
+    { name: "manual initial conflict", failing: false, conflict: true, manual: true, stale: false },
+    { name: "stale-head initial failing check", failing: true, conflict: false, manual: false, stale: true },
+    { name: "stale-head initial conflict", failing: false, conflict: true, manual: false, stale: true },
+  ]) {
+    test(`renders ${scenario.name} from persisted snapshot diff`, () => {
+      const store = createStore()
+      try {
+        store.registerClient("client-1", { pid: 123, projectRoot: "/tmp/project" })
+        store.registerSession({
+          clientId: "client-1", sessionId: "session-1", repo: "acme/repo",
+          branch: "feature/x", isPrimary: true, status: "active", busyState: "idle",
+        })
+        if (scenario.manual) {
+          store.upsertSubscription({
+            sessionId: "session-1", repo: "acme/repo", prNumber: 7, source: "manual",
+          })
+        } else {
+          store.recordBranchAssociation("acme/repo", "feature/x", 7)
+        }
+        const initial = snapshot()
+        initial.core.mergeStateStatus = scenario.conflict ? "DIRTY" : "CLEAN"
+        initial.checks = scenario.failing ? [{ name: "lint", state: "FAILURE" }] : []
+        const events = diffSnapshot(null, initial)
+        assert.deepEqual(events.map((event) => event.kind), ["pr.snapshot.initialized"])
+        store.saveSnapshotAndEvents("acme/repo", 7, initial, events)
+        if (scenario.stale) {
+          const current = snapshot()
+          current.core.headRefOid = "sha-new"
+          store.saveSnapshot("acme/repo", 7, current)
+        }
+
+        const batch = store.buildReminderBatch("session-1")
+        assert.ok(batch)
+        assert.equal(batch.events.length, 1)
+        assert.equal(batch.events[0]!.kind, "pr.snapshot.initialized")
+        const expected = scenario.stale ? diffSnapshot(null, store.getSnapshot("acme/repo", 7)!)[0]! : events[0]!
+        assert.equal(batch.events[0]!.summary, expected.summary)
+        assert.equal(batch.events[0]!.priority, expected.priority)
+        assert.equal("headSha" in batch.events[0]!, false)
+        assert.equal("hasMergeConflict" in batch.events[0]!, false)
+        assert.equal("failingChecks" in batch.events[0]!, false)
+        if (scenario.stale || (!scenario.failing && !scenario.conflict)) {
+          assert.doesNotMatch(batch.reminderText, /Action required:/)
+        } else if (scenario.manual) {
+          assert.match(batch.reminderText, /Do not make changes unless the user explicitly asks you to/)
+          assert.match(batch.reminderText, /Action required: report .*wait for authorization before making changes/)
+          assert.doesNotMatch(batch.reminderText, /Action required: resolve/)
+        } else {
+          assert.match(batch.reminderText, /Action required: resolve the failing check\(s\)\/merge conflict\(s\) on HEAD before continuing/)
+        }
+      } finally {
+        store.close()
+      }
+    })
+  }
+
   test("advances delivery cursor after confirmed ack", () => {
     const store = createStore()
 
@@ -65,7 +127,7 @@ describe("StateStore", () => {
       busyState: "idle",
     })
     store.recordBranchAssociation("acme/repo", "feature/x", 7)
-    store.saveSnapshot("acme/repo", 7, snapshot())
+    store.saveSnapshot("acme/repo", 7, { ...snapshot(), checks: [{ name: "lint", state: "FAILURE" }] })
     store.insertEvents("acme/repo", 7, [
       {
         dedupeKey: "issue_comment.created:11",
@@ -79,7 +141,7 @@ describe("StateStore", () => {
         kind: "check.failed",
         priority: "high",
         summary: "Check failed: lint",
-        payload: { name: "lint" },
+        payload: { name: "lint", headSha: "sha-7" },
       },
     ])
 
@@ -179,6 +241,8 @@ describe("StateStore", () => {
         payload: { name: "build", headSha: "sha-new" },
       },
     ])
+    store.saveSnapshot("acme/repo", 7, { ...snapshot(), core: { ...snapshot().core, headRefOid: "sha-new" },
+      checks: [{ name: "build", state: "FAILURE" }] })
 
     const batch = store.buildReminderBatch("session-1")
     assert.ok(batch)
@@ -192,7 +256,7 @@ describe("StateStore", () => {
     store.close()
   })
 
-  test("treats check.failed events with no recorded headSha as live (backward compatible)", () => {
+  test("retains check.failed history with no recorded headSha as unverified", () => {
     const store = createStore()
 
     store.registerClient("client-1", { pid: 123, projectRoot: "/tmp/project" })
@@ -220,8 +284,10 @@ describe("StateStore", () => {
     const batch = store.buildReminderBatch("session-1")
     assert.ok(batch)
     assert.equal(batch.events.length, 1)
-    assert.equal(batch.events[0]!.kind, "check.failed")
-    assert.match(batch.reminderText, /Action required/)
+    assert.equal(batch.events[0]!.kind, "check.unverified")
+    assert.match(batch.reminderText, /UNVERIFIED history: Check failed: lint/)
+    assert.match(batch.reminderText, /Verify current status before acting/)
+    assert.doesNotMatch(batch.reminderText, /Action required/)
 
     store.close()
   })
@@ -1560,9 +1626,10 @@ describe("StateStore", () => {
     const manual = store.upsertSubscription({
       sessionId: "batch-session", repo: "external/repo", prNumber: 10, source: "manual",
     })
+    store.saveSnapshot("external/repo", 10, { ...snapshot(), checks: [{ name: "manual", state: "FAILURE" }] })
     store.insertEvents("external/repo", 10, [{
       dedupeKey: "manual-event", kind: "check.failed", priority: "high",
-      summary: "manual event", payload: {},
+      summary: "manual event", payload: { name: "manual", headSha: "sha-7" },
     }])
     const staleBatch = store.buildReminderBatchForSubscription(manual.subscriptionId)
     assert.ok(staleBatch)

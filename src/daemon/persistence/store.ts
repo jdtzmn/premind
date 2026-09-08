@@ -23,6 +23,7 @@ import type {
 	PullRequestSnapshot,
 } from "../github/types.ts";
 import { DetailFileWriter } from "../reminders/detail-files.ts";
+import { renderReminder, type RenderedReminderEvent } from "../reminders/render-reminder.ts";
 import { createReminderHandoffActor, eventForReminderState, type ReminderHandoffState } from "../reminders/reminder-handoff-machine.ts";
 import type { PrWatcherState } from "../watchers/pr-watcher-machine.ts";
 
@@ -116,25 +117,16 @@ type EventRow = {
 	payload_json: string;
 };
 
-type GroupedReminderEvent = ReminderEvent & {
-	count?: number;
-	samples?: string[];
+type ReminderTarget = {
+	repo: string;
+	prNumber?: number;
+	source?: SubscriptionSource;
 };
 
-const priorityRank: Record<ReminderEvent["priority"], number> = {
-	high: 0,
-	medium: 1,
-	low: 2,
+type ReminderEventWindow = {
+	sourceEventIds: number[];
+	maximumEventSequence: number;
 };
-
-// Check kinds that only matter on the PR's current HEAD. A push supersedes
-// every check-run on the previous commit, and GitHub never retracts those
-// old check-runs — it just leaves them failed/cancelled forever. Without
-// this, an agent that already pushed a fix keeps getting "Action required"
-// reminders for commits it has already replaced.
-const SUPERSEDABLE_CHECK_KINDS = new Set(["check.failed", "check.cancelled"]);
-
-const shortSha = (sha: string) => sha.slice(0, 7);
 
 export class StateStore {
 	private readonly db: DatabaseSync;
@@ -1594,7 +1586,7 @@ export class StateStore {
 
 	getPendingReminder(sessionId: string): ReminderBatch | null {
 		const record = this.getPendingReminderRecord(sessionId);
-		return record ? this.toReminderBatch(record) : null;
+		return record ? this.refreshPendingReminder(record) : null;
 	}
 
 	getPendingReminderRecord(sessionId: string): ReminderBatchRecord | null {
@@ -1674,7 +1666,205 @@ export class StateStore {
 			)
 			.get({ subscriptionId }) as ReminderRow | undefined;
 		const record = this.toReminderBatchRecord(row);
-		return record ? this.toReminderBatch(record) : null;
+		return record ? this.refreshPendingReminder(record) : null;
+	}
+
+	private refreshPendingReminder(record: ReminderBatchRecord): ReminderBatch | null {
+		if (record.state !== "built" && record.state !== "failed") {
+			return null;
+		}
+
+		const target = this.resolveReminderTarget(record);
+		if (!target) {
+			return this.toReminderBatch(record);
+		}
+
+		const sourceEvents = this.loadBatchSourceEvents(record, target);
+		const currentSnapshot = this.loadReminderSnapshot(target);
+		const rendered = renderReminder(sourceEvents, currentSnapshot, target);
+
+		return this.persistRefreshedReminderBatch({
+			...record,
+			...target,
+			...rendered,
+		});
+	}
+
+	private resolveReminderTarget(record: ReminderBatchRecord): ReminderTarget | null {
+		const session = this.getSession(record.sessionId);
+		const repo = record.repo ?? session?.repo;
+		if (!repo) {
+			return null;
+		}
+
+		return {
+			repo,
+			prNumber: record.prNumber ?? session?.pr_number ?? undefined,
+			source: record.source,
+		};
+	}
+
+	private loadReminderSnapshot(target: ReminderTarget): PullRequestSnapshot | null {
+		if (!target.prNumber) {
+			return null;
+		}
+		return this.getSnapshot(target.repo, target.prNumber);
+	}
+
+	private loadBatchSourceEvents(
+		record: ReminderBatchRecord,
+		target: ReminderTarget,
+	): EventRow[] {
+		const storedEvents = record.events as RenderedReminderEvent[];
+		const window = this.getReminderEventWindow(record);
+		let sourceEvents: EventRow[];
+
+		if (this.needsLegacyEventRecovery(storedEvents)) {
+			sourceEvents = this.recoverLegacyBatchEvents(record, target, window);
+		} else {
+			sourceEvents = this.loadEventsBySourceId(target, window);
+		}
+
+		return this.preserveMissingEventHistory(storedEvents, sourceEvents);
+	}
+
+	private getReminderEventWindow(record: ReminderBatchRecord): ReminderEventWindow {
+		const sourceEventIds = new Set<number>();
+		for (const event of record.events as RenderedReminderEvent[]) {
+			for (const id of event.sourceEventIds ?? [event.eventId]) {
+				sourceEventIds.add(Number(id));
+			}
+		}
+
+		let maximumEventSequence = record.maxEventSeq;
+		if (maximumEventSequence === null) {
+			const validSequences = [...sourceEventIds].filter(Number.isSafeInteger);
+			maximumEventSequence = Math.max(0, ...validSequences);
+		}
+
+		return { sourceEventIds: [...sourceEventIds], maximumEventSequence };
+	}
+
+	private needsLegacyEventRecovery(events: RenderedReminderEvent[]): boolean {
+		for (const event of events) {
+			if (event.sourceEventIds?.length) {
+				continue;
+			}
+			if ((event.count ?? 1) > 1 || event.kind === "check.superseded") {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private loadEventsBySourceId(
+		target: ReminderTarget,
+		window: ReminderEventWindow,
+	): EventRow[] {
+		if (!target.prNumber) {
+			return [];
+		}
+
+		return this.db.prepare(
+			`SELECT seq, kind, priority, summary, reference_link, payload_json
+			 FROM pr_events
+			 WHERE repo = :repo AND pr_number = :prNumber
+			   AND seq <= :maximumSequence
+			   AND seq IN (SELECT value FROM json_each(:sourceEventIds))
+			 ORDER BY seq ASC`,
+		).all({
+			repo: target.repo,
+			prNumber: target.prNumber,
+			maximumSequence: window.maximumEventSequence,
+			sourceEventIds: JSON.stringify(window.sourceEventIds),
+		}) as EventRow[];
+	}
+
+	private recoverLegacyBatchEvents(
+		record: ReminderBatchRecord,
+		target: ReminderTarget,
+		window: ReminderEventWindow,
+	): EventRow[] {
+		if (!target.prNumber) {
+			return [];
+		}
+
+		// Older groups saved only a representative ID. Recover their original
+		// stream window, without including events that arrived after this batch.
+		return this.db.prepare(
+			`SELECT seq, kind, priority, summary, reference_link, payload_json
+			 FROM pr_events
+			 WHERE repo = :repo AND pr_number = :prNumber
+			   AND seq <= :maximumSequence
+			   AND (seq IN (SELECT value FROM json_each(:sourceEventIds))
+			        OR seq > :lastDeliveredSequence)
+			 ORDER BY seq ASC`,
+		).all({
+			repo: target.repo,
+			prNumber: target.prNumber,
+			maximumSequence: window.maximumEventSequence,
+			sourceEventIds: JSON.stringify(window.sourceEventIds),
+			lastDeliveredSequence: this.getReminderDeliveryCursor(record),
+		}) as EventRow[];
+	}
+
+	private getReminderDeliveryCursor(record: ReminderBatchRecord): number {
+		if (record.subscriptionId) {
+			const subscription = this.getSubscriptionById(record.subscriptionId);
+			if (subscription) {
+				return subscription.lastDeliveredEventSeq;
+			}
+		}
+		return this.getSession(record.sessionId)?.last_delivered_event_seq ?? 0;
+	}
+
+	private preserveMissingEventHistory(
+		storedEvents: RenderedReminderEvent[],
+		sourceEvents: EventRow[],
+	): EventRow[] {
+		const recoveredIds = new Set(sourceEvents.map((row) => String(row.seq)));
+		for (const event of storedEvents) {
+			const sourceIds = event.sourceEventIds ?? [event.eventId];
+			if (sourceIds.some((id) => recoveredIds.has(id))) {
+				continue;
+			}
+
+			// Preserve missing/pruned history without inventing payload identity.
+			// The renderer will request verification rather than assert a blocker.
+			sourceEvents.push(this.toUnverifiedSourceEvent(event));
+		}
+		return sourceEvents;
+	}
+
+	private toUnverifiedSourceEvent(event: RenderedReminderEvent): EventRow {
+		return {
+			seq: Number(event.eventId),
+			kind: event.kind,
+			priority: event.priority,
+			summary: event.summary,
+			reference_link: event.referenceLink ?? null,
+			payload_json: "{}",
+		};
+	}
+
+	private persistRefreshedReminderBatch(
+		record: ReminderBatchRecord,
+	): ReminderBatch | null {
+		const result = this.db
+			.prepare(
+				`UPDATE reminder_batches SET reminder_text = :text, events_json = :events
+				 WHERE batch_id = :batchId AND session_id = :sessionId AND state IN ('built', 'failed')`,
+			)
+			.run({
+				text: record.reminderText,
+				events: JSON.stringify(record.events),
+				batchId: record.batchId,
+				sessionId: record.sessionId,
+			});
+		if (!result.changes) {
+			return null;
+		}
+		return this.toReminderBatch(record);
 	}
 
 	private toReminderBatch(record: ReminderBatchRecord): ReminderBatch {
@@ -1842,7 +2032,6 @@ export class StateStore {
 
 		const targetRepo = subscription?.repo ?? session.repo;
 		const targetPrNumber = subscription?.prNumber ?? session.pr_number;
-		const qualifiedTarget = targetPrNumber ? `${targetRepo}#${targetPrNumber}` : targetRepo;
 
 		const existing = subscription
 			? this.getPendingReminderForSubscription(subscription.subscriptionId)
@@ -1854,134 +2043,15 @@ export class StateStore {
 			: this.listUndeliveredEvents(sessionId);
 		if (events.length === 0) return null;
 		const maxEventSeq = events.at(-1)!.seq;
-		const currentHeadSha = targetPrNumber
-			? this.getSnapshot(targetRepo, targetPrNumber)?.core.headRefOid
-			: undefined;
-
-		const reminderEvents: Array<GroupedReminderEvent & { headSha?: string }> = events.map((event) => {
-			let headSha: string | undefined;
-			try {
-				const payload = JSON.parse(event.payload_json) as Record<string, unknown>;
-				if (typeof payload.headSha === "string") headSha = payload.headSha;
-			} catch {
-				// Malformed payload JSON should never block reminder delivery.
-			}
-			return {
-				eventId: String(event.seq),
-				kind: event.kind,
-				priority: event.priority,
-				summary: event.summary,
-				referenceLink: event.reference_link ?? undefined,
-				...(headSha ? { headSha } : {}),
-			};
-		});
-
-		// Option C: a check.failed/check.cancelled event whose headSha no longer
-		// matches the PR's current HEAD cannot be fixed directly — the commit it
-		// ran on is already gone. Pull those out before grouping so they never
-		// reach the live "Changes" list or the actionable-blocker check; they
-		// are summarized once per superseded commit instead (see below).
-		const liveEvents: GroupedReminderEvent[] = [];
-		const supersededByHeadSha = new Map<string, GroupedReminderEvent[]>();
-		for (const event of reminderEvents) {
-			const { headSha, ...reminderEvent } = event;
-			const isSuperseded =
-				currentHeadSha !== undefined &&
-				headSha !== undefined &&
-				headSha !== currentHeadSha &&
-				SUPERSEDABLE_CHECK_KINDS.has(reminderEvent.kind);
-			if (isSuperseded) {
-				const bucket = supersededByHeadSha.get(headSha);
-				if (bucket) bucket.push(reminderEvent);
-				else supersededByHeadSha.set(headSha, [reminderEvent]);
-				continue;
-			}
-			liveEvents.push(reminderEvent);
-		}
-
-		const grouped = new Map<string, GroupedReminderEvent[]>();
-		for (const event of liveEvents) {
-			const key =
-				event.priority === "low" || event.priority === "medium"
-					? `${event.priority}:${event.kind}`
-					: event.eventId;
-			const bucket = grouped.get(key);
-			if (bucket) bucket.push(event);
-			else grouped.set(key, [event]);
-		}
-
-		const condensedLive = Array.from(grouped.values()).map((bucket) => {
-			if (bucket.length === 1 || bucket[0].priority === "high")
-				return bucket[0];
-			return {
-				...bucket[0],
-				summary: `${bucket.length} ${bucket[0].kind.replaceAll("_", " ")} events (${bucket
-					.slice(0, 2)
-					.map((event) => event.summary)
-					.join("; ")})`,
-				count: bucket.length,
-				samples: bucket.slice(0, 2).map((event) => event.summary),
-			};
-		});
-		condensedLive.sort((left, right) => {
-			const priorityDelta =
-				priorityRank[left.priority] - priorityRank[right.priority];
-			if (priorityDelta !== 0) return priorityDelta;
-			return Number(left.eventId) - Number(right.eventId);
-		});
-
-		// One informational line per superseded commit, e.g. "2 failed on 03f8a47
-		// (superseded by 87c8827)" — never an actionable blocker, never repeated
-		// per check.
-		const supersededSummaries: GroupedReminderEvent[] = Array.from(supersededByHeadSha.entries()).map(
-			([oldHeadSha, bucket]) => {
-				const failedCount = bucket.filter((event) => event.kind === "check.failed").length;
-				const cancelledCount = bucket.filter((event) => event.kind === "check.cancelled").length;
-				const parts: string[] = [];
-				if (failedCount > 0) parts.push(`${failedCount} failed`);
-				if (cancelledCount > 0) parts.push(`${cancelledCount} cancelled`);
-				const description = parts.join(", ") || `${bucket.length} check${bucket.length === 1 ? "" : "s"} resolved`;
-				return {
-					eventId: bucket.at(-1)!.eventId,
-					kind: "check.superseded",
-					priority: "low" as const,
-					summary: `${description} on ${shortSha(oldHeadSha)}${currentHeadSha ? ` (superseded by ${shortSha(currentHeadSha)})` : ""}`,
-					count: bucket.length,
-				};
+		const { reminderText, events: condensed } = renderReminder(
+			events,
+			targetPrNumber ? this.getSnapshot(targetRepo, targetPrNumber) : null,
+			{
+				repo: targetRepo,
+				prNumber: targetPrNumber ?? undefined,
+				source: subscription?.source,
 			},
 		);
-
-		const condensed = [...condensedLive, ...supersededSummaries];
-		const hasActionableBlocker = condensed.some((event) =>
-			["check.failed", "merge_conflict.detected"].includes(event.kind),
-		);
-		const renderEvent = (event: GroupedReminderEvent, index: number) =>
-			`${index + 1}. ${event.kind} - ${event.summary}${event.referenceLink ? ` (${event.referenceLink})` : ""}`;
-		const reminderText = [
-			"<system-reminder>",
-			currentHeadSha
-				? `PR update for ${qualifiedTarget} (HEAD: ${shortSha(currentHeadSha)}):`
-				: `PR update for ${qualifiedTarget}:`,
-			...(subscription?.source === "manual"
-				? [
-					"",
-					"This PR is manually subscribed. Do not make changes unless the user explicitly asks you to.",
-				]
-				: []),
-			...(condensedLive.length > 0 ? ["", "Changes:", ...condensedLive.map(renderEvent)] : []),
-			...(supersededSummaries.length > 0 ? ["", "Superseded:", ...supersededSummaries.map(renderEvent)] : []),
-			...(hasActionableBlocker
-				? [
-					"",
-					subscription?.source === "manual"
-						? "Action required: report the failing check(s)/merge conflict(s) above and wait for authorization before making changes."
-						: "Action required: resolve the failing check(s)/merge conflict(s) on HEAD before continuing. If you can't, explain why.",
-				]
-				: []),
-			"",
-			"Incorporate only the above into your reasoning and continue.",
-			"</system-reminder>",
-		].join("\n");
 		const batchId = this.createOrReplaceReminder(
 			sessionId,
 			subscription?.subscriptionId ?? null,

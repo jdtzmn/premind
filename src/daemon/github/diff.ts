@@ -604,6 +604,7 @@ export function diffSnapshot(previous: PullRequestSnapshot | null, next: PullReq
       summary: `${bucket.length} ${kind.replaceAll("_", " ")} events${sampleSummaries(bucket).length > 0 ? ` (${sampleSummaries(bucket).join("; ")})` : ""}`,
       referenceLink: next.core.url,
       payload: {
+        ...(kind.startsWith("check.") ? { headSha: next.core.headRefOid } : {}),
         count: bucket.length,
         samples: sampleSummaries(bucket),
         events: bucket.map((event) => ({ summary: event.summary, payload: event.payload })),
