@@ -454,6 +454,23 @@ export const createPremindPiExtension = (
 			}
 		};
 
+		const deliverPendingReminders = async (
+			sessionId: string,
+			generation: number,
+		) => {
+			let delivered = false;
+			while (generation === sessionGeneration) {
+				const result = await deliverPendingReminder(
+					sessionId,
+					{},
+					generation,
+				);
+				if (!result.delivered) break;
+				delivered = true;
+			}
+			return { delivered };
+		};
+
 		const markBusyState = async (busyState: "busy" | "idle") => {
 			if (!currentSessionId || !sessionClient) return;
 			await sessionClient.updateSessionState({
@@ -473,16 +490,6 @@ export const createPremindPiExtension = (
 			statusPollInFlight = true;
 			try {
 				await refreshStatusbar(ctx, generation);
-				if (generation !== sessionGeneration) return;
-				if (currentSessionId) {
-					const result = await deliverPendingReminder(
-						currentSessionId,
-						{},
-						generation,
-					);
-					if (generation !== sessionGeneration) return;
-					if (result.delivered) setStatus(ctx, undefined);
-				}
 			} catch (error) {
 				if (
 					generation === sessionGeneration &&
@@ -574,15 +581,30 @@ export const createPremindPiExtension = (
 			}
 		});
 
-		pi.on("agent_end", async (_event, ctx) => {
+		pi.on("agent_end", async () => {
 			try {
 				await markBusyState("idle");
-				if (currentSessionId) {
-					const result = await deliverPendingReminder(currentSessionId);
-					if (result.delivered) setStatus(ctx, undefined);
-					else await refreshStatusbar(ctx);
-				}
+			} catch {
+				// Busy-state updates are advisory; status/debug commands can surface daemon health.
+			}
+		});
+
+		pi.on("turn_end", async (_event, ctx) => {
+			const generation = sessionGeneration;
+			const sessionId = currentSessionId;
+			if (!sessionId) return;
+
+			try {
+				const result = await deliverPendingReminders(sessionId, generation);
+				if (generation !== sessionGeneration) return;
+				if (result.delivered) setStatus(ctx, undefined);
+				else await refreshStatusbar(ctx, generation);
 			} catch (error) {
+				if (
+					generation !== sessionGeneration ||
+					isStaleExtensionContextError(error)
+				)
+					return;
 				setStatus(ctx, `${PR_ICON} error`);
 				notify(
 					ctx,

@@ -52,6 +52,20 @@ const reminderBatch: ReminderBatch = {
 	],
 };
 
+const secondReminderBatch: ReminderBatch = {
+	...reminderBatch,
+	batchId: "batch-2",
+	reminderText: "<premind-reminder>more PR context</premind-reminder>",
+	events: [
+		{
+			eventId: "event-2",
+			kind: "review.submitted",
+			priority: "medium",
+			summary: "New PR review",
+		},
+	],
+};
+
 type CommandContext = {
 	cwd?: string;
 	sessionManager?: { getSessionFile: () => string | undefined };
@@ -165,12 +179,16 @@ const createClient = (
 	options: {
 		pruneResult?: { sessions: number; reminderBatches: number };
 		pendingBatch?: ReminderBatch | null;
+		pendingBatches?: ReminderBatch[];
 		statusResult?: DebugStatusResponse;
 	} = {},
 ) => {
 	const operations: string[] = [];
 	const registeredSessions: Array<Omit<RegisterSessionPayload, "clientId">> =
 		[];
+	const pendingBatches = [
+		...(options.pendingBatches ?? (options.pendingBatch ? [options.pendingBatch] : [])),
+	];
 	return {
 		operations,
 		registeredSessions,
@@ -240,7 +258,7 @@ const createClient = (
 			},
 			getPendingReminder: async (sessionId: string) => {
 				operations.push(`getPendingReminder:${sessionId}`);
-				return { batch: options.pendingBatch ?? null };
+				return { batch: pendingBatches.shift() ?? null };
 			},
 			ackReminder: async (payload: {
 				batchId: string;
@@ -271,6 +289,7 @@ describe("premind Pi extension", () => {
 		assert.ok(mock.events.has("session_shutdown"));
 		assert.ok(mock.events.has("agent_start"));
 		assert.ok(mock.events.has("agent_end"));
+		assert.ok(mock.events.has("turn_end"));
 		assert.ok(mock.renderers.has("premind-reminder"));
 		assert.ok(mock.commands.has("premind:status"));
 		assert.ok(mock.commands.has("premind:prune"));
@@ -542,16 +561,11 @@ describe("premind Pi extension", () => {
 		},
 	);
 
-	test("status polling treats a stale extension API as cancellation", async (t) => {
+	test("status polling does not deliver pending reminders", async (t) => {
 		t.mock.timers.enable({ apis: ["setInterval"] });
 		const mock = createMockPi();
 		const client = createClient({ pendingBatch: reminderBatch });
 		const { ctx, statuses } = createEventContext();
-		mock.pi.sendMessage = () => {
-			throw new Error(
-				"This extension ctx is stale after session replacement or reload.",
-			);
-		};
 		createPremindPiExtension({
 			createDaemonClient: () => client.client,
 			config: { statusPollIntervalMs: 5_000 },
@@ -568,17 +582,22 @@ describe("premind Pi extension", () => {
 		await new Promise<void>((resolve) => setImmediate(resolve));
 
 		assert.deepEqual(statuses, [{ key: "premind", value: undefined }]);
-		assert.ok(
-			client.operations.includes(
-				"ackReminder:batch-1:/tmp/session.jsonl:failed",
+		assert.equal(mock.sentMessages.length, 0);
+		assert.equal(
+			client.operations.some((operation) =>
+				operation.startsWith("getPendingReminder:") ||
+				operation.startsWith("ackReminder:"),
 			),
+			false,
 		);
 		await shutdown({}, ctx);
 	});
 
-	test("agent lifecycle updates busy state and auto-delivers pending reminders on idle", async () => {
+	test("turn end queues all pending reminders before agent end", async () => {
 		const mock = createMockPi();
-		const client = createClient({ pendingBatch: reminderBatch });
+		const client = createClient({
+			pendingBatches: [reminderBatch, secondReminderBatch],
+		});
 		const { ctx, statuses } = createEventContext();
 		createPremindPiExtension({
 			createDaemonClient: () => client.client,
@@ -589,12 +608,24 @@ describe("premind Pi extension", () => {
 		const startSession = mock.events.get("session_start");
 		const agentStart = mock.events.get("agent_start");
 		const agentEnd = mock.events.get("agent_end");
+		const turnEnd = mock.events.get("turn_end");
 		assert.ok(startSession);
 		assert.ok(agentStart);
 		assert.ok(agentEnd);
+		assert.ok(turnEnd);
 
 		await startSession({}, ctx);
 		await agentStart({}, ctx);
+
+		assert.deepEqual(client.operations, [
+			"registerClient:/tmp/project:pi-extension",
+			"registerSession:/tmp/session.jsonl:owner/repo:feature/pi",
+			"activateWorktree:/tmp/session.jsonl:/tmp/project",
+			"updateSessionState:/tmp/session.jsonl:busy",
+		]);
+		assert.deepEqual(mock.sentMessages, []);
+
+		await turnEnd({}, ctx);
 		await agentEnd({}, ctx);
 
 		assert.deepEqual(client.operations, [
@@ -602,10 +633,14 @@ describe("premind Pi extension", () => {
 			"registerSession:/tmp/session.jsonl:owner/repo:feature/pi",
 			"activateWorktree:/tmp/session.jsonl:/tmp/project",
 			"updateSessionState:/tmp/session.jsonl:busy",
-			"updateSessionState:/tmp/session.jsonl:idle",
 			"getPendingReminder:/tmp/session.jsonl",
 			"ackReminder:batch-1:/tmp/session.jsonl:handed_off",
 			"ackReminder:batch-1:/tmp/session.jsonl:confirmed",
+			"getPendingReminder:/tmp/session.jsonl",
+			"ackReminder:batch-2:/tmp/session.jsonl:handed_off",
+			"ackReminder:batch-2:/tmp/session.jsonl:confirmed",
+			"getPendingReminder:/tmp/session.jsonl",
+			"updateSessionState:/tmp/session.jsonl:idle",
 		]);
 		assert.deepEqual(mock.sentMessages, [
 			{
@@ -617,8 +652,88 @@ describe("premind Pi extension", () => {
 				},
 				options: { deliverAs: "followUp", triggerTurn: true },
 			},
+			{
+				message: {
+					customType: "premind-reminder",
+					content: secondReminderBatch.reminderText,
+					display: true,
+					details: secondReminderBatch,
+				},
+				options: { deliverAs: "followUp", triggerTurn: true },
+			},
 		]);
 		assert.deepEqual(statuses.at(-1), { key: "premind", value: undefined });
+	});
+
+	test("turn end abandons delivery when the session changes", async () => {
+		const mock = createMockPi();
+		const client = createClient();
+		const { ctx } = createEventContext();
+		let resolvePending!: (value: { batch: ReminderBatch | null }) => void;
+		const pendingResult = new Promise<{ batch: ReminderBatch | null }>((resolve) => {
+			resolvePending = resolve;
+		});
+		client.client.getPendingReminder = async (sessionId: string) => {
+			client.operations.push(`getPendingReminder:${sessionId}`);
+			return pendingResult;
+		};
+		createPremindPiExtension({
+			createDaemonClient: () => client.client,
+			config: { statusPollIntervalMs: 0 },
+			detectGit: async () => ({ repo: "owner/repo", branch: "feature/pi" }),
+		})(mock.pi as never);
+
+		const startSession = mock.events.get("session_start");
+		const turnEnd = mock.events.get("turn_end");
+		const shutdown = mock.events.get("session_shutdown");
+		assert.ok(startSession);
+		assert.ok(turnEnd);
+		assert.ok(shutdown);
+
+		await startSession({}, ctx);
+		const delivery = turnEnd({}, ctx);
+		await shutdown({}, ctx);
+		resolvePending({ batch: reminderBatch });
+		await delivery;
+
+		assert.deepEqual(mock.sentMessages, []);
+		assert.equal(
+			client.operations.some((operation) => operation.startsWith("ackReminder:")),
+			false,
+		);
+	});
+
+	test("turn end marks failed deliveries and reports the error", async () => {
+		const mock = createMockPi();
+		const client = createClient({ pendingBatch: reminderBatch });
+		const { ctx, notifications, statuses } = createEventContext();
+		mock.pi.sendMessage = () => {
+			throw new Error("send failed");
+		};
+		createPremindPiExtension({
+			createDaemonClient: () => client.client,
+			config: { statusPollIntervalMs: 0 },
+			detectGit: async () => ({ repo: "owner/repo", branch: "feature/pi" }),
+		})(mock.pi as never);
+
+		const startSession = mock.events.get("session_start");
+		const turnEnd = mock.events.get("turn_end");
+		assert.ok(startSession);
+		assert.ok(turnEnd);
+
+		await startSession({}, ctx);
+		await turnEnd({}, ctx);
+
+		assert.ok(
+			client.operations.includes(
+				"ackReminder:batch-1:/tmp/session.jsonl:failed",
+			),
+		);
+		assert.deepEqual(statuses.at(-1), { key: "premind", value: " error" });
+		assert.deepEqual(notifications.at(-1), {
+			message: "premind automatic delivery failed: send failed",
+			level: "error",
+		});
 	});
 
 	test("/premind:status renders daemon status", async () => {
