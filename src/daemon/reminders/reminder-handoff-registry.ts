@@ -22,6 +22,10 @@ export class ReminderHandoffRegistry {
   }
 
   getPendingReminder(sessionId: string, now = Date.now()): ReminderBatch | null {
+    // An adapter that died mid-handoff leaves its batch invisible to the query
+    // below and holding the subscription's only batch slot. Reclaim abandoned
+    // handoffs first so delivery resumes without waiting for a daemon restart.
+    this.store.expireStaleHandoffs(undefined, now)
     let record = this.store.getPendingReminderRecord(sessionId)
     if (!record) {
       const built = this.store.buildReminderBatch(sessionId, now)

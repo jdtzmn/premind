@@ -14,6 +14,11 @@ export const PREMIND_CLIENT_LEASE_TTL_MS = 30_000
 export const PREMIND_IDLE_SHUTDOWN_GRACE_MS = 15_000
 export const PREMIND_IDLE_DELIVERY_THRESHOLD_MS = 60_000
 export const PREMIND_SESSION_STALE_MS = 6 * 60 * 60 * 1000
+// A handoff that never reaches confirmed/failed (adapter crash, stale extension
+// context, hung injection) would otherwise pin its subscription's only batch row
+// forever. Abandoned handoffs older than this are returned to `failed` so the
+// handoff registry retries them without waiting for a daemon restart.
+export const PREMIND_REMINDER_HANDOFF_STALE_MS = 5 * 60 * 1000
 // Canonical PR watchers stay warm briefly after their final subscriber leaves.
 export const PREMIND_PR_WATCHER_IDLE_GRACE_MS = 5 * 60 * 1000
 // Durable PR streams and inactive subscription cursors outlive their actors.

@@ -6,6 +6,7 @@ import {
 	PREMIND_CLIENT_LEASE_TTL_MS,
 	PREMIND_DB_PATH,
 	PREMIND_PR_STREAM_RETENTION_MS,
+	PREMIND_REMINDER_HANDOFF_STALE_MS,
 	PREMIND_STATE_DIR,
 	PREMIND_SUBSCRIPTION_RETENTION_MS,
 } from "../../shared/constants.ts";
@@ -1608,6 +1609,49 @@ export class StateStore {
 		return this.toReminderBatchRecord(row);
 	}
 
+	/**
+	 * True when a batch is mid-handoff for this target. Such a row is invisible to
+	 * `getPendingReminderRecord` (which only surfaces `built`/`failed`) yet still
+	 * occupies the subscription's unique batch slot, so builders must treat it as
+	 * "already pending" rather than inserting a second row.
+	 */
+	hasInFlightHandoff(sessionId: string, subscriptionId: string | null): boolean {
+		const row = subscriptionId
+			? (this.db
+					.prepare(
+						`SELECT 1 FROM reminder_batches
+						 WHERE subscription_id = :subscriptionId AND state = 'handed_off' LIMIT 1`,
+					)
+					.get({ subscriptionId }) as { 1: number } | undefined)
+			: (this.db
+					.prepare(
+						`SELECT 1 FROM reminder_batches
+						 WHERE session_id = :sessionId AND subscription_id IS NULL
+						   AND state = 'handed_off' LIMIT 1`,
+					)
+					.get({ sessionId }) as { 1: number } | undefined);
+		return row !== undefined;
+	}
+
+	/**
+	 * Returns abandoned handoffs to `failed` so the handoff registry can retry
+	 * them. Without this, an adapter that dies between `handed_off` and
+	 * `confirmed` strands its batch until the next daemon restart runs
+	 * `recoverFromRestart`, and every queued event behind it goes undelivered.
+	 */
+	expireStaleHandoffs(
+		thresholdMs = PREMIND_REMINDER_HANDOFF_STALE_MS,
+		now = Date.now(),
+	): number {
+		const result = this.db
+			.prepare(
+				`UPDATE reminder_batches SET state = 'failed', updated_at = :now
+				 WHERE state = 'handed_off' AND updated_at < :cutoff`,
+			)
+			.run({ now, cutoff: now - thresholdMs });
+		return result.changes as number;
+	}
+
 	getReminderBatchRecord(
 		batchId: string,
 		sessionId?: string,
@@ -2037,6 +2081,16 @@ export class StateStore {
 			? this.getPendingReminderForSubscription(subscription.subscriptionId)
 			: this.getPendingReminder(sessionId);
 		if (existing) return existing;
+
+		// A batch already handed to an adapter still owns its events: the delivery
+		// cursor only advances on `confirmed`, so those events are still undelivered
+		// here. Building a replacement would violate the one-batch-per-subscription
+		// invariant (`reminder_batches.subscription_id` is UNIQUE) and, because
+		// callers such as `PullRequestWatcher.tick` swallow per-target errors, the
+		// throw would silently wedge every future poll for this PR. Wait for the
+		// handoff to resolve, or for `expireStaleHandoffs` to return it to `failed`.
+		if (this.hasInFlightHandoff(sessionId, subscription?.subscriptionId ?? null))
+			return null;
 
 		const events = subscription
 			? this.listUndeliveredEventsForSubscription(subscription.subscriptionId)
