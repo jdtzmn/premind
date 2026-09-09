@@ -28,7 +28,7 @@ Each guarantee below names the mechanism that can violate it. Anything already c
 | --- | --- |
 | A persisted update reaches every supported adapter | Adapter tests use fabricated batches; nothing links real events to real delivery |
 | Pending updates survive a daemon restart | Delivery could depend on in-memory state rather than SQLite |
-| A stranded `handed_off` batch is eventually delivered | `getPendingReminderRecord` selects only `built`/`failed`; only `recoverFromRestart` un-strands it |
+| A stranded `handed_off` batch is eventually delivered | **Was broken.** The `UNIQUE` constraint on `reminder_batches.subscription_id` made rebuilding throw, wedging every later poll for that PR — see [Outcome](#outcome-shipped) |
 | A reaped-then-revived session loses nothing | `last_activity_at` only advances on session-state writes, so `listPrWatchTargets` silently drops the target |
 | Reattaching preserves a cursor; only context change resets it | `ensureSessionControl` resets recreated or context-changed sessions to `MAX(seq)` and deletes their batches |
 | A burst larger than the batch window fully drains | `listUndeliveredEventsForSubscription` caps at 20 events per batch |
@@ -63,11 +63,25 @@ Assert that the text an adapter delivered is the text returned by the daemon cal
 
 Add `src/test/delivery-reliability.test.ts`, built directly on `StateStore`, `PullRequestWatcher`, and the existing fixture-client helpers. No new abstraction yet.
 
-1. **Stranded handoff.** Build a batch, ack `handed_off`, then simulate adapter death without `confirmed`. Assert the update is not silently lost: it either becomes deliverable again without a full daemon restart, or the test documents the restart requirement as the current guarantee and links a follow-up. Also assert that when new events later arrive, the stranded events reappear in the fresh batch rather than being skipped.
+1. **Stranded handoff.** Build a batch, ack `handed_off`, then simulate adapter death without `confirmed`. Assert the update is not silently lost, and that events arriving while stranded stay queued rather than being skipped.
 2. **Reap and revive.** Advance past `PREMIND_SESSION_STALE_MS`, run `reapStaleSessions`, and assert the PR target drops out of `listPrWatchTargets`. Then revive via `updateSessionState` and assert that changes which landed during the gap are still delivered, since `diffSnapshot` compares against the last stored snapshot.
 3. **Cursor preservation.** Assert `ensureSessionControl` preserves the cursor for a same-context reattach, and resets to the high-water mark (deleting batches) only when repo or branch changed. Both directions matter: the reset is intended behavior, and the preservation is what prevents silent history skipping.
 4. **Burst drain.** Insert more than 20 undelivered events and assert successive batches drain every event with none skipped and no duplicates.
 5. **Watcher state recovery.** Drive `recordPollFailure` into `backing_off` and a rate-limit into `rate_limited`, then assert both return to `polling` once their deadlines elapse.
+
+### Outcome (shipped)
+
+Four of the five guarantees already held. The stranded-handoff case did not, and the real behavior was worse than this plan anticipated.
+
+`reminder_batches.subscription_id` is `UNIQUE`, so a batch left in `handed_off` is invisible to `getPendingReminderRecord` (which selects only `built`/`failed`) while still occupying the subscription's single batch slot. `buildReminderBatch` then attempted a plain `INSERT` and threw `UNIQUE constraint failed`. Because `PullRequestWatcher.tick` catches per-target errors, **every subsequent poll of that PR failed silently**: snapshots and events kept persisting, no reminder was ever rebuilt, and delivery only resumed when a daemon restart ran `recoverFromRestart`. That is precisely the "missed entirely" symptom in issue #23.
+
+The fix ships alongside the tests:
+
+- `buildReminderBatch` treats an in-flight handoff as already-pending and returns `null` instead of violating the constraint (`StateStore.hasInFlightHandoff`).
+- `StateStore.expireStaleHandoffs` returns handoffs abandoned for longer than `PREMIND_REMINDER_HANDOFF_STALE_MS` (5 minutes) to `failed`, which the existing retry path promotes back to `built`.
+- `ReminderHandoffRegistry.getPendingReminder` reclaims on the delivery path; the daemon sweep in `src/daemon/index.ts` reclaims even when no adapter polls again.
+
+Both halves of the fix were verified by removing each one and confirming the regression test fails.
 
 ### Validation
 

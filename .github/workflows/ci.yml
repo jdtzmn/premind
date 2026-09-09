@@ -29,6 +29,21 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run test
 
+  harness:
+    name: Delivery reliability harness
+    runs-on: ubuntu-latest
+    needs: check
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: bun install --frozen-lockfile
+      # Kept separate from the broad unit job so a delivery-reliability
+      # regression is legible on its own. Needs no network or credentials.
+      - run: bun run test:harness
+
   compat:
     name: Compatibility tests
     runs-on: ubuntu-latest
