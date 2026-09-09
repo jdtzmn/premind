@@ -52,6 +52,20 @@ const reminderBatch: ReminderBatch = {
 	],
 };
 
+const secondReminderBatch: ReminderBatch = {
+	...reminderBatch,
+	batchId: "batch-2",
+	reminderText: "<premind-reminder>more PR context</premind-reminder>",
+	events: [
+		{
+			eventId: "event-2",
+			kind: "review.submitted",
+			priority: "medium",
+			summary: "New PR review",
+		},
+	],
+};
+
 type CommandContext = {
 	cwd?: string;
 	sessionManager?: { getSessionFile: () => string | undefined };
@@ -165,12 +179,16 @@ const createClient = (
 	options: {
 		pruneResult?: { sessions: number; reminderBatches: number };
 		pendingBatch?: ReminderBatch | null;
+		pendingBatches?: ReminderBatch[];
 		statusResult?: DebugStatusResponse;
 	} = {},
 ) => {
 	const operations: string[] = [];
 	const registeredSessions: Array<Omit<RegisterSessionPayload, "clientId">> =
 		[];
+	const pendingBatches = [
+		...(options.pendingBatches ?? (options.pendingBatch ? [options.pendingBatch] : [])),
+	];
 	return {
 		operations,
 		registeredSessions,
@@ -240,7 +258,7 @@ const createClient = (
 			},
 			getPendingReminder: async (sessionId: string) => {
 				operations.push(`getPendingReminder:${sessionId}`);
-				return { batch: options.pendingBatch ?? null };
+				return { batch: pendingBatches.shift() ?? null };
 			},
 			ackReminder: async (payload: {
 				batchId: string;
@@ -575,9 +593,11 @@ describe("premind Pi extension", () => {
 		await shutdown({}, ctx);
 	});
 
-	test("turn end auto-delivers pending reminders before agent end", async () => {
+	test("turn end queues all pending reminders before agent end", async () => {
 		const mock = createMockPi();
-		const client = createClient({ pendingBatch: reminderBatch });
+		const client = createClient({
+			pendingBatches: [reminderBatch, secondReminderBatch],
+		});
 		const { ctx, statuses } = createEventContext();
 		createPremindPiExtension({
 			createDaemonClient: () => client.client,
@@ -616,6 +636,10 @@ describe("premind Pi extension", () => {
 			"getPendingReminder:/tmp/session.jsonl",
 			"ackReminder:batch-1:/tmp/session.jsonl:handed_off",
 			"ackReminder:batch-1:/tmp/session.jsonl:confirmed",
+			"getPendingReminder:/tmp/session.jsonl",
+			"ackReminder:batch-2:/tmp/session.jsonl:handed_off",
+			"ackReminder:batch-2:/tmp/session.jsonl:confirmed",
+			"getPendingReminder:/tmp/session.jsonl",
 			"updateSessionState:/tmp/session.jsonl:idle",
 		]);
 		assert.deepEqual(mock.sentMessages, [
@@ -625,6 +649,15 @@ describe("premind Pi extension", () => {
 					content: reminderBatch.reminderText,
 					display: true,
 					details: reminderBatch,
+				},
+				options: { deliverAs: "followUp", triggerTurn: true },
+			},
+			{
+				message: {
+					customType: "premind-reminder",
+					content: secondReminderBatch.reminderText,
+					display: true,
+					details: secondReminderBatch,
 				},
 				options: { deliverAs: "followUp", triggerTurn: true },
 			},
