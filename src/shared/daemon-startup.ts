@@ -142,52 +142,146 @@ export const isSocketReachable = (
     connection.once("error", () => done(false));
   });
 
-export const probeDaemon = (
+export type DaemonProbeResult =
+  | {
+      status: "compatible";
+      protocolVersion: number;
+      operations: string[];
+    }
+  | {
+      status: "incompatible";
+      protocolVersion?: number;
+      operations?: string[];
+      missingOperations: string[];
+      reason: string;
+    }
+  | { status: "unresponsive"; reason: string }
+  | { status: "unreachable" };
+
+export const inspectDaemon = (
   socketPath = PREMIND_SOCKET_PATH,
   requiredOperations: readonly string[] = [],
   timeoutMs = DEFAULT_PROBE_TIMEOUT_MS,
 ) =>
-  new Promise<boolean>((resolve) => {
+  new Promise<DaemonProbeResult>((resolve) => {
     const connection = net.createConnection(socketPath);
     let buffer = "";
-    const done = (compatible: boolean) => {
+    let connected = false;
+    let settled = false;
+    const done = (result: DaemonProbeResult) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
       connection.destroy();
-      resolve(compatible);
+      resolve(result);
     };
-    const timer = setTimeout(() => done(false), timeoutMs);
+    const timer = setTimeout(
+      () =>
+        done(
+          connected
+            ? {
+                status: "unresponsive",
+                reason: "daemon probe timed out",
+              }
+            : { status: "unreachable" },
+        ),
+      timeoutMs,
+    );
     connection.setEncoding("utf8");
-    connection.once("error", () => done(false));
-    connection.once("connect", () =>
+    connection.once("error", () =>
+      done(
+        connected
+          ? {
+              status: "unresponsive",
+              reason: "daemon closed the probe connection",
+            }
+          : { status: "unreachable" },
+      ),
+    );
+    connection.once("close", () => {
+      if (settled) return;
+      done(
+        connected
+          ? {
+              status: "unresponsive",
+              reason: "daemon closed the probe connection",
+            }
+          : { status: "unreachable" },
+      );
+    });
+    connection.once("connect", () => {
+      connected = true;
       connection.write(
         `${JSON.stringify({
           type: "debugStatus",
           protocolVersion: PREMIND_PROTOCOL_VERSION,
           payload: {},
         })}\n`,
-      ),
-    );
+      );
+    });
     connection.on("data", (chunk) => {
       buffer += chunk;
       if (!buffer.includes("\n")) return;
       try {
         const response = JSON.parse(buffer.slice(0, buffer.indexOf("\n")));
+        const protocolVersion = response?.result?.daemon?.protocolVersion;
         const operations = response?.result?.daemon?.operations;
+        if (
+          response?.ok !== true ||
+          response?.protocolVersion !== PREMIND_PROTOCOL_VERSION ||
+          protocolVersion !== PREMIND_PROTOCOL_VERSION ||
+          (operations !== undefined &&
+            (!Array.isArray(operations) ||
+              !operations.every(
+                (operation: unknown) => typeof operation === "string",
+              )))
+        ) {
+          done({
+            status: "incompatible",
+            ...(typeof protocolVersion === "number" ? { protocolVersion } : {}),
+            missingOperations: [...requiredOperations],
+            reason: "daemon protocol response is incompatible",
+          });
+          return;
+        }
+        const typedOperations = Array.isArray(operations)
+          ? (operations as string[])
+          : [];
+        const missingOperations = requiredOperations.filter(
+          (operation) => !typedOperations.includes(operation),
+        );
         done(
-          response?.ok === true &&
-            response?.protocolVersion === PREMIND_PROTOCOL_VERSION &&
-            response?.result?.daemon?.protocolVersion ===
-              PREMIND_PROTOCOL_VERSION &&
-            requiredOperations.every(
-              (operation) =>
-                Array.isArray(operations) && operations.includes(operation),
-            ),
+          missingOperations.length === 0
+            ? {
+                status: "compatible",
+                protocolVersion,
+                operations: typedOperations,
+              }
+            : {
+                status: "incompatible",
+                protocolVersion,
+                operations: typedOperations,
+                missingOperations,
+                reason: `daemon is missing operations: ${missingOperations.join(", ")}`,
+              },
         );
       } catch {
-        done(false);
+        done({
+          status: "incompatible",
+          missingOperations: [...requiredOperations],
+          reason: "daemon returned invalid JSON",
+        });
       }
     });
   });
+
+export const probeDaemon = async (
+  socketPath = PREMIND_SOCKET_PATH,
+  requiredOperations: readonly string[] = [],
+  timeoutMs = DEFAULT_PROBE_TIMEOUT_MS,
+) =>
+  (await inspectDaemon(socketPath, requiredOperations, timeoutMs)).status ===
+  "compatible";
 
 export const waitForDaemon = async (
   socketPath = PREMIND_SOCKET_PATH,

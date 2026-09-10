@@ -12,16 +12,18 @@
     "src",
     "docs",
     "extensions",
-    "plugin-claude"
+    "plugin-claude",
+    "runtime"
   ],
   "scripts": {
-    "build": "node scripts/build-claude-runtime.mjs && tsc -p tsconfig.json",
-    "build:claude-runtime": "node scripts/build-claude-runtime.mjs",
+    "build": "node scripts/build-runtime.mjs && tsc -p tsconfig.json",
+    "build:runtime": "node scripts/build-runtime.mjs",
+    "build:claude-runtime": "node scripts/build-runtime.mjs",
     "check": "tsc -p tsconfig.json --noEmit",
     "daemon": "tsx src/daemon/index.ts",
     "prepack": "node scripts/generate-version.mjs",
     "postpack": "node scripts/generate-version.mjs --restore",
-    "test": "node --import tsx --test src/shared/config-loader.test.ts src/shared/version.test.ts src/daemon/github/client.test.ts src/daemon/github/diff.test.ts src/daemon/github/graphql.test.ts src/daemon/github/http.test.ts src/daemon/github/ratelimit.test.ts src/daemon/ipc/router.test.ts src/daemon/lifecycle/daemon-machine.test.ts src/daemon/lifecycle/daemon-lifecycle-runtime.test.ts src/daemon/persistence/store.test.ts src/daemon/watchers/adaptive-schedule.test.ts src/daemon/watchers/disable-gate.test.ts src/daemon/watchers/integration.test.ts src/daemon/watchers/pr-watcher-registry.test.ts src/daemon/watchers/poll-scheduler.test.ts src/daemon/worktrees/git-resolver.test.ts src/daemon/worktrees/worktree-binding-registry.test.ts src/daemon/worktrees/worktree-binding.test.ts src/daemon/reminders/detail-files.test.ts src/daemon/reminders/reminder-handoff-registry.test.ts src/daemon/reminders/render-reminder.test.ts src/extension/__tests__/index.test.ts src/plugin-opencode/daemon-client.test.ts src/plugin-opencode/__tests__/commands.test.ts src/plugin-opencode/__tests__/compatibility.test.ts src/plugin-opencode/__tests__/config-integration.test.ts src/plugin-opencode/__tests__/cross-session.test.ts src/plugin-opencode/__tests__/debug-state.test.ts src/plugin-opencode/__tests__/idle-delivery.test.ts src/plugin-opencode/__tests__/packaging.test.ts src/plugin-opencode/__tests__/reattach.test.ts src/codex/__tests__/contract-fixture.test.ts src/daemon/logging/logger.test.ts src/test/delivery-reliability.test.ts plugin-claude/test/*.test.mjs src/test/pr-update-delivery.test.ts src/test/delivery-conservation.test.ts",
+    "test": "node --import tsx --test src/shared/config-loader.test.ts src/shared/version.test.ts src/daemon/github/client.test.ts src/daemon/github/diff.test.ts src/daemon/github/graphql.test.ts src/daemon/github/http.test.ts src/daemon/github/ratelimit.test.ts src/daemon/ipc/router.test.ts src/daemon/lifecycle/daemon-machine.test.ts src/daemon/lifecycle/daemon-lifecycle-runtime.test.ts src/daemon/persistence/store.test.ts src/daemon/watchers/adaptive-schedule.test.ts src/daemon/watchers/disable-gate.test.ts src/daemon/watchers/integration.test.ts src/daemon/watchers/pr-watcher-registry.test.ts src/daemon/watchers/poll-scheduler.test.ts src/daemon/worktrees/git-resolver.test.ts src/daemon/worktrees/worktree-binding-registry.test.ts src/daemon/worktrees/worktree-binding.test.ts src/daemon/reminders/detail-files.test.ts src/daemon/reminders/reminder-handoff-registry.test.ts src/daemon/reminders/render-reminder.test.ts src/extension/__tests__/index.test.ts src/client/daemon-client.test.ts src/client/node-runtime.test.ts src/client/daemon-launcher.test.ts src/plugin-opencode/__tests__/commands.test.ts src/plugin-opencode/__tests__/compatibility.test.ts src/plugin-opencode/__tests__/config-integration.test.ts src/plugin-opencode/__tests__/cross-session.test.ts src/plugin-opencode/__tests__/debug-state.test.ts src/plugin-opencode/__tests__/idle-delivery.test.ts src/plugin-opencode/__tests__/packaging.test.ts src/plugin-opencode/__tests__/reattach.test.ts src/codex/__tests__/contract-fixture.test.ts src/daemon/logging/logger.test.ts src/test/delivery-reliability.test.ts plugin-claude/test/*.test.mjs src/test/pr-update-delivery.test.ts src/test/delivery-conservation.test.ts",
     "test:compat": "node --import tsx --test src/plugin-opencode/__tests__/compatibility.test.ts",
     "test:claude": "node --test plugin-claude/test/*.test.mjs",
     "test:claude:live-contract": "node plugin-claude/live/session-id-contract.mjs",
@@ -44,15 +46,19 @@
     "notifications"
   ],
   "license": "MIT",
+  "engines": {
+    "node": ">=22.13.0"
+  },
   "dependencies": {
     "@opencode-ai/plugin": "latest",
     "@opencode-ai/sdk": "latest",
-    "tsx": "^4.20.6",
     "xstate": "^5.32.6",
     "zod": "^3.25.76"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.4.10",
     "@types/node": "^24.6.0",
+    "tsx": "^4.20.6",
     "typescript": "^5.9.3"
   },
   "pi": {

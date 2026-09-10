@@ -7,6 +7,7 @@ import {
   CLAUDE_REQUIRED_DAEMON_OPERATIONS,
   CODEX_REQUIRED_DAEMON_OPERATIONS,
   acquireDaemonStartLock,
+  inspectDaemon,
   probeDaemon,
   releaseDaemonStartLock,
 } from "./daemon-startup.ts";
@@ -57,6 +58,83 @@ test("daemon start lock is shared and releases only its own acquisition", () => 
   const second = acquireDaemonStartLock({ stateDir });
   assert.ok(second);
   releaseDaemonStartLock(second);
+});
+
+test("classifies unreachable, malformed, and capability-incompatible daemons", async () => {
+  const dir = createTempDir();
+  const socketPath = path.join(dir, "premind.sock");
+  assert.deepEqual(await inspectDaemon(socketPath), { status: "unreachable" });
+
+  const incomplete = await listen(socketPath, ["registerCodexSession"]);
+  try {
+    const result = await inspectDaemon(
+      socketPath,
+      CODEX_REQUIRED_DAEMON_OPERATIONS,
+    );
+    assert.equal(result.status, "incompatible");
+    if (result.status === "incompatible") {
+      assert.deepEqual(result.missingOperations, [
+        "claimReminder",
+        "settleReminderClaim",
+        "releaseSessionOwner",
+      ]);
+    }
+  } finally {
+    await new Promise<void>((resolve) => incomplete.close(() => resolve()));
+  }
+
+  const malformed = net.createServer((socket) => {
+    socket.once("data", () => socket.end("not-json\n"));
+  });
+  await new Promise<void>((resolve) => malformed.listen(socketPath, resolve));
+  try {
+    const result = await inspectDaemon(socketPath);
+    assert.equal(result.status, "incompatible");
+    if (result.status === "incompatible") {
+      assert.match(result.reason, /invalid JSON/);
+    }
+  } finally {
+    await new Promise<void>((resolve) => malformed.close(() => resolve()));
+  }
+
+  const silent = net.createServer((socket) => {
+    socket.once("data", () => undefined);
+  });
+  await new Promise<void>((resolve) => silent.listen(socketPath, resolve));
+  try {
+    const result = await inspectDaemon(socketPath, [], 25);
+    assert.equal(result.status, "unresponsive");
+    if (result.status === "unresponsive") {
+      assert.match(result.reason, /timed out/);
+    }
+  } finally {
+    await new Promise<void>((resolve) => silent.close(() => resolve()));
+  }
+
+  const reset = net.createServer((socket) => {
+    socket.once("data", () => socket.destroy());
+  });
+  await new Promise<void>((resolve) => reset.listen(socketPath, resolve));
+  try {
+    const result = await inspectDaemon(socketPath);
+    assert.equal(result.status, "unresponsive");
+    if (result.status === "unresponsive") {
+      assert.match(result.reason, /closed/);
+    }
+  } finally {
+    await new Promise<void>((resolve) => reset.close(() => resolve()));
+  }
+
+  const legacy = await listen(socketPath);
+  try {
+    assert.deepEqual(await inspectDaemon(socketPath), {
+      status: "compatible",
+      protocolVersion: 1,
+      operations: [],
+    });
+  } finally {
+    await new Promise<void>((resolve) => legacy.close(() => resolve()));
+  }
 });
 
 test("Claude probe requires advertised Claude IPC operations while allowing legacy generic probes", async () => {

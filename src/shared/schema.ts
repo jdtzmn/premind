@@ -322,6 +322,7 @@ export type UnregisterSessionPayload = z.infer<
 >;
 export type SessionControlPayload = z.infer<typeof sessionControlPayloadSchema>;
 export type ClaudeSessionPayload = z.infer<typeof claudeSessionPayloadSchema>;
+export type CodexSessionPayload = z.infer<typeof codexSessionPayloadSchema>;
 export type ActivateWorktreePayload = z.infer<
   typeof activateWorktreePayloadSchema
 >;

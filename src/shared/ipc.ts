@@ -208,6 +208,16 @@ export const getPendingReminderResponseSchema = z.object({
 export const claimReminderResponseSchema = z.object({
   claim: reminderClaimSchema.nullable(),
 });
+export const registerSessionResponseSchema = z.object({
+  registered: z.boolean(),
+  created: z.boolean(),
+});
+export const settleReminderClaimResponseSchema = z.object({
+  settled: z.boolean(),
+});
+export const releaseSessionOwnerResponseSchema = z.object({
+  released: z.boolean(),
+});
 export const globalDisabledResponseSchema = z.object({
   disabled: z.boolean(),
 });
