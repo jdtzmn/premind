@@ -2,10 +2,10 @@ import { tool, type Plugin } from "@opencode-ai/plugin"
 import { PREMIND_CLIENT_HEARTBEAT_MS, PREMIND_IDLE_DELIVERY_THRESHOLD_MS } from "../shared/constants.ts"
 import type { PremindConfig } from "../shared/schema.ts"
 import { ensureUserConfigTemplate, getDefaultUserConfigPath, getLegacyUserConfigPath, loadPremindConfig } from "../shared/config-loader.ts"
-import { PremindDaemonClient } from "./daemon-client.ts"
+import { PremindDaemonClient } from "../client/daemon-client.ts"
 import { renderPremindStatus } from "./commands.ts"
 import { getPluginRuntimeStatePath, readPluginInstances, readPluginRuntimeState, registerPluginInstance, writePluginRuntimeState } from "./debug-state.ts"
-import { detectGitContext } from "./git-context.ts"
+import { detectGitContext } from "../client/git-context.ts"
 import { ensureDaemonRunning } from "./daemon-launcher.ts"
 
 const COMMAND_MARKERS = {
@@ -109,6 +109,7 @@ const extractText = (value: unknown): string => {
 }
 
 export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}): Plugin => async (input) => {
+  // SAFETY: OpenCode's Plugin callback supplies this runtime shape, but its published generic omits the concrete fields used here.
   const { directory, worktree, client } = input as unknown as PluginContext
   const root = worktree || directory
   const gitDetector = dependencies.detectGit ?? detectGitContext
@@ -164,7 +165,9 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
     throw error
   }
 
-  const daemon = dependencies.createDaemonClient?.() ?? new PremindDaemonClient()
+  const daemon =
+    dependencies.createDaemonClient?.() ??
+    new PremindDaemonClient({ ensureDaemon: startDaemon })
   const lease = await daemon.registerClient(root, "opencode-plugin")
   writePluginRuntimeState({ phase: "client-registered", root, daemonStarted: true, clientRegistered: true })
   // Tracks reminders currently being handed off via promptAsync. Acts as a
@@ -781,7 +784,7 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
       premind_status: tool({
         description: "Show premind daemon status including active sessions, watchers, and pending reminder counts",
         args: {},
-        async execute(_args, ctx) {
+        async execute(_args, _ctx) {
           const status = await daemon.debugStatus()
           return renderPremindStatus(status)
         },
@@ -906,7 +909,9 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
       if (event.type === "session.created") {
         // Extract parentID from the event payload without a network round-trip.
         // EventSessionCreated.properties.info is the full Session object.
-        const info = (event.properties as Record<string, any>)?.info
+        const info = (event.properties as {
+          info?: { parentID?: unknown }
+        }).info
         const parentID = info?.parentID
         if (typeof parentID === "string" && parentID.length > 0) {
           // This is an ephemeral child session (e.g. a delegated-access classifier).
@@ -933,7 +938,9 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
       }
 
       if (event.type === "session.status") {
-        const statusType = (event.properties as Record<string, any>)?.status?.type
+        const statusType = (event.properties as {
+          status?: { type?: unknown }
+        }).status?.type
         if (statusType === "busy" || statusType === "retry") {
           // Any event we receive scoped to sessionID comes from the opencode
           // client this plugin is attached to — adopt ownership (after we've

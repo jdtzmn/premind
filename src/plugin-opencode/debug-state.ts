@@ -88,7 +88,12 @@ export function registerPluginInstance(root: string) {
       return true  // still alive
     } catch {
       // Attempt to clean up the stale state file.
-      try { fs.rmSync(path.join(PREMIND_STATE_DIR, `plugin-runtime-${e.pid}.json`)) } catch {}
+      try {
+        fs.rmSync(path.join(PREMIND_STATE_DIR, `plugin-runtime-${e.pid}.json`))
+      } catch (error) {
+        // Best effort only: the stale registry entry is still pruned below.
+        void error
+      }
       return false
     }
   })

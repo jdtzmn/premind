@@ -8,8 +8,8 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { PremindDaemonClient } from "../plugin-opencode/daemon-client.ts";
-import { detectGitContext } from "../plugin-opencode/git-context.ts";
+import { PremindDaemonClient } from "../client/daemon-client.ts";
+import { detectGitContext } from "../client/git-context.ts";
 import type {
 	AckReminderPayload,
 	ActivateWorktreePayload,

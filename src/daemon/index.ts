@@ -1,4 +1,5 @@
 import { PREMIND_CLOSED_SESSION_RETENTION_MS, PREMIND_DAEMON_LOG_PATH, PREMIND_IDLE_SHUTDOWN_GRACE_MS, PREMIND_REMINDER_HANDOFF_STALE_MS, PREMIND_SESSION_STALE_MS } from "../shared/constants.ts"
+import { assertSupportedNodeVersion } from "../shared/node-version.ts"
 import { createLogger } from "./logging/logger.ts"
 import { IpcServer } from "./ipc/server.ts"
 import { GitHubClient } from "./github/client.ts"
@@ -9,6 +10,8 @@ import { PollScheduler } from "./watchers/poll-scheduler.ts"
 import { createDisableGatedTick } from "./watchers/disable-gate.ts"
 import { DetailFileWriter } from "./reminders/detail-files.ts"
 import { DaemonLifecycleRuntime } from "./lifecycle/daemon-lifecycle-runtime.ts"
+
+assertSupportedNodeVersion(process.version)
 
 const logger = createLogger("daemon")
 

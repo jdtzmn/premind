@@ -1,4 +1,10 @@
-import type { AckReminderPayload, ReminderBatch } from "../../shared/schema.ts";
+import type {
+  AckReminderPayload,
+  ClaimReminderPayload,
+  ReminderBatch,
+  ReminderClaim,
+  SettleReminderClaimPayload,
+} from "../../shared/schema.ts";
 import type { ReminderBatchRecord, StateStore } from "../persistence/store.ts";
 import {
   createReminderHandoffActor,
@@ -42,6 +48,22 @@ export class ReminderHandoffRegistry {
     }
 
     return this.store.getPendingReminder(sessionId);
+  }
+
+  claimReminder(
+    payload: ClaimReminderPayload,
+    now = Date.now(),
+  ): ReminderClaim | null {
+    return this.store.claimReminder(payload.sessionId, now);
+  }
+
+  settleReminderClaim(
+    payload: SettleReminderClaimPayload,
+    now = Date.now(),
+  ): boolean {
+    const settled = this.store.settleReminderClaim(payload, now);
+    if (settled) this.discard(payload.batchId);
+    return settled;
   }
 
   claimClaudeReminder(

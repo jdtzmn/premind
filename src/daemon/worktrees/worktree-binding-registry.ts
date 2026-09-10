@@ -48,6 +48,7 @@ export class WorktreeBindingRegistry {
 		sessionId: string,
 		requestedPath: string,
 		resolveWorktree: WorktreeResolver,
+		beforePersist?: () => void,
 	): Promise<WorktreeBinding> {
 		const actor = this.getOrCreate(sessionId);
 		actor.send({ type: "ACTIVATE_WORKTREE", path: requestedPath });
@@ -62,10 +63,16 @@ export class WorktreeBindingRegistry {
 		}
 
 		actor.send({ type: "WORKTREE_RESOLVED", worktree });
-		return this.persist(sessionId, () => {
-			const binding = this.bindingFromActor(sessionId, actor);
-			return this.store.activateWorktree(binding);
-		});
+		try {
+			return this.persist(sessionId, () => {
+				beforePersist?.();
+				const binding = this.bindingFromActor(sessionId, actor);
+				return this.store.activateWorktree(binding);
+			});
+		} catch (error) {
+			this.discard(sessionId);
+			throw error;
+		}
 	}
 
 	pullRequestFound(

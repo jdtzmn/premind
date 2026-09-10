@@ -151,8 +151,7 @@ ls /var/folders/*/*/*/T/premind.sock 2>/dev/null
 
 - OpenCode
 - `gh` CLI authenticated with access to your repository
-- OpenCode: `bun` or `tsx` available in PATH (for the development daemon process)
-- Claude Code: Node 22.13+; the installed plugin uses its bundled daemon and does not require Bun or `tsx` at runtime
+- Node 22.13+; installed OpenCode, Pi, and Claude adapters use the bundled daemon and do not require Bun, `tsx`, or repository `node_modules` at runtime
 
 ## Architecture
 
