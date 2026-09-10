@@ -14,6 +14,9 @@ export const PREMIND_STATE_DIR =
         "premind",
       ));
 export const PREMIND_DB_PATH = path.join(PREMIND_STATE_DIR, "premind.db");
+// SQLite's `busy_timeout` is configured from this allowlisted constant rather
+// than interpolated dynamic SQL in StateStore.
+export const PREMIND_DATABASE_BUSY_TIMEOUT_MS = 5_000;
 export const PREMIND_EVENT_DETAIL_DIR = path.join(
   PREMIND_STATE_DIR,
   "event-details",
