@@ -2,151 +2,240 @@
 
 ## 1. Goal
 
-Add a Codex Agent Plugin adapter for premind without duplicating the existing daemon, GitHub polling, worktree binding, subscription, or reminder-queue logic.
+Add a first-class Codex Agent Plugin adapter to premind while retaining the existing daemon as the single owner of GitHub polling, worktree bindings, subscriptions, reminder batching, persistence, and delivery cursors.
 
-The plugin should support Codex CLI and Codex in the ChatGPT desktop app where local plugins and hooks are available. The Codex IDE extension does not currently support plugins.
+Codex support will use **durable turn-boundary delivery**:
 
-The first release must be explicit about a platform limitation: a plugin hook can inject context while Codex is processing a lifecycle event, but it cannot wake an already-idle stock Codex CLI session when a later PR event arrives. Premind can therefore provide reliable **turn-boundary delivery** in a normal Codex plugin. True idle-session revival requires a separate Codex App Server integration or a future Codex ingress API.
+- an update detected during an active turn is injected by the `Stop` hook;
+- an update detected after Codex is already idle remains queued and is injected at the next `UserPromptSubmit` or `SessionStart` boundary;
+- no update is silently discarded if no hook is currently running.
 
-## 2. Recommendation
+This issue does not attempt to wake an idle Codex thread.
 
-Ship Codex support in two layers:
+## 2. Accepted Decisions
 
-1. **Plugin mode (v1):** a portable Agent Plugin containing lifecycle hooks, a small premind skill, and a local stdio MCP bridge. It registers the Codex thread, manages worktree/PR subscriptions, and drains reminders at session and turn boundaries.
-2. **Harness mode (future):** an optional premind-owned Codex App Server client for users who need Pi-equivalent automatic revival. It can call `turn/start` for an idle thread and `turn/steer` for an active turn, but it is a separate integration rather than a capability of plugin hooks.
+1. **Normal plugin experience.** Users install premind as a Codex plugin and launch Codex normally. They do not need to run a premind-controlled App Server.
+2. **No idle-wake claim.** Codex plugin hooks cannot independently create a turn after the stock CLI is already idle. The product copy must say that delivery occurs at the next safe lifecycle boundary.
+3. **Three delivery hooks.** `SessionStart`, `UserPromptSubmit`, and `Stop` are the required hooks. `Interrupt` and `SessionEnd` are best-effort cleanup hooks only.
+4. **No `PostToolUse` hook.** Premind will not spawn a process after every command, edit, or MCP call merely to reduce reminder latency.
+5. **Immediate delivery at `Stop`.** The Codex adapter does not apply Pi/OpenCode's idle delay. Once `Stop` returns, another hook is not guaranteed until the next user action.
+6. **One reminder per continuation chain.** `stop_hook_active` prevents recursively draining another batch after a premind-triggered continuation.
+7. **At-least-once semantics.** A crash may cause a duplicate reminder, but must not silently lose or permanently strand one.
+8. **Portable package format.** Use root `plugin.json`, root `mcp.json`, `hooks/hooks.json`, and `skills/`. Do not make `.codex-plugin/plugin.json` the canonical manifest.
+9. **Explicit controls through MCP.** Keep the current worktree and subscription controls available as MCP tools, but lifecycle delivery must not depend on the model calling them correctly.
+10. **App Server is out of scope.** A remote-TUI/App Server integration may be explored in a separate issue if automatic idle revival is later required.
 
-Do not claim automatic idle wake-up for plugin mode.
+## 3. Codex Capability Mapping
 
-## 3. What Codex Plugins Provide
+| Premind need | Codex mechanism | v1 behavior |
+| --- | --- | --- |
+| Register/reconcile a root thread | `SessionStart` | Ensure daemon, register namespaced session ID, reconcile `cwd`, and recover prior delivery receipts. |
+| Handle startup/resume/clear/compact | `SessionStart.source` | Use idempotent handling for every source supported by the pinned Codex release. |
+| Mark an active turn busy | `UserPromptSubmit` | Reconcile the session, confirm prior delivery, mark busy, then claim and inject one idle-period reminder as additional context. |
+| Detect normal turn completion | `Stop` | Mark idle, confirm a prior continuation, and inject at most one newly claimed batch. |
+| Avoid continuation loops | `Stop.stop_hook_active` | Confirm the prior continuation but do not claim another batch. |
+| Handle interruption | `Interrupt` | Best-effort mark idle within Codex's three-second maximum; never inject a reminder. |
+| Handle eventual teardown | `SessionEnd` | Best-effort close the session; correctness cannot depend on prompt teardown because the event may be delayed. |
+| Activate another worktree | MCP tool | Explicit `premind_activate_worktree`; never infer durable activation from a shell command containing `cd`. |
+| Add/remove PR subscriptions | MCP tools | `premind_subscribe` and `premind_unsubscribe` using the existing IPC operations. |
+| Inspect state | MCP tool | `premind_status`, with current session resolution rules below. |
+| Wake an already-idle stock CLI thread | No plugin mechanism | Leave the reminder durable and deliver at the next start/prompt/stop boundary. |
+| Show a countdown toast | No equivalent | Omit it. |
 
-A current portable plugin uses a root `plugin.json` with the Agent Plugins schema. It may include:
+### Why async hooks are not a wake mechanism
 
-- `skills/` for reusable instructions;
-- `mcp.json` for bundled MCP servers;
-- `hooks/` for Codex lifecycle commands;
-- assets and OpenAI-specific presentation metadata under `extensions.com.openai`.
+Codex can run command hooks asynchronously, but an async result produced while no turn is active waits until the next user turn. Finishing the hook does not create a turn. Async hooks also cannot control the operation that launched them.
 
-Codex still accepts `.codex-plugin/plugin.json` as a compatibility fallback, but new premind packaging should use the portable root manifest.
+### Why App Server is not part of v1
 
-Installed plugin hooks are non-managed hooks. Codex skips them until the user reviews and trusts the current hook definition. Trust is tied to the hook definition hash, so changing a command or configuration requires renewed review.
+Codex App Server exposes `turn/start` and can drive a remote Codex TUI, but it changes the launch and ownership model: premind would become another Codex client responsible for connection lifecycle, thread routing, streamed events, and approvals. That is a valid separate product mode, not a prerequisite for a useful plugin.
 
-Hook commands:
+## 4. Delivery Protocol
 
-- receive one JSON object on stdin;
-- run with the session `cwd`;
-- receive `PLUGIN_ROOT` and writable `PLUGIN_DATA` paths;
-- also receive `CLAUDE_PLUGIN_ROOT` and `CLAUDE_PLUGIN_DATA` compatibility variables;
-- may return structured JSON on stdout;
-- should be dependency-closed and fast.
+The existing `getPendingReminder` followed by `ackReminder("handed_off")` is not sufficient for stateless concurrent hooks. Two hook processes could read the same built batch before either acknowledgement wins, and a process that dies after handoff can leave a batch stuck while the daemon remains alive.
 
-## 4. Lifecycle Capability Mapping
+Add an atomic leased-claim protocol before implementing Codex hooks.
 
-| Premind need | Codex event/mechanism | Support level | Design |
-| --- | --- | ---: | --- |
-| Register a root session | `SessionStart` | Native | Ensure the daemon, register the Codex `session_id`, reconcile the current `cwd`, and return concise setup/context information. |
-| Handle resume/clear/compact | `SessionStart.source` | Native | Make registration idempotent. Treat `startup`, `resume`, and `clear` as full reconciliation; treat `compact` as a lightweight refresh. |
-| Mark a turn busy | `UserPromptSubmit` | Native | Update daemon session state before the prompt proceeds. Also drain an older queued reminder into `additionalContext` so it is not delayed another turn. |
-| Detect normal turn completion | `Stop` | Native | Mark idle, claim one pending batch, and return `decision: "block"` with the reminder text to create one continuation turn. |
-| Prevent reminder loops | `Stop.stop_hook_active` | Native | If true, do not inject another reminder in the same continuation chain; leave additional batches queued. |
-| Handle interrupted work | `Interrupt` | Native, advisory | Best-effort mark the root session idle. Keep execution below the event's three-second maximum. |
-| End/cleanup a session | `SessionEnd` | Native, delayed | Unregister the root session. Codex may emit this on close/archive/delete or after roughly 30 minutes with no connected client; switching threads is not an immediate end signal. |
-| Distinguish subagents | `SubagentStart` / `SubagentStop` | Native | Ignore for v1. Premind subscriptions belong to the root session, and Codex supplies the parent session ID to subagent hooks. |
-| Activate a different worktree | MCP tool or skill-guided helper | Native when explicit | Expose `premind_activate_worktree`. Do not infer a durable worktree change from a shell command containing `cd`. |
-| Subscribe/unsubscribe PRs | MCP tools | Native | Expose `premind_subscribe` and `premind_unsubscribe` over the existing daemon IPC operations. |
-| Show status/prune | MCP tools | Native | Expose `premind_status` and `premind_prune`. |
-| Inject a reminder already queued when a turn stops | `Stop` continuation | Native | Deliver immediately at the boundary; acknowledge the batch only after the hook has produced valid output. |
-| Wake an idle session for a later PR event | None in stock plugin/CLI | **Unsupported** | Queue durably and deliver on the next `SessionStart`, `UserPromptSubmit`, or `Stop`. Offer App Server mode later. |
-| Show Pi/OpenCode-style countdown UI | None | Unsupported | Omit it rather than simulate it with noisy messages. |
+### 4.1 New daemon operations
 
-### Why async hooks do not solve idle wake-up
+Add IPC operations equivalent to:
 
-An async command hook can finish after its triggering operation, but Codex only makes its informational output available at a later safe point. If no turn is active, the result waits for the next user turn; completion does not start a new turn. Async hooks also cannot block or rewrite the operation that launched them.
+```ts
+type ClaimPendingReminderPayload = {
+  sessionId: string
+  boundary: "session_start" | "user_prompt_submit" | "stop"
+}
 
-### Why MCP notifications do not solve it
+type ClaimPendingReminderResult = {
+  batch: ReminderBatch | null
+  handoffId: string | null
+  leaseExpiresAt: number | null
+}
 
-Codex can call MCP tools, but the stock interactive CLI does not currently provide a documented route that converts arbitrary inbound MCP notifications into a new user turn. Open requests in `openai/codex` track both an idle wake primitive and inbound MCP notification delivery.
+type SettleReminderClaimPayload = {
+  sessionId: string
+  batchId: string
+  handoffId: string
+  outcome: "confirmed" | "failed"
+  failureReason?: string
+}
+```
 
-## 5. Reminder Delivery Contract
+`claimPendingReminder` must transactionally:
 
-Plugin mode should use at-least-once durable queueing with at-most-one continuation per turn boundary.
+1. select one built or retryable batch for the session;
+2. transition it to `handed_off`;
+3. assign a unique `handoffId` and lease expiration;
+4. return the claimed batch;
+5. return `null` to every concurrent loser.
 
-### `SessionStart`
+`settleReminderClaim` must reject a stale or mismatched handoff token. Expired handoffs return to a retryable state without requiring a daemon restart.
 
-1. Parse and validate `session_id`, `cwd`, and `source`.
-2. Ensure the premind daemon is running.
-3. Idempotently register or reconcile the root session.
-4. Activate `cwd` as the current worktree for `startup`, `resume`, and `clear`.
-5. Check for an older pending batch.
-6. If one exists, return it as `hookSpecificOutput.additionalContext` and acknowledge successful hook emission.
-7. Fail open on premind errors, returning an optional concise `systemMessage` rather than preventing Codex startup.
+### 4.2 Adapter delivery receipts
 
-### `UserPromptSubmit`
+A hook cannot prove that Codex acted on stdout. Use a receipt under `PLUGIN_DATA` to avoid claiming otherwise:
 
-1. Mark the session busy.
-2. Check for a queued reminder that arrived while Codex was idle.
-3. If found, attach it as `hookSpecificOutput.additionalContext` before the user's prompt reaches the model.
-4. Acknowledge delivery only after valid hook output is ready.
-5. Never block the user's prompt because premind is unavailable.
+```ts
+type CodexDeliveryReceipt = {
+  sessionId: string
+  batchId: string
+  handoffId: string
+  boundary: "session_start" | "user_prompt_submit" | "stop"
+  emittedAt: number
+}
+```
 
-### `Stop`
+Write receipts atomically using temporary-file-plus-rename. On the next applicable lifecycle event:
 
-1. Mark the session idle.
-2. If `stop_hook_active` is true, return an empty success to prevent recursive continuation.
-3. Claim one pending reminder from the daemon.
-4. If none exists, allow the turn to stop immediately.
-5. Mark the batch `handed_off`.
-6. Return `{ "decision": "block", "reason": reminderText }` so Codex creates a continuation prompt.
-7. Mark the batch confirmed when the hook command has successfully emitted the accepted JSON. If process or IPC completion fails, mark it failed for retry.
+- confirm the previous receipt with the daemon;
+- remove it only after confirmation succeeds;
+- allow an expired or failed claim to retry;
+- tolerate duplicate model-visible delivery rather than risking silent loss.
 
-Do not retain the current idle delivery threshold in Codex plugin mode. Once `Stop` returns, no future event is guaranteed before the next user prompt, so waiting for a threshold would strand the reminder. The Codex adapter should deliver any batch already pending at `Stop` immediately. A Codex-specific config option may disable automatic continuation, in which case all batches wait for the next user prompt or manual flush.
+For a `Stop` continuation, the next `Stop` with `stop_hook_active: true` is the strongest available confirmation boundary. For `SessionStart` and `UserPromptSubmit` context injection, confirm at the next observed lifecycle boundary.
 
-### `Interrupt`
+### 4.3 Boundary ordering
 
-Best-effort update the session to idle with a strict timeout. Do not fetch or inject reminders because `Interrupt` output cannot restart the turn.
+#### `SessionStart`
 
-### `SessionEnd`
+1. Validate the Codex input.
+2. Ensure the daemon is running.
+3. Register/reconcile `codex:<session_id>`.
+4. Confirm any prior receipt.
+5. Reconcile the current `cwd` as the active worktree when appropriate for the start source.
+6. Claim at most one batch.
+7. Persist its receipt.
+8. Return it through `hookSpecificOutput.additionalContext`.
+9. Fail open on all premind errors.
 
-Mark the session closed and release any adapter-owned resources. The daemon's durable session and subscription state remains authoritative if the hook does not run or times out.
+#### `UserPromptSubmit`
 
-## 6. Session Identity and MCP Tools
+1. Validate input and reconcile the session in case a long idle period made it stale.
+2. Confirm any prior receipt.
+3. Mark the session busy.
+4. Claim at most one batch queued during idle.
+5. Persist its receipt.
+6. Return it through `hookSpecificOutput.additionalContext` before the user's prompt reaches the model.
+7. Never block the user's prompt because premind is unavailable.
 
-Codex hook payloads include `session_id`; ordinary MCP tool calls do not document an equivalent thread identifier. This must be resolved before implementing the MCP control surface.
+#### `Stop`
 
-Use this safe resolution order:
+1. Validate input and reconcile the session.
+2. Mark the session idle even when `stop_hook_active` is true.
+3. Confirm any prior receipt.
+4. If `stop_hook_active` is true, return empty success.
+5. Otherwise claim at most one batch.
+6. Persist its receipt.
+7. Return `{ "decision": "block", "reason": reminderText }` to create one continuation.
+8. Leave updates arriving after the claim queued for the next boundary.
 
-1. Prefer a documented Codex-provided thread/session identifier if the target version supplies one to plugin MCP processes.
-2. Otherwise have `SessionStart` persist a binding under `PLUGIN_DATA` and inject a concise opaque premind session handle into developer context.
-3. MCP tools accept that handle and validate it against the daemon.
-4. If the handle is omitted, resolve by `cwd` only when exactly one live root session matches.
-5. If multiple sessions share a worktree, return an explicit ambiguity error; never guess.
+#### `Interrupt`
 
-The initial MCP tool surface should match the implemented Pi controls:
+Mark idle on a best-effort basis. Do not claim a batch because Interrupt output cannot restart the turn.
 
-- `premind_status`
-- `premind_activate_worktree({ path })`
-- `premind_subscribe({ prNumber, repo? })`
-- `premind_unsubscribe({ prNumber, repo? })`
-- `premind_prune`
-- `premind_flush` (manual turn-boundary drain; it cannot independently wake an idle thread)
+#### `SessionEnd`
 
-Keep the MCP process a thin stdio-to-Unix-socket bridge. GitHub polling, state, and reminder construction stay in the daemon.
+Close the root session and clean stale local binding files on a best-effort basis. The daemon's stale-session recovery remains necessary because `SessionEnd` can be delayed or skipped.
 
-## 7. Proposed Source and Package Layout
+## 5. Long-Idle Behavior
+
+Premind currently reaps stale sessions and watcher demand is tied to active sessions/subscriptions. Codex has no long-lived lifecycle callback while a stock thread sits idle.
+
+For v1:
+
+1. Preserve pending events and reminder batches durably.
+2. Re-register and reconcile on every `UserPromptSubmit` and `SessionStart`, not only initial startup.
+3. If a long-idle session was reaped, restart branch/PR watching immediately.
+4. Do not promise that a newly discovered update will always be available before the first post-idle prompt. If reconciliation requires a new GitHub poll, delivery may occur at that turn's `Stop` instead.
+5. Document the guarantee as **next available lifecycle boundary after detection**, not necessarily the first user prompt after an arbitrarily long sleep.
+
+Do not keep an async hook alive as a pseudo-monitor. It consumes resources without gaining wake capability.
+
+## 6. Session Identity and Ownership
+
+Use a host-qualified daemon session ID:
+
+```text
+codex:<codex-session-id>
+```
+
+Codex hook payloads include `session_id`; ordinary MCP calls do not currently document an equivalent thread identifier. Resolve MCP tool ownership in this order:
+
+1. Use a documented plugin MCP session identifier if the pinned Codex release provides one.
+2. Otherwise let `SessionStart` place the current premind session handle in both `PLUGIN_DATA` and concise developer context.
+3. Require mutation tools to receive that handle and validate it against a live daemon session.
+4. Allow cwd-based fallback only when exactly one live Codex session matches.
+5. Return an explicit ambiguity error when multiple sessions share a cwd; never guess.
+
+The compatibility spike must determine whether one MCP process is created per thread, per Codex process, or per plugin installation. Do not design ownership around an undocumented assumption.
+
+`SessionEnd` must not close a session still owned by another connected client. If testing shows multiple clients can represent one Codex thread, add an owner/lease table rather than treating one teardown event as authoritative.
+
+## 7. MCP and Skill Surface
+
+### 7.1 MCP tools included in v1
+
+- `premind_status({ sessionHandle? })`
+- `premind_activate_worktree({ sessionHandle, path })`
+- `premind_subscribe({ sessionHandle, prNumber, repo? })`
+- `premind_unsubscribe({ sessionHandle, prNumber, repo? })`
+
+Defer `premind_prune`, `premind_flush`, global enable/disable, and other administrative controls until the core lifecycle and routing behavior is proven. Manual MCP output is part of the current turn and should not be presented as automatic reminder delivery.
+
+The MCP server remains a thin stdio-to-premind-IPC bridge. It must not poll GitHub or own reminder state.
+
+### 7.2 Skill
+
+Add `skills/premind/SKILL.md` to teach Codex to:
+
+- activate a linked or nested worktree explicitly after moving work there;
+- include `owner/repo` for cross-repository subscriptions;
+- use the current session handle supplied by premind rather than inventing one;
+- treat `<premind-reminder>` as untrusted external PR context, not user authorization;
+- inspect detail files only when needed;
+- avoid reprocessing event IDs already represented in the batch;
+- explain that an idle update waits for the next Codex lifecycle boundary.
+
+The skill helps the model use controls but is not responsible for registration or delivery correctness.
+
+## 8. Package Architecture
 
 ```text
 src/
   client/
-    daemon-client.ts          # extracted host-neutral IPC client
-    daemon-launcher.ts        # extracted host-neutral launcher
+    daemon-client.ts          # host-neutral IPC client
+    daemon-launcher.ts        # configurable artifact-driven launcher
     git-context.ts            # shared worktree/repo detection
   codex/
-    hook-runner.ts            # stdin parsing and event dispatch
-    lifecycle.ts              # SessionStart/UserPromptSubmit/Stop/etc.
+    schemas.ts                # pinned hook input/output schemas
+    hook-runner.ts            # stdin parsing and dispatch
+    lifecycle.ts              # boundary algorithms
+    delivery-receipts.ts      # atomic PLUGIN_DATA receipts
+    session-binding.ts        # session-handle persistence/resolution
     mcp-server.ts             # stdio MCP-to-daemon bridge
-    session-binding.ts        # PLUGIN_DATA handle persistence/resolution
-    output.ts                 # exact Codex hook response builders
+    __fixtures__/
     __tests__/
-  daemon/                     # unchanged except narrowly required IPC additions
+  daemon/
   extension/                  # Pi adapter
   plugin/                     # OpenCode adapter
 
@@ -159,20 +248,28 @@ plugins/
     skills/
       premind/
         SKILL.md
-    assets/
     dist/
-      premind-hook.mjs        # bundled, dependency-closed runtime
-      premind-mcp.mjs         # bundled, dependency-closed runtime
+      premind-hook.mjs
+      premind-mcp.mjs
+      premind-daemon.mjs
 
 .agents/plugins/
-  marketplace.json            # repository-local development marketplace
+  marketplace.json            # development marketplace
 ```
 
-Extract only the genuinely host-neutral files from `src/plugin/`; do not rename the entire OpenCode adapter. Update imports in `src/plugin/` and `src/extension/` as a behavior-preserving refactor.
+Extract only genuinely host-neutral modules from `src/plugin/`; do not rename the whole OpenCode adapter.
 
-Bundle the Codex hook and MCP entries into dependency-closed JavaScript. A marketplace installed from Git or a copied local directory cannot assume `tsx`, Bun, a package install step, or repository `node_modules`. Use `node` as the manifest command and `${PLUGIN_ROOT}` only in arguments, because the portable MCP schema does not expand it in `command`.
+The current source launcher depends on TypeScript runners and points at `src/daemon/index.ts`. That cannot be the installed plugin contract. Build dependency-closed JavaScript artifacts for:
 
-## 8. Manifest Sketches
+- the lifecycle hook runner;
+- the stdio MCP bridge;
+- the premind daemon.
+
+Use `node` to execute the bundles. Pin and document the minimum Node version required by `node:sqlite`—currently Node 22.5 or later unless implementation changes remove that requirement.
+
+Keep stdout protocol-only. Send diagnostics to the premind log or stderr where the relevant Codex event permits it.
+
+## 9. Plugin Manifests
 
 ### `plugins/premind/plugin.json`
 
@@ -181,7 +278,7 @@ Bundle the Codex hook and MCP entries into dependency-closed JavaScript. A marke
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "premind",
   "version": "0.2.0",
-  "description": "Keep Codex sessions up to date with pull request changes.",
+  "description": "Bring new pull request context into Codex at safe turn boundaries.",
   "repository": "https://github.com/jdtzmn/premind",
   "license": "MIT",
   "extensions": {
@@ -190,25 +287,26 @@ Bundle the Codex hook and MCP entries into dependency-closed JavaScript. A marke
       "interface": {
         "displayName": "premind",
         "shortDescription": "Bring new PR context into Codex turns",
-        "category": "Developer Tools",
-        "capabilities": ["Read", "Write"]
+        "category": "Developer Tools"
       }
     }
   }
 }
 ```
 
+Do not advertise broad `Read`/`Write` capabilities unless schema validation and the actual implementation require them.
+
 ### `plugins/premind/hooks/hooks.json`
 
 ```json
 {
-  "description": "Synchronize Codex session lifecycle with premind.",
+  "description": "Synchronize Codex lifecycle with premind.",
   "hooks": {
     "SessionStart": [{
       "matcher": "startup|resume|clear|compact",
       "hooks": [{
         "type": "command",
-        "command": "node ${PLUGIN_ROOT}/dist/premind-hook.mjs SessionStart",
+        "command": "node \"${PLUGIN_ROOT}/dist/premind-hook.mjs\" SessionStart",
         "timeout": 10,
         "statusMessage": "Connecting premind"
       }]
@@ -216,14 +314,14 @@ Bundle the Codex hook and MCP entries into dependency-closed JavaScript. A marke
     "UserPromptSubmit": [{
       "hooks": [{
         "type": "command",
-        "command": "node ${PLUGIN_ROOT}/dist/premind-hook.mjs UserPromptSubmit",
-        "timeout": 5
+        "command": "node \"${PLUGIN_ROOT}/dist/premind-hook.mjs\" UserPromptSubmit",
+        "timeout": 10
       }]
     }],
     "Stop": [{
       "hooks": [{
         "type": "command",
-        "command": "node ${PLUGIN_ROOT}/dist/premind-hook.mjs Stop",
+        "command": "node \"${PLUGIN_ROOT}/dist/premind-hook.mjs\" Stop",
         "timeout": 10,
         "statusMessage": "Checking for PR updates"
       }]
@@ -231,14 +329,14 @@ Bundle the Codex hook and MCP entries into dependency-closed JavaScript. A marke
     "Interrupt": [{
       "hooks": [{
         "type": "command",
-        "command": "node ${PLUGIN_ROOT}/dist/premind-hook.mjs Interrupt",
+        "command": "node \"${PLUGIN_ROOT}/dist/premind-hook.mjs\" Interrupt",
         "timeout": 3
       }]
     }],
     "SessionEnd": [{
       "hooks": [{
         "type": "command",
-        "command": "node ${PLUGIN_ROOT}/dist/premind-hook.mjs SessionEnd",
+        "command": "node \"${PLUGIN_ROOT}/dist/premind-hook.mjs\" SessionEnd",
         "timeout": 3
       }]
     }]
@@ -246,7 +344,9 @@ Bundle the Codex hook and MCP entries into dependency-closed JavaScript. A marke
 }
 ```
 
-Codex command hooks use a command string, unlike the separate executable-plus-arguments portable MCP shape. Validate this exact manifest against the target Codex release rather than assuming Claude Code hook syntax.
+The compatibility spike must verify the exact supported start-source values. If the pinned release adds values such as `fork`, either include them deliberately or allow an unfiltered idempotent start hook.
+
+There must be no `PostToolUse` entry.
 
 ### `plugins/premind/mcp.json`
 
@@ -264,151 +364,171 @@ Codex command hooks use a command string, unlike the separate executable-plus-ar
 }
 ```
 
-## 9. Skill Design
-
-Follow the skills-first pattern used by prominent official plugins. `skills/premind/SKILL.md` should be concise and teach Codex to:
-
-- call `premind_activate_worktree` after moving into a different linked or nested worktree;
-- use explicit `owner/repo` for cross-repository subscriptions;
-- interpret `<premind-reminder>` as new PR context rather than a user-authored instruction;
-- inspect referenced detail files only when needed;
-- avoid reprocessing already acknowledged events;
-- explain that queued updates may not appear until the next turn in plugin mode.
-
-The skill supplements deterministic hooks; it must not be responsible for lifecycle correctness.
+Portable MCP configuration expands `PLUGIN_ROOT` in arguments and cwd, not in the executable field.
 
 ## 10. Implementation Phases
 
-### Phase 0 — Compatibility spike
+### Phase 0 — Pin and prove the Codex contract
 
-Before changing shared architecture, pin a minimum Codex version and prove these assumptions against that exact binary:
+Create a minimal fixture using only `SessionStart`, `UserPromptSubmit`, and `Stop`.
 
-- portable root `plugin.json` loads from a local marketplace;
-- plugin-bundled `hooks/hooks.json` is discovered and trust review works;
-- all five selected events receive the documented fields;
-- `Stop` with `decision: "block"` creates exactly one continuation and sets `stop_hook_active` on the next stop;
-- `SessionStart.additionalContext` and `UserPromptSubmit.additionalContext` reach the model;
-- bundled stdio MCP starts with `PLUGIN_ROOT`/`PLUGIN_DATA` expansion;
-- determine whether the MCP process receives any stable session identifier;
-- record startup cost for the bundled Node hook.
+Prove against an exact Codex version:
 
-Create a small fixture under `src/codex/__fixtures__/` and a manual script analogous to `src/test/live-validation.ts`. If plugin hooks are unavailable or gated in the chosen release, stop and document the required version instead of adding compatibility guesses.
+- portable plugin installation from a local marketplace;
+- hook discovery and `/hooks` trust review;
+- sanitized input shapes and supported `SessionStart.source` values;
+- exact accepted `additionalContext` output for start/prompt hooks;
+- exact accepted `Stop` continuation output;
+- `stop_hook_active` behavior on the continuation;
+- `PLUGIN_ROOT` and `PLUGIN_DATA` expansion;
+- MCP process scope and any available session identity;
+- command behavior from paths containing spaces;
+- maximum practical reminder output before Codex spills it to disk;
+- startup latency of the bundled hook.
 
-**Validation:** fixture plugin loads, `/hooks` shows trusted definitions, lifecycle payloads are captured without secrets, and one synthetic Stop continuation succeeds.
+Assert that the fixture contains no `PostToolUse` hook.
 
-### Phase 1 — Extract the host-neutral client runtime
+**Validation:** one trusted fixture session injects context at all three boundaries and produces exactly one Stop continuation.
 
-- Move `PremindDaemonClient`, daemon-launching logic, and reusable git-context helpers from `src/plugin/` into `src/client/`.
+### Phase 1 — Add atomic reminder claims
+
+Change:
+
+- `src/shared/schema.ts`
+- `src/shared/ipc.ts`
+- `src/daemon/ipc/router.ts`
+- `src/daemon/reminders/reminder-handoff-registry.ts`
+- `src/daemon/persistence/store.ts`
+- `src/plugin/daemon-client.ts` or its extracted replacement
+
+Implement:
+
+- atomic claim tokens;
+- handoff leases and live expiry;
+- settle-by-token validation;
+- recovery after hook crash and daemon restart;
+- protocol/capability negotiation for a daemon started by an older Pi/OpenCode package.
+
+Never fall back silently to non-atomic read-plus-ack when Codex delivery requires a claim.
+
+**Validation:** simultaneous claimers, stale settlement, abandoned lease, retry, restart, and mixed-version daemon tests. Commit.
+
+### Phase 2 — Build a packageable host-neutral runtime
+
+- Extract the IPC client, configurable launcher, and reusable git context into `src/client/`.
+- Separate adapter diagnostics from launcher mechanics.
 - Update Pi and OpenCode imports without behavior changes.
-- Keep public package exports backward-compatible.
-- Add import/packaging tests to prevent a Codex entry from pulling in OpenCode or Pi runtime dependencies.
+- Add a deterministic bundler configuration for hook, MCP, and daemon entry points.
+- Add the Node version check and actionable failure message.
+- Define how the global socket handles old/new daemon coexistence.
 
-**Validation:** `bun run check` and the existing unit suite. Commit as a pure refactor.
+**Validation:** existing Pi/OpenCode tests, typecheck, bundle smoke tests, and daemon launch from a directory without repository `node_modules`. Commit.
 
-### Phase 2 — Codex lifecycle adapter
+### Phase 3 — Implement the Codex lifecycle adapter
 
-- Add strict Zod schemas for each used Codex hook payload.
-- Implement one bundled hook runner with event-specific handlers.
-- Implement idempotent `SessionStart`, busy-state `UserPromptSubmit`, guarded `Stop`, best-effort `Interrupt`, and cleanup `SessionEnd`.
-- Add session-handle persistence under `PLUGIN_DATA`.
-- Add a Codex-specific immediate-at-Stop delivery policy.
-- Keep every error fail-open and write diagnostics to premind's log rather than stdout.
+- Add strict schemas generated or transcribed from the pinned Codex contract fixture.
+- Implement the boundary ordering from Section 4.
+- Add namespaced session IDs and atomic delivery receipts under `PLUGIN_DATA`.
+- Keep errors fail-open and output protocol-valid.
+- Reconcile stale sessions on every start/prompt/stop boundary.
+- Ensure Interrupt and SessionEnd stay within their timeout budgets.
 
-**Validation:** unit tests for malformed input, daemon unavailable, source variants, `stop_hook_active`, one-batch continuation, failed acknowledgement, and three-second teardown/interrupt budgets. Commit.
+**Validation:** malformed input, daemon unavailable, every start source, prior-receipt confirmation, concurrent boundaries, `stop_hook_active`, crash before output, crash after output, oversized reminder, and timeout tests. Commit.
 
-### Phase 3 — MCP bridge and skill
+### Phase 4 — Add MCP controls and skill
 
-- Implement a dependency-light stdio MCP bridge over `PremindDaemonClient`.
-- Add safe session resolution and ambiguity errors.
-- Expose status, activate-worktree, subscribe, unsubscribe, prune, and flush.
-- Add `skills/premind/SKILL.md` with the explicit-worktree and turn-boundary guidance.
+- Implement the thin stdio MCP bridge.
+- Resolve session identity using the proven Phase 0 process model.
+- Add explicit ambiguity errors.
+- Expose status, activate-worktree, subscribe, and unsubscribe only.
+- Add the premind skill and its untrusted-context guidance.
 
-**Validation:** protocol tests for tool discovery and each IPC round trip; two sessions in the same cwd must fail ambiguous lookup rather than cross-route. Commit.
+**Validation:** MCP discovery and IPC round-trip tests; two sessions in one cwd must never cross-route. Commit.
 
-### Phase 4 — Portable packaging and marketplace
+### Phase 5 — Package the portable plugin
 
-- Add `plugins/premind/plugin.json`, `mcp.json`, hooks, assets, and bundled runtime artifacts.
-- Add a repository-local `.agents/plugins/marketplace.json` entry for development.
-- Add deterministic build and manifest-schema validation scripts.
-- Add `npm pack --dry-run` assertions for every runtime file.
-- Document hook trust, Node requirements, GitHub authentication, network use, writable paths, and uninstall behavior.
+- Add root plugin, MCP, and hook manifests under `plugins/premind/`.
+- Add the repository-local development marketplace.
+- Produce version-synchronized dependency-closed bundles.
+- Include `plugins/` in `package.json.files` and package tests.
+- Validate manifests against their published schemas.
+- Document hook trust, Node requirements, GitHub authentication, network access, writable directories, cache refresh, and uninstall behavior.
 
-**Validation:** install from the local marketplace into a clean Codex home, start a new session, trust hooks, list MCP tools, and verify no repository `node_modules` dependency. Commit.
+**Validation:** install into a clean Codex home from the local marketplace; no source checkout, Bun, `tsx`, or repository `node_modules` may be required. Commit.
 
-### Phase 5 — End-to-end delivery and hardening
+### Phase 6 — End-to-end acceptance and release docs
 
-Test against a real PR in at least these scenarios:
+Test with real PR events:
 
-1. PR update arrives while a Codex turn is busy and is delivered by `Stop`.
-2. PR update arrives while Codex is idle and is delivered as context on the next user prompt.
-3. A pending reminder exists when a session resumes and is delivered by `SessionStart`.
-4. Stop continuation does not recurse.
-5. Hook process crashes after handoff and the batch retries without loss.
-6. Two Codex sessions share one PR watcher but maintain independent cursors.
-7. Two sessions share one cwd without MCP cross-routing.
-8. Linked-worktree activation changes only the automatic subscription and preserves manual subscriptions.
-9. Daemon restart does not duplicate a confirmed reminder.
-10. Untrusted or changed hooks are visibly skipped and documented recovery uses `/hooks`.
+1. An update detected during a busy turn is claimed once and delivered by `Stop`.
+2. An update detected after Stop remains queued and is injected by the next `UserPromptSubmit`.
+3. A pending update is injected by `SessionStart` on resume.
+4. A premind continuation does not recursively drain another batch.
+5. A crash before output retries without loss.
+6. A crash after output may duplicate but does not lose the batch.
+7. Concurrent boundaries cannot claim the same handoff.
+8. A long-idle reaped session reconciles and delivers no later than the next available boundary after detection.
+9. Two Codex sessions share one PR watcher but keep independent cursors.
+10. Two sessions in one cwd cannot cross-route MCP operations.
+11. Linked-worktree activation preserves manual subscriptions.
+12. An older daemon produces an actionable compatibility result rather than silent fallback.
+13. Hook trust changes are recoverable through `/hooks`.
+14. The manifest contains no `PostToolUse` hook.
+15. Documentation contains no idle-wake promise.
 
-**Validation:** targeted live test plus the complete test suite. Commit.
+**Validation:** targeted live test, complete unit suite, typecheck, manifest validation, and package dry run. Commit.
 
-### Phase 6 — Optional App Server wake mode
+## 11. Acceptance Criteria
 
-Treat this as a separate feature after plugin mode is stable.
-
-- Run or connect to `codex app-server` over a local Unix socket or authenticated WebSocket.
-- Let premind own the client connection and thread subscriptions.
-- On a reminder, call `turn/start` when the target thread is idle or `turn/steer` when policy permits during an active turn.
-- Preserve dedupe, approval, sandbox, and user-visible provenance.
-- Do not attempt to attach to an arbitrary already-running stock TUI unless Codex documents that capability.
-
-This mode can eventually match Pi's `triggerTurn: true` behavior, but it changes how the Codex client is launched and operated.
-
-## 11. Tests and Acceptance Criteria
-
-Codex plugin support is ready when:
+Codex plugin support is complete when:
 
 - the plugin installs from a local/repo marketplace using the portable manifest;
-- Codex discovers and allows the user to trust the bundled hooks;
-- session registration and cleanup are idempotent;
-- startup, prompt submission, normal stop, interruption, and session end cannot crash or block Codex when premind fails;
-- worktree activation and manual subscription tools route to the correct root session;
-- a PR update queued during a busy turn produces one Stop continuation;
-- an update queued while idle appears on the next session/prompt boundary;
-- delivery acknowledgements survive daemon and hook-process failures without silent loss;
-- bundled scripts run from the plugin cache without source checkout dependencies;
-- documentation clearly says plugin mode does not wake an idle stock Codex session;
-- Pi and OpenCode behavior and tests remain unchanged.
+- users can review and trust its hooks;
+- Pi and OpenCode behavior remains unchanged;
+- registration and worktree reconciliation are idempotent;
+- pending updates survive hook, daemon, and Codex restarts;
+- an active-turn update produces at most one Stop continuation;
+- an idle-period update is injected at the next available start or prompt boundary;
+- delivery is at-least-once, with bounded duplicate risk and no silent loss;
+- MCP mutations route to the intended Codex root session or fail as ambiguous;
+- bundled scripts run from Codex's plugin cache with only the documented Node runtime;
+- no `PostToolUse` hook is installed;
+- the docs clearly describe turn-boundary delivery and its long-idle limitation.
 
 ## 12. Popular Plugin Source Review
 
-The implementation should borrow patterns, not code, from these public examples:
-
-| Plugin/source | Observed pattern | Lesson for premind |
+| Plugin/source | What it does | Pattern to reuse or avoid |
 | --- | --- | --- |
-| [OpenAI Figma plugin](https://github.com/openai/plugins/tree/main/plugins/figma) | Skills, HTTP MCP, app/UI metadata, commands, scripts, and a `PostToolUse` parity-check hook. The hook script labels itself a draft example. | Useful full-layout reference, but not proof of production lifecycle reliability. Use plugin-root-anchored commands rather than cwd-relative scripts. |
-| [OpenAI Build Web Apps](https://github.com/openai/plugins/tree/main/plugins/build-web-apps) | Six narrow, composable skills and no observed hooks or MCP server. | Prefer a small skills-first surface; add executable hooks only for deterministic lifecycle needs. |
-| [Superpowers package](https://github.com/openai/plugins/tree/main/plugins/superpowers) / [upstream](https://github.com/obra/superpowers) | Broad workflow behavior implemented primarily as skills; the packaged manifest has an empty hooks object. | Instructions alone can be powerful, but premind's durable registration/delivery still requires hooks. |
-| [Plugin Eval](https://github.com/openai/plugins/tree/main/plugins/plugin-eval) | Skills invoke a deterministic local CLI; includes tests, fixtures, and isolated evaluation workspaces. | Separate deterministic protocol/manifest tests from live Codex benchmarks. |
-| [context-mode](https://github.com/mksglu/context-mode) | Codex-native plugin with `SessionStart`, `PreToolUse`, `PostToolUse`, `PreCompact`, `UserPromptSubmit`, and `Stop` Node hooks plus a bundled MCP server. | Best lifecycle packaging reference. Premind should use a much smaller hook surface and audit every executable path. |
-| [CrowdStrike Foundry skills](https://github.com/CrowdStrike/foundry-skills) | Hub-and-spoke skills with colocated references/scripts; its shell hooks are documented as Claude-specific rather than exposed by its Codex manifest. | Keep host capabilities explicit and do not assume a Claude hook works in Codex merely because event names overlap. |
-| [Qodo skills](https://github.com/qodo-ai/qodo-skills/tree/main/codex-packages/qodo) | Host-specific generated package, focused skills, explicit CLI setup and authentication. | Separate installation, authentication, and subscription; installing premind must not silently grant access or subscribe to PRs. |
-
-At the research snapshot, `openai/plugins` was the authoritative curated collection. Popularity numbers are volatile and should not drive architecture; official inclusion, actual source layout, and lifecycle behavior are more useful signals.
+| [OpenAI Figma](https://github.com/openai/plugins/tree/main/plugins/figma) | Combines focused design skills, HTTP MCP, app/UI metadata, commands, scripts, and a draft `PostToolUse` parity reminder. | Useful full-package layout, but its draft hook is not evidence of production delivery. Avoid cwd-relative commands. |
+| [Build Web Apps](https://github.com/openai/plugins/tree/main/plugins/build-web-apps) | Composes six narrow frontend, React, shadcn, Stripe, and Supabase skills without observed hooks or MCP. | Keep the skill small and focused; executable hooks should exist only for deterministic lifecycle work. |
+| [Superpowers](https://github.com/openai/plugins/tree/main/plugins/superpowers) | Implements planning, TDD, debugging, worktrees, review, and verification primarily through skills. | Skills can shape workflow but cannot replace premind's durable delivery protocol. |
+| [Plugin Eval](https://github.com/openai/plugins/tree/main/plugins/plugin-eval) | Routes skills into a deterministic local CLI with fixtures, tests, and isolated evaluation workspaces. | Separate deterministic contract tests from live Codex validation. |
+| [context-mode](https://github.com/mksglu/context-mode) | Uses Codex-native Node hooks for session, prompt, tool, compaction, and stop events plus a bundled MCP server. | Best lifecycle packaging reference. Premind should deliberately use fewer hooks and no `PostToolUse`. |
+| [CrowdStrike Foundry](https://github.com/CrowdStrike/foundry-skills) | Provides hub-and-spoke development skills with references and scripts; its shell hooks are documented as Claude-specific. | Do not assume Claude compatibility merely because Codex uses similarly named events. |
+| [Qodo](https://github.com/qodo-ai/qodo-skills/tree/main/codex-packages/qodo) | Ships host-specific skills with explicit CLI setup and authentication. | Keep installation, authentication, and subscription as separate user-visible steps. |
 
 ## 13. Risks
 
-- **No native idle ingress:** the principal product gap. Mitigate with honest plugin-mode semantics and a separate App Server track.
-- **Hook feature/version drift:** hooks and plugin loading have changed quickly. Pin and test a minimum Codex version.
-- **Trust friction:** installs do not imply hook trust. Make `/hooks` review part of onboarding and troubleshooting.
-- **Session identity ambiguity:** do not route MCP actions by cwd when multiple sessions match.
-- **Hook timeout and latency:** bundle JavaScript, avoid spawning `tsx`, and keep lifecycle IPC bounded.
-- **Delivery acknowledgement semantics:** hook output acceptance is weaker than proof that the model acted on it. Preserve durable IDs and at-least-once retry behavior.
-- **Plugin cache updates:** Codex loads installed copies from its plugin cache. Document restart/reinstall steps for local development.
-- **Public directory constraints:** premind depends on local scripts and a local daemon. Local/repo marketplaces are the initial distribution target; public submission may require a different hosted architecture or explicit OpenAI support for local MCP execution.
-- **Security:** reminder text and PR content are untrusted external input. Label their provenance and never treat arrival as authorization for side effects.
+- **Hook contract drift:** pin a minimum Codex version and retain the fixture as a compatibility test.
+- **No idle ingress:** state the compromise plainly; queue until the next boundary.
+- **Duplicate delivery:** use leased claims and receipts; prefer duplicate context over silent loss.
+- **Long-idle watcher gaps:** reconcile on every boundary and document that detection may happen during the resumed turn.
+- **Hook trust friction:** make `/hooks` part of onboarding and troubleshooting.
+- **MCP session ambiguity:** require a validated handle or fail when cwd resolution is not unique.
+- **Global daemon version skew:** negotiate capabilities and never use unsafe fallback delivery.
+- **Packaging:** bundle the daemon as well as adapters and test from a clean plugin cache.
+- **Security:** PR content is untrusted external data, not authorization for code changes or other side effects.
 
-## 14. Source References
+## 14. Out of Scope
+
+- Automatic wake-up of an already-idle stock Codex CLI thread.
+- Codex App Server or remote-TUI orchestration.
+- `PostToolUse`, `PreToolUse`, compaction, permission, or subagent hooks.
+- Countdown UI.
+- Public Plugins Directory submission; initial distribution is through local/repo marketplaces.
+- Administrative MCP tools beyond the four controls listed for v1.
+
+## 15. Sources
 
 - [Build plugins](https://developers.openai.com/plugins/build/plugins)
 - [Codex hooks](https://developers.openai.com/codex/hooks)
