@@ -1,6 +1,30 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { getBoundClaudeSessionId, handleHook } from "../bin/lib.mjs";
+import net from "node:net";
+import os from "node:os";
+import path from "node:path";
+import { getBoundClaudeSessionId, handleHook, request } from "../bin/lib.mjs";
+
+test("request rejects when a connected daemon does not respond", async () => {
+  const socket = path.join(os.tmpdir(), `premind-hook-test-${process.pid}-${Date.now()}.sock`);
+  const server = net.createServer(() => {});
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(socket, resolve);
+  });
+
+  try {
+    await assert.rejects(
+      request("debugStatus", {}, socket, 20),
+      /timed out after 20ms/,
+    );
+  } finally {
+    await new Promise((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve())),
+    );
+  }
+});
+
 
 test("Stop atomically claims a reminder and returns additionalContext without confirming it", async () => {
   const calls = [];

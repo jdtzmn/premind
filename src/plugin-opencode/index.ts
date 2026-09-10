@@ -1,7 +1,7 @@
 import { tool, type Plugin } from "@opencode-ai/plugin"
 import { PREMIND_CLIENT_HEARTBEAT_MS, PREMIND_IDLE_DELIVERY_THRESHOLD_MS } from "../shared/constants.ts"
 import type { PremindConfig } from "../shared/schema.ts"
-import { ensureUserConfigTemplate, getDefaultUserConfigPath, loadPremindConfig } from "../shared/config-loader.ts"
+import { ensureUserConfigTemplate, getDefaultUserConfigPath, getLegacyUserConfigPath, loadPremindConfig } from "../shared/config-loader.ts"
 import { PremindDaemonClient } from "./daemon-client.ts"
 import { renderPremindStatus } from "./commands.ts"
 import { getPluginRuntimeStatePath, readPluginInstances, readPluginRuntimeState, registerPluginInstance, writePluginRuntimeState } from "./debug-state.ts"
@@ -131,7 +131,11 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
     const underNodeTestRunner = typeof process.env.NODE_TEST_CONTEXT === "string"
     if (!underNodeTestRunner) {
       const ensureTemplate = dependencies.ensureConfigTemplate ?? (() => {
-        ensureUserConfigTemplate(getDefaultUserConfigPath())
+        ensureUserConfigTemplate(
+          getDefaultUserConfigPath(),
+          undefined,
+          getLegacyUserConfigPath(),
+        )
       })
       ensureTemplate()
     }
