@@ -1,236 +1,184 @@
 # Plan: Add Claude Code support to premind
 
-Add a Claude Code plugin adapter alongside the existing OpenCode adapter, sharing the daemon, IPC layer, and shared modules unchanged.
+## Goal
+
+Ship Claude Code support as a self-contained `plugin-claude/` plugin that reuses Premind's daemon, SQLite state, GitHub polling, and IPC protocol. In v0.2, reminders are delivered at Claude's turn boundary through a `Stop` hook; they are not pushed into an otherwise idle session.
 
 ## Decisions
 
-1. **Delivery model:** Stop-hook injection. The Claude Code adapter intercepts the `Stop` event, queries the daemon for a pending reminder, and returns it as a `decision: "block"` with the reminder text as the reason, causing Claude to continue with the PR context loaded.
-2. **Command surface:** MCP server. The daemon (or a thin proxy) exposes premind's operations (`status`, `pause`, `resume`, `send_now`, `disable`, `enable`, `probe`) as MCP tools. Claude Code calls them as `mcp__premind__status` etc.
-3. **Config location:** Move to `~/.config/premind/premind.jsonc`. Keep a one-release fallback that reads `~/.config/opencode/premind.jsonc` and logs a deprecation notice.
+1. **Plugin root:** `plugin-claude/` is the Claude plugin root. Its manifest is `plugin-claude/.claude-plugin/plugin.json`; hooks, MCP configuration, and all executable files live beneath that directory. No plugin component may reference a file above the plugin root.
+2. **Delivery model:** v0.2 uses Stop-boundary delivery. When Claude finishes a turn and Premind has a pending reminder, the Stop hook injects it as hook feedback and continues the conversation. This is deliberately different from OpenCode's `promptAsync` delivery.
+3. **No idle-timer promise:** `idleDeliveryThresholdMs` remains an OpenCode behavior in v0.2. Claude delivery occurs only at a Stop boundary, so it must not claim to deliver after a wall-clock idle threshold while the session is inactive.
+4. **MCP surface:** The Claude plugin bundles a stdio MCP server for model-callable Premind operations. The plugin provides lifecycle hooks and packaging; MCP provides tools.
+5. **Tool naming:** Name both the plugin and its MCP server `premind`, and expose concise tool suffixes such as `status`, `subscribe`, and `send_now`. Claude Code owns the full plugin-MCP name, currently `mcp__plugin_premind_premind__<tool>`; documentation and tests must use that generated name rather than assuming `mcp__premind__<tool>`.
+6. **Claude session ownership:** Claude hook processes are ephemeral. The daemon, not an in-memory hook process, owns Claude session leases and activity state.
+7. **Config migration:** Prefer `~/.config/premind/premind.jsonc`; read the old OpenCode path only as a one-release fallback. Check both new and legacy files before creating a new template.
 
-## Architecture context
+## External constraints
 
-Premind is already structured for multi-host support:
+The implementation must follow the current official Claude Code documentation:
 
-- **Daemon** (`src/daemon/`) — host-agnostic. Polls GitHub, persists state in SQLite, manages reminder queues, runs an IPC server over a Unix socket at `/tmp/premind.sock`. Nothing in here references OpenCode.
-- **Shared** (`src/shared/`) — IPC schemas, config loader, constants. Host-agnostic.
-- **Plugin** (`src/plugin/`) — the only OpenCode-specific code. Receives lifecycle events, registers slash commands and tools, injects reminders via `client.session.promptAsync(...)`, renders countdowns via `client.tui.showToast(...)`, and spawns the daemon process.
+- [Hooks](https://docs.anthropic.com/en/docs/claude-code/hooks): command hooks receive JSON on stdin; `Stop` can continue a conversation; `stop_hook_active` prevents endless hook-driven loops; Claude ends a turn after eight consecutive blocks.
+- [Plugins](https://docs.anthropic.com/en/docs/claude-code/plugins) and [plugin reference](https://docs.anthropic.com/en/docs/claude-code/plugins-reference): a plugin root contains `.claude-plugin/plugin.json`, `hooks/hooks.json`, `.mcp.json`, and executables. Installed plugin components cannot escape the plugin root.
+- [MCP](https://docs.anthropic.com/en/docs/claude-code/mcp): plugin MCP servers start with the plugin and their tool names receive plugin/server namespaces. A stdio server is not automatically restarted if it exits.
+- [Settings](https://docs.anthropic.com/en/docs/claude-code/settings): project/user/managed settings have distinct precedence and workspace trust can gate project-provided executable configuration.
 
-Only the plugin layer needs a Claude Code counterpart.
+MCP Channels are not part of v0.2. They could support event-driven delivery in a future release, but are a research-preview feature requiring explicit channel enablement.
 
-## Capability mapping
+## Architecture
 
-| Need | OpenCode mechanism | Claude Code mechanism |
-|---|---|---|
-| Detect session start | `event: session.created` | `SessionStart` hook |
-| Detect session end | `event: session.deleted` | `SessionEnd` hook |
-| Detect idle | `event: session.idle` / `session.status` | `Stop` hook (turn end), `Notification` hook (`idle_prompt`) |
-| Detect busy | `event: session.status` (busy) | `UserPromptSubmit` / `PreToolUse` hooks |
-| Register slash commands | `config.command[...]` | `commands/` or `skills/` markdown files |
-| Register model-callable tools | `tool: {...}` | MCP server |
-| Inject mid-session reminders | `client.session.promptAsync(...)` | **No direct equivalent.** Closest: `Stop` hook returning `decision: "block"` with reminder text as `reason`; or `monitors/` stdout fed as notifications |
-| Render countdown UI | `client.tui.showToast(...)` | **No equivalent.** Drop the countdown toast entirely |
-| Spawn daemon | Plugin module runs Node code freely | Hook command spawned per event; or `monitors/monitors.json` for long-running background processes |
+### Existing components that remain canonical
 
-## Key obstacles
+- `src/daemon/`: daemon lifecycle, polling, persistence, reminder batching, and the Unix-socket IPC server.
+- `src/shared/`: schemas, IPC protocol, constants, and configuration.
+- `src/plugin-opencode/`: OpenCode-specific adapter after the rename in Phase 1.
+- `src/extension/`: Pi adapter. It imports plugin runtime helpers today and must be updated by the rename.
 
-### 1. No `promptAsync` equivalent → reminder delivery model changes
+### Claude adapter
 
-In OpenCode, premind interrupts an idle session by pushing a new turn into it via the SDK. Claude Code's hooks return JSON to influence the *current* event; they can't push new user messages into a running CLI session.
+`plugin-claude/` contains the complete installable Claude plugin:
 
-**Solution:** `Stop` hook injection. When the model finishes responding, the hook returns `decision: "block"` with `reason` containing the reminder text. Claude continues with the supplied context. The reminder rides on the *next* model turn boundary rather than being pushed from outside.
+```text
+plugin-claude/
+  .claude-plugin/plugin.json
+  hooks/hooks.json
+  .mcp.json
+  bin/
+    session-start.mjs
+    user-prompt-submit.mjs
+    stop.mjs
+    session-end.mjs
+    mcp-server.mjs
+  package.json
+```
 
-Implication: reminders arrive only at turn boundaries, never mid-think. This is a slightly different UX than OpenCode but aligns with how Claude Code's hooks work.
+The executables must be runnable after plugin installation without assuming `tsx`, a repository-root `node_modules`, or source files outside `plugin-claude/`. Choose and validate one packaging strategy during Phase 0: committed bundled JavaScript, or a supported plugin-local dependency installation mechanism. The resulting launcher must start the matching Premind daemon safely.
 
-### 2. Hooks are stateless shell invocations, not a long-lived module
+Each hook reads the Claude event JSON from stdin and talks to the daemon over the existing IPC socket. Hook scripts have no authoritative in-memory state.
 
-OpenCode loads `src/plugin/index.ts` once per opencode process and keeps state in closure variables (`ownedSessions`, `idleSince`, `deliveryTimers`, etc.). Claude Code spawns a fresh process for *each* hook fire. All that in-memory state has to move into the daemon or to disk.
+### Session and lease model
 
-**Solution:** Each hook is a small script that reads JSON from stdin, connects to the daemon via the existing IPC, translates the event, calls the corresponding daemon method, and returns a decision on stdout. The daemon already owns the canonical state. The plugin's in-memory caches in the OpenCode adapter are mostly performance optimizations (e.g. `knownChildSessions`) and reattach bookkeeping that don't apply (Claude Code doesn't have parent/child sessions in the same way).
+The current protocol ties `sessions.client_id` to `client_leases`; stale lease cleanup can remove a session and its reminder batches. A per-event random `PremindDaemonClient` is therefore not viable.
 
-### 3. Slash commands map differently
+Add a daemon-owned Claude session registration model before implementing the hooks. It must:
 
-In OpenCode, premind registers commands that emit a sentinel marker (`[PREMIND_STATUS]`) into the prompt, and a `chat.message` handler intercepts those markers to execute the command logic in-process.
+- use Claude's `session_id` supplied to hooks as the stable session key;
+- retain a persistent host/client identity or add an explicit daemon-side Claude lease;
+- renew activity/lease state on `SessionStart`, `UserPromptSubmit`, and `Stop`;
+- cleanly close the session on `SessionEnd`; and
+- preserve the existing invariant that only active sessions receive reminders.
 
-**Solution:** Expose premind's operations as an MCP server. The daemon speaks MCP (JSON-RPC over stdio), and Claude Code calls `mcp__premind__status`, `mcp__premind__pause`, etc. The existing `tool: {...}` block in `src/plugin/index.ts` maps almost 1:1 to MCP tool definitions.
+Avoid borrowing the OpenCode client's random UUID and interval heartbeat unchanged: its lifecycle assumes a long-lived plugin process.
 
-## What carries over unchanged
+### Stop-boundary reminder delivery
 
-- All of `src/daemon/`.
-- All of `src/shared/` (with one update to the config loader for the new path with fallback).
-- The daemon launcher logic in `src/plugin/daemon-launcher.ts` — only the path-anchoring base changes (resolves under `${CLAUDE_PLUGIN_ROOT}` instead of opencode's install path); the `findExecutable` walk and runner selection are reusable as-is.
+`Stop` is the only v0.2 delivery point:
+
+1. Parse `session_id` and `stop_hook_active`.
+2. Renew/touch the daemon-owned Claude session lease.
+3. If `stop_hook_active` is true, permit stopping to avoid a loop.
+4. Query `getPendingReminder(session_id)`.
+5. When there is no batch, exit successfully with no output.
+6. When a batch exists, atomically acknowledge it as `handed_off`, then return valid Stop-hook JSON using `hookSpecificOutput.additionalContext` with `hookEventName: "Stop"` and the reminder text.
+7. Confirm the batch only after the handoff response has been successfully prepared; reset it to failed/retryable if preparation fails.
+
+Use `additionalContext`, not `decision: "block"` plus an error-style `reason`, because a Premind reminder is normal contextual feedback rather than a failed-stop policy. The implementation must still test Claude's continuation behavior and the eight-continuation limit.
+
+`UserPromptSubmit` marks the session busy before model execution. `SessionStart` registers or reattaches the session and detects the Git worktree. `SessionEnd` unregisters it. A `Notification` hook is out of scope; `idle_prompt` is not a reliable timer or delivery trigger.
+
+### MCP server
+
+The plugin-bundled stdio MCP server is a thin translation layer over daemon IPC. It must not own watcher or reminder state.
+
+Initial tools:
+
+- `status` — daemon-wide diagnostic status; no session identity required.
+- `disable` / `enable` — daemon-wide polling control.
+- `activate_worktree`, `subscribe`, `unsubscribe`, and `send_now` — session-scoped operations.
+- `probe` — Claude-plugin runtime diagnostics.
+
+Claude Code does not document a session ID automatically delivered to arbitrary MCP tool calls. Phase 0 must prove a safe session-binding design before session-scoped MCP tools ship. Acceptable designs must ensure a tool call cannot act on another Claude session. Do not expose a raw, model-supplied `session_id` without validating it against a registration/token established by the hooks. If no supported binding is available, defer session-scoped tools and ship only daemon-wide read/control tools plus documented Claude commands.
 
 ## Phases
 
-### Phase 1 — Restructure for multi-host (no behavior changes)
+### Phase 0 — Validate Claude runtime and packaging assumptions
 
-- Rename `src/plugin/` → `src/plugin-opencode/`.
-- Update `package.json` `exports`:
-  - `"./opencode"` → `./src/plugin-opencode/index.ts`
-  - `"./claude"` → `./src/plugin-claude/index.ts` (added in phase 3)
-- Update `src/shared/config-loader.ts` to check `~/.config/premind/premind.jsonc` first, then fall back to `~/.config/opencode/premind.jsonc` with a one-time deprecation warning logged to the daemon log.
-- All existing tests stay green; this is a pure restructure.
+Build a throwaway local plugin and record the results before restructuring production code.
 
-**Validation:** `bun run check && bun run test`. Commit.
+- Verify `plugin-claude/` loads with `claude --plugin-dir ./plugin-claude`.
+- Verify hook stdin schema contains `session_id` for `SessionStart`, `UserPromptSubmit`, `Stop`, and `SessionEnd`.
+- Verify `Stop` feedback via `hookSpecificOutput.additionalContext`, including behavior when `stop_hook_active` is true.
+- Verify generated plugin-MCP tool names and determine whether a session-safe MCP binding is available.
+- Verify the packaging/launcher works from an installed-plugin layout, not just the repository checkout.
 
-### Phase 2 — MCP server in the daemon
+**Exit criterion:** record exact Claude Code version, command output, and chosen packaging/session-binding design in this document. Do not begin Phase 2 or Phase 3 without a passing spike.
 
-- Add `src/daemon/mcp/server.ts` that exposes the existing IPC operations as MCP tools over stdio.
-- Reuse `src/daemon/ipc/router.ts` logic — the MCP tool handlers call into the same store/operations.
-- The MCP server runs as a stdio-spawned child process (one per Claude Code session) that proxies to the daemon over the existing Unix socket. State stays canonical in the daemon; the MCP server is a thin translation layer.
-- Tool surface mirrors the existing OpenCode `tool: {...}` block: `premind_status`, `premind_pause`, `premind_resume`, `premind_send_now`, `premind_disable`, `premind_enable`, `premind_probe`.
-- Add tests covering tool registration and the round-trip from MCP call → daemon op → response.
+### Phase 1 — Restructure existing host adapters without behavioral change
 
-**Validation:** New `src/daemon/mcp/server.test.ts`. Commit.
+- Rename `src/plugin/` to `src/plugin-opencode/`.
+- Preserve the package root export (`"."`) as the OpenCode adapter for backwards compatibility; add a named OpenCode export only if useful. Do not publish a TypeScript source export as the Claude plugin interface.
+- Update all imports, test paths, scripts, package metadata, documentation, and the Pi extension imports in `src/extension/`.
+- Update the config loader to accept ordered candidate paths: new Premind `.jsonc`/`.json`, then legacy OpenCode `.jsonc`/`.json`.
+- Emit a one-time deprecation warning only when a legacy path actually supplied configuration.
+- Create a new config template only when none of the candidate files exists.
 
-### Phase 3 — Claude Code plugin adapter
+**Validation:** existing typecheck and test suite; focused config migration tests; package/extension import tests. Commit.
 
-Layout:
+### Phase 2 — Add daemon support for Claude session leases
 
-```
-src/plugin-claude/
-  hooks/
-    session-start.ts        # registers session with daemon
-    user-prompt-submit.ts   # marks session busy, cancels delivery
-    stop.ts                 # the main event: query daemon, deliver if pending
-    session-end.ts          # unregisters session
-    notification.ts         # optional, idle_prompt matcher
-  daemon-launcher.ts        # adapted from src/plugin-opencode/daemon-launcher.ts
-  mcp-launcher.ts           # spawns the daemon's MCP server
-  plugin/                   # the installable plugin directory
-    .claude-plugin/plugin.json
-    hooks/hooks.json
-    .mcp.json
-```
+- Design and implement the daemon-owned Claude registration/lease API selected in Phase 0.
+- Keep OpenCode and Pi client lease behavior unchanged.
+- Add IPC schemas and router operations rather than letting hook scripts write persistence directly.
+- Define retry, reattach, stale-session, daemon-restart, and SessionEnd behavior.
+- Test lease renewal, reminder preservation, handoff recovery, and cleanup under fresh hook-process identities.
 
-Each hook is a small Node/tsx script that reads JSON from stdin, calls the daemon via the existing `PremindDaemonClient`, and writes a decision to stdout.
+**Validation:** focused IPC/persistence/lease tests. Commit.
 
-`Stop` hook logic (the meaningful one):
+### Phase 3 — Build the MCP proxy and safe session binding
 
-1. Read `session_id` from stdin.
-2. Ensure daemon is running (`ensureDaemonRunning`); spawn if not.
-3. Call `daemon.getPendingReminder(sessionID)`.
-4. If no batch → exit 0 (don't block).
-5. If batch and idle threshold elapsed:
-   - Ack as `handed_off`.
-   - Write JSON to stdout: `{ decision: "block", reason: pending.batch.reminderText }`.
-   - Ack as `confirmed`.
-6. If batch but threshold not yet elapsed → exit 0 (next Stop hook fire will retry).
-7. On daemon error → exit 0 silently. Never block on premind failure.
+- Add the stdio MCP implementation selected in Phase 0.
+- Translate MCP tool calls to existing daemon IPC operations; do not duplicate router or store business logic.
+- Add a session-binding capability for session-scoped operations, or defer those operations if it cannot be implemented safely.
+- Define tool input/output schemas and test errors as structured tool failures.
+- Add end-to-end tests for MCP initialization, generated tool registration, and IPC round trips.
 
-`SessionStart` registers the session with the daemon. `SessionEnd` unregisters it. `UserPromptSubmit` marks the session busy and cancels any pending delivery scheduling.
+**Validation:** MCP protocol and daemon round-trip tests, plus a real Claude Code local-plugin smoke test. Commit.
 
-Drop the toast countdown UI entirely (no Claude Code equivalent). The idle delivery threshold still applies — the Stop hook just checks elapsed-idle-time before serving the reminder.
+### Phase 4 — Build Claude hooks and Stop-boundary delivery
 
-**Validation:** New `src/plugin-claude/__tests__/` mirroring the OpenCode compatibility tests. Commit per hook.
+- Implement the four hook executables and `hooks/hooks.json` with exec-form commands rooted at `${CLAUDE_PLUGIN_ROOT}`.
+- Register/reattach on `SessionStart`; mark busy on `UserPromptSubmit`; touch session state on `Stop`; unregister on `SessionEnd`.
+- Implement the handoff/confirmation state machine from the delivery design above.
+- Test no batch, batch handoff, failed handoff, daemon unavailable, session restart, `stop_hook_active`, and repeated Stop events.
+- Ensure Premind failures fail open: no valid reminder must be lost, and daemon/hook errors must not trap the user in a blocking loop.
 
-### Phase 4 — Plugin packaging
+**Validation:** unit/integration tests plus a live Claude Code session against a real PR. Commit.
 
-- Author `.claude-plugin/plugin.json`, `hooks/hooks.json`, `.mcp.json`.
-- `hooks/hooks.json` wires each event to its hook script under `${CLAUDE_PLUGIN_ROOT}/src/plugin-claude/hooks/*.ts` using exec form with `tsx` as the command.
-- `.mcp.json` declares the premind MCP server, pointing at the daemon's MCP entry script.
-- Test loading via `claude --plugin-dir ./src/plugin-claude/plugin`.
+### Phase 5 — Package, document, and release
 
-Example `hooks/hooks.json`:
+- Validate the plugin with `claude plugin validate` and local `--plugin-dir` loading.
+- Add Claude Code installation, generated MCP tool names, requirements, Stop-boundary semantics, and troubleshooting to `README.md`.
+- Document config migration and the one-release legacy fallback.
+- State clearly that v0.2 does not push reminders into an otherwise inactive Claude session and has no countdown toast.
+- Bump the release version after compatibility and upgrade behavior are verified.
 
-```json
-{
-  "description": "Keeps Claude Code sessions up to date with PR changes",
-  "hooks": {
-    "SessionStart": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "tsx",
-            "args": ["${CLAUDE_PLUGIN_ROOT}/src/plugin-claude/hooks/session-start.ts"]
-          }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "tsx",
-            "args": ["${CLAUDE_PLUGIN_ROOT}/src/plugin-claude/hooks/stop.ts"]
-          }
-        ]
-      }
-    ],
-    "UserPromptSubmit": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "tsx",
-            "args": ["${CLAUDE_PLUGIN_ROOT}/src/plugin-claude/hooks/user-prompt-submit.ts"]
-          }
-        ]
-      }
-    ],
-    "SessionEnd": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "tsx",
-            "args": ["${CLAUDE_PLUGIN_ROOT}/src/plugin-claude/hooks/session-end.ts"]
-          }
-        ]
-      }
-    ]
-  }
-}
-```
+**Validation:** documentation read-through; local install, reload, and removal smoke tests. Commit.
 
-Example `.mcp.json`:
+## Non-goals for v0.2
 
-```json
-{
-  "mcpServers": {
-    "premind": {
-      "command": "tsx",
-      "args": ["${CLAUDE_PLUGIN_ROOT}/src/plugin-claude/mcp-launcher.ts"]
-    }
-  }
-}
-```
+- Mid-idle or wall-clock-triggered reminder injection.
+- Countdown toasts or a native Claude TUI equivalent.
+- MCP Channels; reconsider only after their preview status, opt-in requirements, and delivery semantics are stable.
+- Subagent-specific reminder delivery.
+- Codex or Gemini adapters.
 
-**Validation:** Manual smoke test in a Claude Code session against a real GitHub PR. Commit.
+## Risks
 
-### Phase 5 — Docs & release
-
-- Update README with a separate install section for Claude Code (`/plugin install` workflow once published, plus `--plugin-dir` instructions for local development).
-- Document the delivery model difference (Stop-hook injection vs. promptAsync) so users understand *when* reminders arrive in Claude Code.
-- Bump version to `0.2.0`; note the config-path migration with a fallback for one release.
-
-**Validation:** Read-through of README. Commit.
-
-## Estimated effort
-
-| Task | Estimate | Risk |
-|---|---|---|
-| Phase 1 restructure | 0.5 day | Low |
-| Phase 2 MCP server in daemon | 1.5 days | Low |
-| Phase 3 Stop-hook delivery | 2 days | **Medium** — depends on real-world UX of `decision: "block"` reason |
-| Phase 3 SessionStart / SessionEnd / busy hooks | 1 day | Low |
-| Phase 3 daemon-launcher adaptation | 0.5 day | Low |
-| Phase 4 packaging | 0.5 day | Low |
-| Phase 3/4 tests (compat tests mirroring OpenCode) | 2 days | Low |
-| Phase 5 docs | 0.5 day | Low |
-| **Total** | **~8.5 days** | |
-
-## Risks and unknowns
-
-- **Stop-hook UX in practice.** Returning `decision: "block"` with reminder text *should* cause Claude to continue with the loaded context, but the actual model behavior — and whether Claude treats long reminder text as an extension of its turn or as a new user message — needs to be validated in a real session. **Mitigation:** Phase 3 includes a small live-validation script analogous to `src/test/live-validation.ts` to verify the round-trip end-to-end before declaring done.
-- **MCP server lifecycle.** Claude Code spawns one MCP server process per session. All of them should share state through the daemon (which they do via the existing IPC socket), not maintain independent state. The MCP server must be a thin proxy to the daemon — not a peer with its own state.
-- **Daemon launcher path resolution.** `${CLAUDE_PLUGIN_ROOT}` is a different anchor than opencode's `~/.cache/opencode/node_modules/premind/`. The `findExecutable` walk in `src/plugin/daemon-launcher.ts:150` already walks up directories until the filesystem root, so it should work as-is from anywhere; needs a quick sanity check against where Claude Code actually installs plugins.
-- **Hook script startup cost.** Each hook spawns a fresh Node/tsx process. A `Stop` hook firing on every turn end has to be fast (< 200ms). The existing IPC is local socket → SQLite query, which is well under that, but worth measuring once.
-
-## Out of scope for v0.2
-
-- A native Claude Code "TUI toast" replacement — there's no API, so we drop countdowns rather than fake them.
-- Subagent / Task event integration. Claude Code has richer subagent events (`SubagentStart`, `TaskCreated`), but premind doesn't model child sessions anyway.
-- A Codex / Gemini CLI adapter. Same daemon, different adapter; out of scope but cleanly enabled by this restructure.
+| Risk | Mitigation |
+| --- | --- |
+| Stop feedback changes model behavior unexpectedly | Phase 0 and live validation; fail open; use `stop_hook_active`. |
+| Hook process lifetime conflicts with existing client leases | Daemon-owned Claude lease model and dedicated persistence tests. |
+| MCP calls lack trusted Claude session identity | Prove a safe binding in Phase 0; otherwise defer session-scoped MCP tools. |
+| Plugin cache cannot execute repository-relative scripts | Keep executables and their dependencies beneath `plugin-claude/`; test installed layout. |
+| Config migration silently ignores legacy settings | Ordered candidate lookup and migration regression tests. |
+| Claude Code hook/plugin behavior changes by version | Record supported Claude Code version and pin the tested behavior in release notes. |
