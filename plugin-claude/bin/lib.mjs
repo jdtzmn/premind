@@ -21,12 +21,44 @@ export const readHookEvent = async (input = process.stdin) => {
   }
 };
 
-export const request = (type, payload, socket = socketPath) =>
+export const IPC_REQUEST_TIMEOUT_MS = 2_000;
+
+export const request = (
+  type,
+  payload,
+  socket = socketPath,
+  timeoutMs = IPC_REQUEST_TIMEOUT_MS,
+) =>
   new Promise((resolve, reject) => {
     const connection = net.createConnection(socket);
     let buffer = "";
+    let settled = false;
+    let deadline;
+
+    const finish = (error, result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(deadline);
+      if (error) {
+        connection.destroy();
+        reject(error);
+      } else {
+        resolve(result);
+      }
+    };
+
     connection.setEncoding("utf8");
-    connection.once("error", reject);
+    deadline = setTimeout(
+      () => finish(new Error(`premind daemon request timed out after ${timeoutMs}ms`)),
+      timeoutMs,
+    );
+    connection.once("error", (error) => finish(error));
+    connection.once("end", () =>
+      finish(new Error("premind daemon closed the connection without responding")),
+    );
+    connection.once("close", () =>
+      finish(new Error("premind daemon closed the connection without responding")),
+    );
     connection.once("connect", () =>
       connection.write(
         `${JSON.stringify({ type, protocolVersion, payload })}\n`,
@@ -43,13 +75,12 @@ export const request = (type, payload, socket = socketPath) =>
           throw new Error(
             `${response.error?.code ?? "IPC_ERROR"}: ${response.error?.message ?? "request failed"}`,
           );
-        resolve(response.result);
+        finish(undefined, response.result);
       } catch (error) {
-        reject(error);
+        finish(error);
       }
     });
   });
-
 const repositoryFromRemote = (remote) => {
   const match = remote
     .trim()

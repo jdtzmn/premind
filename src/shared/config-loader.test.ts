@@ -272,6 +272,17 @@ describe("ensureUserConfigTemplate", () => {
     assert.equal(cfg.idleDeliveryThresholdMs, PREMIND_IDLE_DELIVERY_THRESHOLD_MS)
   })
 
+  test("does not create a primary template when a legacy config exists", () => {
+    const primary = path.join(scratch, "premind", "premind.jsonc")
+    const legacy = path.join(scratch, "opencode", "premind.jsonc")
+    fs.mkdirSync(path.dirname(legacy), { recursive: true })
+    fs.writeFileSync(legacy, '{"idleDeliveryThresholdMs": 30000}', "utf8")
+
+    assert.equal(ensureUserConfigTemplate(primary, undefined, legacy), "exists")
+    assert.ok(!fs.existsSync(primary))
+  })
+
+
   test("does not overwrite an existing file", () => {
     const target = path.join(scratch, "premind.jsonc")
     fs.writeFileSync(target, '{"idleDeliveryThresholdMs": 30000}', "utf8")
