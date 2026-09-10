@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, test } from "node:test";
 import {
   CLAUDE_REQUIRED_DAEMON_OPERATIONS,
+  CODEX_REQUIRED_DAEMON_OPERATIONS,
   acquireDaemonStartLock,
   probeDaemon,
   releaseDaemonStartLock,
@@ -83,6 +84,41 @@ test("Claude probe requires advertised Claude IPC operations while allowing lega
   try {
     assert.equal(
       await probeDaemon(socketPath, CLAUDE_REQUIRED_DAEMON_OPERATIONS),
+      true,
+    );
+  } finally {
+    await new Promise<void>((resolve) =>
+      compatibleServer.close(() => resolve()),
+    );
+  }
+});
+
+test("Codex probe rejects daemons without atomic claim capabilities", async () => {
+  const dir = createTempDir();
+  const socketPath = path.join(dir, "premind.sock");
+  const incompleteServer = await listen(
+    socketPath,
+    CODEX_REQUIRED_DAEMON_OPERATIONS.slice(0, -1),
+  );
+
+  try {
+    assert.equal(
+      await probeDaemon(socketPath, CODEX_REQUIRED_DAEMON_OPERATIONS),
+      false,
+    );
+  } finally {
+    await new Promise<void>((resolve) =>
+      incompleteServer.close(() => resolve()),
+    );
+  }
+
+  const compatibleServer = await listen(
+    socketPath,
+    CODEX_REQUIRED_DAEMON_OPERATIONS,
+  );
+  try {
+    assert.equal(
+      await probeDaemon(socketPath, CODEX_REQUIRED_DAEMON_OPERATIONS),
       true,
     );
   } finally {
