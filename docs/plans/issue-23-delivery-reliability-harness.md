@@ -135,6 +135,20 @@ The registry is the review gate: a new production adapter must add a driver and 
 
 Run the harness plus the existing OpenCode and Pi suites, then commit.
 
+### Outcome (shipped)
+
+Implemented as planned, with two deviations worth recording.
+
+**Pi delivers at `turn_end`, not `agent_end`.** "Delay Pi reminders until turn end" (#26) moved the trigger and introduced `deliverPendingReminders`, which drains in a loop. The Pi driver drives the real `session_start` / `agent_start` / `agent_end` / `turn_end` sequence, so a future change to the delivery trigger surfaces as a failure here instead of silently narrowing coverage.
+
+**The scenario uses manual subscriptions.** `activateWorktree` deactivates a session's *automatic* subscriptions on every session start, and the Pi driver calls it through the real router. Manual subscriptions survive that, which keeps the fan-out scenario about delivery rather than about re-attachment timing. Re-attachment is already pinned by the restart test in `delivery-reliability.test.ts`.
+
+Assertions per adapter: exactly one delivery, correct target session, delivered text equal to the batch the daemon handed that adapter, `built -> handed_off -> confirmed` against real rows, cursor advanced to the batch high-water mark, and no duplicate on a second idle boundary. Between adapters the suite asserts that confirming one leaves every later adapter's update still pending, and at the end that all adapters converge on the same cursor.
+
+The registry in `src/test/harness/adapters/index.ts` is asserted against an explicit list, so adding a production adapter without a driver fails the suite rather than quietly skipping coverage.
+
+Both mutations were checked rather than assumed: removing Pi's `turn_end` trigger fails with "pi should deliver exactly one reminder", and returning fabricated text fails with "pi delivered text that differs from the batch the daemon handed it".
+
 ## Phase 3: Diagnostics, scripts, and CI
 
 Emit a compact structured diagnostic on failure: scenario phase, watcher request history, stored snapshot identity and head SHA, event sequence and kinds, subscription cursors, batch IDs and handoff states, daemon operation transcript, and captured host deliveries. The goal is that a failure names its boundary — watcher scheduling, persistence, batching, handoff, or host injection — without a debugger.
