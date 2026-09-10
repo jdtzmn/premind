@@ -618,10 +618,17 @@ export class StateStore {
 			const existing = this.getSubscription(input.sessionId, input.repo, input.prNumber);
 			if (existing?.source === "manual" || existing?.state === "active") return existing;
 
+			// A session that already held this subscription is re-attaching (every
+			// `activateWorktree` deactivates automatic subscriptions, so this happens
+			// on every session start). Keep its own cursor: baselining to the current
+			// high-water mark would silently skip events it had queued but not yet
+			// received. Only a genuinely new attachment starts at high water, so stale
+			// history is still not dumped on a first subscribe. This reads and writes
+			// one session's own cursor, so concurrent sessions stay independent.
 			const row = this.db
 				.prepare(`SELECT MAX(seq) AS max_seq FROM pr_events WHERE repo = :repo AND pr_number = :prNumber`)
 				.get({ repo: input.repo, prNumber: input.prNumber }) as { max_seq: number | null } | undefined;
-			const cursor = row?.max_seq ?? 0;
+			const cursor = existing ? existing.lastDeliveredEventSeq : (row?.max_seq ?? 0);
 			const subscriptionId = existing?.subscriptionId ?? randomUUID();
 			this.db
 				.prepare(
@@ -2403,19 +2410,43 @@ export class StateStore {
 		const prWatcherColumns = this.db
 			.prepare(`PRAGMA table_info(pr_watchers)`)
 			.all() as Array<{ name: string }>;
-		const ensurePrWatcherColumn = (name: string, definition: string) => {
-			if (!prWatcherColumns.some((column) => column.name === name)) {
-				this.db.exec(`ALTER TABLE pr_watchers ADD COLUMN ${name} ${definition}`);
-			}
-		};
-		ensurePrWatcherColumn("state", "TEXT NOT NULL DEFAULT 'stopped'");
-		ensurePrWatcherColumn("idle_deadline_at", "INTEGER");
-		ensurePrWatcherColumn("terminal_at", "INTEGER");
-		ensurePrWatcherColumn("next_eligible_poll_at", "INTEGER");
-		ensurePrWatcherColumn("consecutive_failures", "INTEGER NOT NULL DEFAULT 0");
-		ensurePrWatcherColumn("last_failure_at", "INTEGER");
-		ensurePrWatcherColumn("last_failure_message", "TEXT");
-		ensurePrWatcherColumn("rate_limit_reset_at", "INTEGER");
+		// SQLite cannot bind identifiers or type definitions in DDL, so each of these
+		// is a fully static statement rather than an interpolated one. Verbose, but it
+		// removes any possibility of a dynamically constructed ALTER.
+		const hasPrWatcherColumn = (name: string) =>
+			prWatcherColumns.some((column) => column.name === name);
+		if (!hasPrWatcherColumn("state")) {
+			this.db.exec(
+				"ALTER TABLE pr_watchers ADD COLUMN state TEXT NOT NULL DEFAULT 'stopped'",
+			);
+		}
+		if (!hasPrWatcherColumn("idle_deadline_at")) {
+			this.db.exec("ALTER TABLE pr_watchers ADD COLUMN idle_deadline_at INTEGER");
+		}
+		if (!hasPrWatcherColumn("terminal_at")) {
+			this.db.exec("ALTER TABLE pr_watchers ADD COLUMN terminal_at INTEGER");
+		}
+		if (!hasPrWatcherColumn("next_eligible_poll_at")) {
+			this.db.exec(
+				"ALTER TABLE pr_watchers ADD COLUMN next_eligible_poll_at INTEGER",
+			);
+		}
+		if (!hasPrWatcherColumn("consecutive_failures")) {
+			this.db.exec(
+				"ALTER TABLE pr_watchers ADD COLUMN consecutive_failures INTEGER NOT NULL DEFAULT 0",
+			);
+		}
+		if (!hasPrWatcherColumn("last_failure_at")) {
+			this.db.exec("ALTER TABLE pr_watchers ADD COLUMN last_failure_at INTEGER");
+		}
+		if (!hasPrWatcherColumn("last_failure_message")) {
+			this.db.exec("ALTER TABLE pr_watchers ADD COLUMN last_failure_message TEXT");
+		}
+		if (!hasPrWatcherColumn("rate_limit_reset_at")) {
+			this.db.exec(
+				"ALTER TABLE pr_watchers ADD COLUMN rate_limit_reset_at INTEGER",
+			);
+		}
 		this.db.exec(
 			`UPDATE pr_watchers
 			 SET state = 'warming_up'

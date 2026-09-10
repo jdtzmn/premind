@@ -125,6 +125,29 @@ const attachSession = (
   return store.upsertSubscription({ sessionId, repo: REPO, prNumber: PR, source: "manual" }, now)
 }
 
+/** Attaches a session the way branch discovery does: an automatic subscription. */
+const attachAutomatic = (
+  store: StateStore,
+  sessionId: string,
+  branch: string,
+  now = Date.now(),
+) => {
+  store.registerClient(`client-${sessionId}`, { pid: 1, projectRoot: "/tmp" }, now)
+  store.registerSession(
+    {
+      clientId: `client-${sessionId}`,
+      sessionId,
+      repo: REPO,
+      branch,
+      isPrimary: true,
+      status: "active",
+      busyState: "idle",
+    },
+    now,
+  )
+  return store.baselineAutomaticSubscription({ sessionId, repo: REPO, prNumber: PR }, now)
+}
+
 const deliver = (store: StateStore, batchId: string, sessionId: string, now?: number) => {
   assert.equal(store.ackReminder({ batchId, sessionId, state: "handed_off" }, now), true)
   assert.equal(store.ackReminder({ batchId, sessionId, state: "confirmed" }, now), true)
@@ -326,6 +349,104 @@ describe("delivery reliability", () => {
     assert.ok(
       recovered.events.some((candidate) => /comment 1/.test(candidate.summary)),
       `expected the gap comment in ${JSON.stringify(recovered.events.map((candidate) => candidate.summary))}`,
+    )
+
+    store.close()
+  })
+
+  // -------------------------------------------------------------------------
+  // 2b. Session restart. The Pi extension calls activateWorktree on every
+  //     session_start, and that deactivates the session's automatic
+  //     subscriptions. BranchDiscoveryWatcher re-attaches them via
+  //     baselineAutomaticSubscription — which used to reset the cursor to the
+  //     current high-water mark, silently skipping anything queued but not yet
+  //     delivered. That is the "I left a comment, restarted Pi, and never heard
+  //     about it" report on issue #23.
+  // -------------------------------------------------------------------------
+  test("restarting a session keeps events that were queued but not yet delivered", () => {
+    const store = createStore()
+    attachAutomatic(store, "session-restart", "feature/test")
+
+    // Caught up on the first comment.
+    store.insertEvents(REPO, PR, [event(1)])
+    const first = store.buildReminderBatch("session-restart")
+    assert.ok(first)
+    deliver(store, first.batchId, "session-restart")
+
+    // A second comment lands and is still owed to this session.
+    store.insertEvents(REPO, PR, [event(2)])
+    const before = store.getSubscription("session-restart", REPO, PR)!
+    assert.equal(
+      store.listUndeliveredEventsForSubscription(before.subscriptionId).length,
+      1,
+      "the new comment is queued before the restart",
+    )
+
+    // Session start: activate the worktree, then let discovery re-attach.
+    store.activateWorktree({
+      sessionId: "session-restart",
+      root: "/tmp/worktree",
+      gitDir: "/tmp/.git/worktrees/test",
+      repo: REPO,
+      branch: "feature/test",
+      headSha: "abc123",
+      state: "waiting_for_pr",
+    })
+    assert.equal(
+      store.getSubscription("session-restart", REPO, PR)?.state,
+      "unsubscribed",
+      "activateWorktree drops automatic subscriptions, so re-attach must restore them faithfully",
+    )
+    store.baselineAutomaticSubscription({ sessionId: "session-restart", repo: REPO, prNumber: PR })
+
+    const after = store.getSubscription("session-restart", REPO, PR)
+    assert.equal(after?.state, "active", "discovery re-attaches the subscription")
+    assert.equal(
+      after?.lastDeliveredEventSeq,
+      before.lastDeliveredEventSeq,
+      "a re-attach must preserve the session's own cursor, not jump to high water",
+    )
+    assert.equal(
+      store.listUndeliveredEventsForSubscription(after!.subscriptionId).length,
+      1,
+      "the queued comment survives the restart",
+    )
+    const rebuilt = store.buildReminderBatchForSubscription(after!.subscriptionId)
+    assert.ok(rebuilt, "the comment left before the restart is still delivered afterwards")
+    assert.ok(
+      rebuilt.events.some((candidate) => /comment 2/.test(candidate.summary)),
+      `expected the pre-restart comment in ${JSON.stringify(rebuilt.events.map((candidate) => candidate.summary))}`,
+    )
+
+    store.close()
+  })
+
+  test("a first automatic attach still starts at high water instead of dumping history", () => {
+    const store = createStore()
+    store.registerClient("client-fresh", { pid: 1, projectRoot: "/tmp" })
+    store.registerSession({
+      clientId: "client-fresh",
+      sessionId: "session-fresh",
+      repo: REPO,
+      branch: "feature/test",
+      isPrimary: true,
+      status: "active",
+      busyState: "idle",
+    })
+
+    // History exists before this session ever attaches.
+    store.insertEvents(REPO, PR, [event(1), event(2), event(3)])
+    const subscription = store.baselineAutomaticSubscription({
+      sessionId: "session-fresh",
+      repo: REPO,
+      prNumber: PR,
+    })
+
+    assert.ok(subscription.lastDeliveredEventSeq > 0, "a first attach starts at high water")
+    assert.equal(
+      store.listUndeliveredEventsForSubscription(subscription.subscriptionId).length,
+      0,
+      "a brand-new subscription must not replay history it never saw",
     )
 
     store.close()

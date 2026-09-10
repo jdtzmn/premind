@@ -83,6 +83,27 @@ The fix ships alongside the tests:
 
 Both halves of the fix were verified by removing each one and confirming the regression test fails.
 
+### Second defect: restart re-baselines the cursor past queued events
+
+Investigating a report of "no updates after restarting a Pi session" against a real premind database surfaced a separate silent drop, and this one matches the original symptom more directly than the handoff wedge.
+
+The Pi extension calls `activateWorktree` on every `session_start`, and that calls `deactivateAutomaticSubscriptions`. Re-attachment is owned by `BranchDiscoveryWatcher` (note `recordBranchAssociation` only re-baselines *legacy* sessions that have no worktree binding), and re-attachment ran `baselineAutomaticSubscription`, which set `last_delivered_event_seq = MAX(seq)`. So every session start moved the cursor to the current high-water mark, and any event queued but not yet delivered at that moment was skipped permanently:
+
+```text
+undelivered before restart: 1
+after activateWorktree -> sub state: unsubscribed
+after re-attach          -> cursor: 1   (jumped past the queued comment)
+undelivered after re-attach: 0          <- comment lost
+```
+
+The fix keeps a re-attaching session's own cursor and baselines to high water only for a genuinely new subscription, so a first attach still does not dump stale history. It reads and writes a single session's cursor, which matters because several independent sessions routinely share one branch (for example many sessions on `main` in one checkout); anything that shared or adopted cursors across sessions would break that isolation and leak one session's subscriptions into another.
+
+Verified the same way: reverting the cursor change makes the restart test fail.
+
+### Migration coverage
+
+Hardening `migrate()` (replacing an interpolated `ALTER TABLE` with static statements) exposed that the `ADD COLUMN` upgrade path had no test at all — a fresh database receives every column from `CREATE TABLE`, so the whole suite skipped it while real installs depend on it. `store.test.ts` now covers a legacy `pr_watchers` upgrade, including that a legacy watcher which still has subscribers is promoted to `warming_up` rather than being left `stopped` (a stopped watcher is never returned by `pollingTargets`, which would be yet another silent stop).
+
 ### Validation
 
 `node --import tsx --test src/test/delivery-reliability.test.ts`, then commit.
