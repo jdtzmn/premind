@@ -7,7 +7,7 @@ import { getBoundClaudeSessionId, handleHook, request } from "../bin/lib.mjs";
 
 test("request rejects when a connected daemon does not respond", async () => {
   const socket = path.join(os.tmpdir(), `premind-hook-test-${process.pid}-${Date.now()}.sock`);
-  const server = net.createServer(() => {});
+  const server = net.createServer((connection) => connection.resume());
   await new Promise((resolve, reject) => {
     server.once("error", reject);
     server.listen(socket, resolve);
@@ -17,6 +17,30 @@ test("request rejects when a connected daemon does not respond", async () => {
     await assert.rejects(
       request("debugStatus", {}, socket, 20),
       /timed out after 20ms/,
+    );
+  } finally {
+    await new Promise((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve())),
+    );
+  }
+});
+
+test("request deadline is not extended by an incomplete response", async () => {
+  const socket = path.join(os.tmpdir(), `premind-hook-drip-${process.pid}-${Date.now()}.sock`);
+  const server = net.createServer((connection) => {
+    connection.resume();
+    const drip = setInterval(() => connection.write("{"), 5);
+    connection.once("close", () => clearInterval(drip));
+  });
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(socket, resolve);
+  });
+
+  try {
+    await assert.rejects(
+      request("debugStatus", {}, socket, 30),
+      /timed out after 30ms/,
     );
   } finally {
     await new Promise((resolve, reject) =>

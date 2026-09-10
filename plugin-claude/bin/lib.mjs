@@ -33,11 +33,12 @@ export const request = (
     const connection = net.createConnection(socket);
     let buffer = "";
     let settled = false;
+    let deadline;
 
     const finish = (error, result) => {
       if (settled) return;
       settled = true;
-      connection.setTimeout(0);
+      clearTimeout(deadline);
       if (error) {
         connection.destroy();
         reject(error);
@@ -47,11 +48,11 @@ export const request = (
     };
 
     connection.setEncoding("utf8");
-    connection.setTimeout(timeoutMs);
-    connection.once("error", (error) => finish(error));
-    connection.once("timeout", () =>
-      finish(new Error(`premind daemon request timed out after ${timeoutMs}ms`)),
+    deadline = setTimeout(
+      () => finish(new Error(`premind daemon request timed out after ${timeoutMs}ms`)),
+      timeoutMs,
     );
+    connection.once("error", (error) => finish(error));
     connection.once("end", () =>
       finish(new Error("premind daemon closed the connection without responding")),
     );
