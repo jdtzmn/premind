@@ -163,6 +163,40 @@ Keep `.github/workflows/live-validation.yml` optional and non-authoritative: ret
 
 `bun run check`, `bun run test:harness`, and `bun run test`, then commit.
 
+## Phase 4: Conservation under lifecycle churn
+
+Phases 1-3 are scenario tests: each pins one *known* mechanism, written after the bug was understood. They prove a fix holds, but they cannot find the next bug of the same family, because you have to already know which disruption to write. Both defects found while working this issue shared one shape:
+
+> an event was persisted -> a lifecycle disruption happened -> the event was never delivered, and nothing reported it
+
+`src/test/delivery-conservation.test.ts` asserts invariants over a *space* of disruptions instead of one story:
+
+- **P1 delivery conservation.** Every event persisted while a subscription is active is eventually covered by exactly one confirmed batch. The ledger records the `(previousCursor, maxEventSeq]` range each confirmed batch covers, so gaps and overlaps are exact. Counting rendered events would not work, because `renderReminder` condenses them for display.
+- **P2 watch liveness.** Once things settle, an active subscription on a live session is in the poll set and its watcher is not `stopped`. No state that claims to be watched but is not.
+- **P3 no swallowed internal failure.** `PullRequestWatcher.tick` catches per-target errors and logs a warning, so a bug inside a tick is invisible except as a recorded poll failure. The only failure the suite tolerates is the one `watcherBackoff` injects deliberately.
+
+Coverage is every single disruption, every ordered pair, and a handful of adversarial longer runs (77 sequences, about 1.5s).
+
+### The boundary that makes this test meaningful
+
+Only *transparent* disruptions belong in the set - ones that must never lose an event. Intentional history-skipping is deliberately excluded, because folding it in would make the suite fail constantly until someone loosened it into uselessness:
+
+- a first automatic attach baselines at high water, so stale history is not dumped
+- a repo/branch context change resets the cursor and clears batches
+- a brand-new session id is a new consumer, not a restart, and must not inherit another session's cursor - several independent sessions routinely share one branch
+
+### Validated against the known defects
+
+The point of a discovery test is that it finds bugs without being told where to look, so each fix was reverted in turn:
+
+| Reverted fix | Caught as |
+| --- | --- |
+| in-flight handoff guard | `adapterCrashThenQuickPoll: the watcher swallowed an internal failure - UNIQUE constraint failed` |
+| stale-handoff reclamation | `adapterCrashMidHandoff: events persisted but never delivered` |
+| cursor preservation on re-attach | `reactivateWorktree: events persisted but never delivered` |
+
+The first revert initially **escaped**. Every scenario advanced ten minutes before draining, so a stranded handoff was always already reclaimed and the rebuild collision never happened - while production polls every 20s-5m, comfortably inside the five minute window. That gap produced both the `adapterCrashThenQuickPoll` disruption and P3. Worth remembering: a property suite that passes on a known bug is measuring its own blind spot, not the code.
+
 ## Known gaps
 
 Stated explicitly so they are chosen rather than overlooked:
