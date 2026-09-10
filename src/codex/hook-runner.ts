@@ -8,6 +8,7 @@ import { CODEX_REQUIRED_DAEMON_OPERATIONS } from "../shared/daemon-startup.ts";
 import { acquireSessionLifecycleLock } from "./delivery-receipts.ts";
 import { runCodexLifecycle } from "./lifecycle.ts";
 import type { CodexHookEventName } from "./schemas.ts";
+import { ensureCodexSessionBinding } from "./session-binding.ts";
 
 const RUNTIME_DIRECTORY = path.dirname(fileURLToPath(import.meta.url));
 const DAEMON_ENTRY = path.join(RUNTIME_DIRECTORY, "premind-daemon.mjs");
@@ -118,6 +119,10 @@ export const runHookMain = async (
 				return await acquireSessionLifecycleLock(pluginData, sessionId, {
 					...(cleanupBoundary ? { timeoutMs: CLEANUP_LOCK_TIMEOUT_MS } : {}),
 				});
+			},
+			ensureSessionBinding: async (sessionId, cwd) => {
+				if (!pluginData) throw new Error("PLUGIN_DATA is required");
+				return ensureCodexSessionBinding(pluginData, sessionId, cwd);
 			},
 			writeOutput: async (value) => {
 				await flushProtocolOutput(output, value);

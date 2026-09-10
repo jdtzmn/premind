@@ -41,7 +41,7 @@ import type { PrWatcherState } from "../watchers/pr-watcher-machine.ts";
 
 type SessionRow = {
 	session_id: string;
-	host: "opencode" | "pi" | "claude";
+	host: "opencode" | "pi" | "claude" | "codex";
 	host_session_id: string;
 	client_id: string;
 	repo: string;
@@ -1120,7 +1120,7 @@ export class StateStore {
 			)
 			.all() as Array<{
 			session_id: string;
-			host: "opencode" | "pi" | "claude";
+			host: "opencode" | "pi" | "claude" | "codex";
 			repo: string;
 			branch: string;
 			pr_number: number | null;

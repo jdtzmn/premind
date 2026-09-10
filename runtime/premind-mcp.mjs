@@ -14,44 +14,11 @@ var __export = (target, all) => {
 		});
 };
 
-// src/codex/hook-runner.ts
-import fs6 from "node:fs";
-import path7 from "node:path";
+// src/codex/mcp-server.ts
+import fs5 from "node:fs";
+import path6 from "node:path";
+import readline from "node:readline";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
-
-// src/client/daemon-client.ts
-import net2 from "node:net";
-import { randomUUID as randomUUID2 } from "node:crypto";
-
-// src/shared/constants.ts
-import os from "node:os";
-import path from "node:path";
-var PREMIND_PROTOCOL_VERSION = 1;
-var PREMIND_SOCKET_PATH =
-	process.env.PREMIND_SOCKET_PATH ?? path.join(os.tmpdir(), "premind.sock");
-var PREMIND_STATE_DIR =
-	process.env.PREMIND_STATE_DIR ??
-	(process.platform === "darwin"
-		? path.join(os.homedir(), "Library", "Application Support", "premind")
-		: path.join(
-				process.env.XDG_STATE_HOME ??
-					path.join(os.homedir(), ".local", "state"),
-				"premind",
-			));
-var PREMIND_DB_PATH = path.join(PREMIND_STATE_DIR, "premind.db");
-var PREMIND_EVENT_DETAIL_DIR = path.join(PREMIND_STATE_DIR, "event-details");
-var PREMIND_CLIENT_HEARTBEAT_MS = 1e4;
-var PREMIND_CLIENT_LEASE_TTL_MS = 30000;
-var PREMIND_IDLE_SHUTDOWN_GRACE_MS = 15000;
-var PREMIND_IDLE_DELIVERY_THRESHOLD_MS = 60000;
-var PREMIND_SESSION_STALE_MS = 6 * 60 * 60 * 1000;
-var PREMIND_REMINDER_HANDOFF_STALE_MS = 5 * 60 * 1000;
-var PREMIND_PR_WATCHER_IDLE_GRACE_MS = 5 * 60 * 1000;
-var PREMIND_PR_STREAM_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
-var PREMIND_SUBSCRIPTION_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
-var PREMIND_CLOSED_SESSION_RETENTION_MS = 24 * 60 * 60 * 1000;
-var PREMIND_DAEMON_LOG_PATH = path.join(PREMIND_STATE_DIR, "daemon.log");
-var PREMIND_DAEMON_LOG_MAX_BYTES = 10 * 1024 * 1024;
 
 // node_modules/zod/v3/external.js
 var exports_external = {};
@@ -545,8 +512,8 @@ function getErrorMap() {
 }
 // node_modules/zod/v3/helpers/parseUtil.js
 var makeIssue = (params) => {
-	const { data, path: path2, errorMaps, issueData } = params;
-	const fullPath = [...path2, ...(issueData.path || [])];
+	const { data, path, errorMaps, issueData } = params;
+	const fullPath = [...path, ...(issueData.path || [])];
 	const fullIssue = {
 		...issueData,
 		path: fullPath,
@@ -658,11 +625,11 @@ var errorUtil;
 
 // node_modules/zod/v3/types.js
 class ParseInputLazyPath {
-	constructor(parent, value, path2, key) {
+	constructor(parent, value, path, key) {
 		this._cachedPath = [];
 		this.parent = parent;
 		this.data = value;
-		this._path = path2;
+		this._path = path;
 		this._key = key;
 	}
 	get path() {
@@ -4163,6 +4130,40 @@ var coerce = {
 	date: (arg) => ZodDate.create({ ...arg, coerce: true }),
 };
 var NEVER = INVALID;
+// src/client/daemon-client.ts
+import net2 from "node:net";
+import { randomUUID as randomUUID2 } from "node:crypto";
+
+// src/shared/constants.ts
+import os from "node:os";
+import path from "node:path";
+var PREMIND_PROTOCOL_VERSION = 1;
+var PREMIND_SOCKET_PATH =
+	process.env.PREMIND_SOCKET_PATH ?? path.join(os.tmpdir(), "premind.sock");
+var PREMIND_STATE_DIR =
+	process.env.PREMIND_STATE_DIR ??
+	(process.platform === "darwin"
+		? path.join(os.homedir(), "Library", "Application Support", "premind")
+		: path.join(
+				process.env.XDG_STATE_HOME ??
+					path.join(os.homedir(), ".local", "state"),
+				"premind",
+			));
+var PREMIND_DB_PATH = path.join(PREMIND_STATE_DIR, "premind.db");
+var PREMIND_EVENT_DETAIL_DIR = path.join(PREMIND_STATE_DIR, "event-details");
+var PREMIND_CLIENT_HEARTBEAT_MS = 1e4;
+var PREMIND_CLIENT_LEASE_TTL_MS = 30000;
+var PREMIND_IDLE_SHUTDOWN_GRACE_MS = 15000;
+var PREMIND_IDLE_DELIVERY_THRESHOLD_MS = 60000;
+var PREMIND_SESSION_STALE_MS = 6 * 60 * 60 * 1000;
+var PREMIND_REMINDER_HANDOFF_STALE_MS = 5 * 60 * 1000;
+var PREMIND_PR_WATCHER_IDLE_GRACE_MS = 5 * 60 * 1000;
+var PREMIND_PR_STREAM_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+var PREMIND_SUBSCRIPTION_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+var PREMIND_CLOSED_SESSION_RETENTION_MS = 24 * 60 * 60 * 1000;
+var PREMIND_DAEMON_LOG_PATH = path.join(PREMIND_STATE_DIR, "daemon.log");
+var PREMIND_DAEMON_LOG_MAX_BYTES = 10 * 1024 * 1024;
+
 // src/shared/schema.ts
 var clientMetadataSchema = exports_external
 	.object({
@@ -5447,749 +5448,9 @@ class PremindDaemonClient {
 	}
 }
 
-// src/client/git-context.ts
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-var execFileAsync = promisify(execFile);
-var run = async (command, args, cwd) => {
-	const { stdout } = await execFileAsync(command, args, { cwd });
-	return stdout.trim();
-};
-var parseRepoFromRemote = (remote) => {
-	const trimmed = remote.trim();
-	const sshMatch = trimmed.match(/[:/]([^/:]+\/[^/]+?)(?:\.git)?$/);
-	if (sshMatch?.[1]) return sshMatch[1];
-	return;
-};
-async function detectGitContext(cwd) {
-	const branch = await run(
-		"git",
-		["rev-parse", "--abbrev-ref", "HEAD"],
-		cwd,
-	).catch(() => "unknown");
-	const repoFromGh = await run(
-		"gh",
-		["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"],
-		cwd,
-	).catch(() => {
-		return;
-	});
-	if (repoFromGh) {
-		return { repo: repoFromGh, branch };
-	}
-	const remote = await run("git", ["remote", "get-url", "origin"], cwd).catch(
-		() => {
-			return;
-		},
-	);
-	const parsedRepo = remote ? parseRepoFromRemote(remote) : undefined;
-	return {
-		repo: parsedRepo ?? cwd,
-		branch,
-	};
-}
-
-// src/codex/delivery-receipts.ts
-import { randomUUID as randomUUID3 } from "node:crypto";
+// src/codex/session-binding.ts
 import fs4 from "node:fs";
 import path5 from "node:path";
-import { DatabaseSync } from "node:sqlite";
-
-// src/codex/schemas.ts
-var permissionModeSchema = exports_external.enum([
-	"default",
-	"acceptEdits",
-	"plan",
-	"dontAsk",
-	"bypassPermissions",
-]);
-var commonShape = {
-	session_id: exports_external.string().min(1),
-	transcript_path: exports_external.string().nullable(),
-	cwd: exports_external.string().min(1),
-	model: exports_external.string().min(1),
-};
-var interactiveShape = {
-	...commonShape,
-	permission_mode: permissionModeSchema,
-};
-var sessionStartInputSchema = exports_external
-	.object({
-		...interactiveShape,
-		hook_event_name: exports_external.literal("SessionStart"),
-		source: exports_external.enum(["startup", "resume", "clear", "compact"]),
-	})
-	.strict();
-var userPromptSubmitInputSchema = exports_external
-	.object({
-		...interactiveShape,
-		hook_event_name: exports_external.literal("UserPromptSubmit"),
-		turn_id: exports_external.string().min(1),
-		prompt: exports_external.string(),
-	})
-	.strict();
-var stopInputSchema = exports_external
-	.object({
-		...interactiveShape,
-		hook_event_name: exports_external.literal("Stop"),
-		turn_id: exports_external.string().min(1),
-		stop_hook_active: exports_external.boolean(),
-		last_assistant_message: exports_external.string().nullable(),
-	})
-	.strict();
-var interruptInputSchema = exports_external
-	.object({
-		...interactiveShape,
-		hook_event_name: exports_external.literal("Interrupt"),
-		turn_id: exports_external.string().min(1),
-	})
-	.strict();
-var sessionEndInputSchema = exports_external
-	.object({
-		...commonShape,
-		hook_event_name: exports_external.literal("SessionEnd"),
-		reason: exports_external.literal("other"),
-	})
-	.strict();
-var codexHookInputSchema = exports_external.discriminatedUnion(
-	"hook_event_name",
-	[
-		sessionStartInputSchema,
-		userPromptSubmitInputSchema,
-		stopInputSchema,
-		interruptInputSchema,
-		sessionEndInputSchema,
-	],
-);
-var noOpOutputSchema = exports_external.object({}).strict();
-var sessionStartOutputSchema = exports_external
-	.object({
-		hookSpecificOutput: exports_external
-			.object({
-				hookEventName: exports_external.literal("SessionStart"),
-				additionalContext: exports_external.string().min(1),
-			})
-			.strict(),
-	})
-	.strict();
-var userPromptSubmitOutputSchema = exports_external
-	.object({
-		hookSpecificOutput: exports_external
-			.object({
-				hookEventName: exports_external.literal("UserPromptSubmit"),
-				additionalContext: exports_external.string().min(1),
-			})
-			.strict(),
-	})
-	.strict();
-var stopOutputSchema = exports_external
-	.object({
-		decision: exports_external.literal("block"),
-		reason: exports_external.string().min(1),
-	})
-	.strict();
-var codexDeliveryReceiptSchema = exports_external
-	.object({
-		sessionId: exports_external.string().startsWith("codex:"),
-		batchId: exports_external.string().min(1),
-		handoffId: exports_external.string().uuid(),
-		boundary: exports_external.enum([
-			"session_start",
-			"user_prompt_submit",
-			"stop",
-		]),
-		sourceTurnId: exports_external.string().min(1).optional(),
-		outputFlushedAt: exports_external.number().int().nonnegative(),
-		leaseExpiresAt: exports_external.number().int().positive(),
-	})
-	.strict();
-
-// src/codex/delivery-receipts.ts
-var DEFAULT_LOCK_TIMEOUT_MS = 2000;
-var DEFAULT_LOCK_STALE_MS = 1e4;
-var DEFAULT_RETRY_MS = 20;
-var delay = async (milliseconds) => {
-	await new Promise((resolve) => setTimeout(resolve, milliseconds));
-};
-var defaultIsProcessAlive = (pid) => {
-	try {
-		process.kill(pid, 0);
-		return true;
-	} catch (error) {
-		return error.code === "EPERM";
-	}
-};
-var encodeSessionId = (sessionId) =>
-	Buffer.from(sessionId, "utf8").toString("base64url");
-var receiptFileName = (handoffId) => `${handoffId}.json`;
-var lockOwner = (database, sessionId) =>
-	database
-		.prepare(`SELECT pid, token, created_at AS createdAt
-       FROM codex_lifecycle_locks
-       WHERE session_id = ?`)
-		.get(sessionId);
-var ownsLock = (database, sessionId, token) =>
-	lockOwner(database, sessionId)?.token === token;
-var acquireSessionLifecycleLock = async (
-	pluginData,
-	sessionId,
-	options = {},
-) => {
-	const now = options.now ?? Date.now;
-	const isProcessAlive2 = options.isProcessAlive ?? defaultIsProcessAlive;
-	const timeoutMs = options.timeoutMs ?? DEFAULT_LOCK_TIMEOUT_MS;
-	const staleMs = options.staleMs ?? DEFAULT_LOCK_STALE_MS;
-	const retryMs = options.retryMs ?? DEFAULT_RETRY_MS;
-	const stateDirectory = path5.join(pluginData, "premind", "v1");
-	const sessionDirectory = path5.join(
-		stateDirectory,
-		"sessions",
-		encodeSessionId(sessionId),
-	);
-	const receiptsDirectory = path5.join(sessionDirectory, "receipts");
-	fs4.mkdirSync(receiptsDirectory, { recursive: true });
-	const databasePath = path5.join(
-		stateDirectory,
-		"codex-lifecycle-locks.sqlite",
-	);
-	const database = new DatabaseSync(databasePath);
-	fs4.chmodSync(databasePath, 384);
-	database.exec("PRAGMA busy_timeout = 50");
-	database.exec(`
-    CREATE TABLE IF NOT EXISTS codex_lifecycle_locks (
-      session_id TEXT PRIMARY KEY,
-      token TEXT NOT NULL UNIQUE,
-      pid INTEGER NOT NULL,
-      created_at INTEGER NOT NULL
-    )
-  `);
-	const token = randomUUID3();
-	const deadline = now() + timeoutMs;
-	let acquired = false;
-	try {
-		while (!acquired) {
-			const createdAt = now();
-			const inserted = database
-				.prepare(`INSERT INTO codex_lifecycle_locks (session_id, token, pid, created_at)
-           VALUES (?, ?, ?, ?)
-           ON CONFLICT(session_id) DO NOTHING`)
-				.run(sessionId, token, process.pid, createdAt);
-			if (Number(inserted.changes) === 1) {
-				acquired = true;
-				break;
-			}
-			const owner = lockOwner(database, sessionId);
-			const reclaimable =
-				owner !== undefined &&
-				createdAt - owner.createdAt >= staleMs &&
-				!isProcessAlive2(owner.pid);
-			if (reclaimable) {
-				const reclaimed = database
-					.prepare(`UPDATE codex_lifecycle_locks
-             SET token = ?, pid = ?, created_at = ?
-             WHERE session_id = ? AND token = ?`)
-					.run(token, process.pid, createdAt, sessionId, owner.token);
-				if (Number(reclaimed.changes) === 1) {
-					acquired = true;
-					break;
-				}
-			}
-			if (now() >= deadline) {
-				throw new Error(
-					`Timed out acquiring Codex lifecycle lock for ${sessionId}`,
-				);
-			}
-			await delay(retryMs);
-		}
-	} catch (error) {
-		database.close();
-		throw error;
-	}
-	let released = false;
-	const release = () => {
-		if (released) return;
-		try {
-			database
-				.prepare(`DELETE FROM codex_lifecycle_locks
-           WHERE session_id = ? AND token = ?`)
-				.run(sessionId, token);
-		} finally {
-			released = true;
-			database.close();
-		}
-	};
-	return {
-		listReceipts() {
-			const receipts = [];
-			for (const fileName of fs4.readdirSync(receiptsDirectory).sort()) {
-				if (!fileName.endsWith(".json")) continue;
-				try {
-					const receipt = codexDeliveryReceiptSchema.parse(
-						JSON.parse(
-							fs4.readFileSync(path5.join(receiptsDirectory, fileName), "utf8"),
-						),
-					);
-					if (receipt.sessionId === sessionId) receipts.push(receipt);
-				} catch {}
-			}
-			return receipts;
-		},
-		compareAndDeleteReceipt(receipt) {
-			const receiptPath = path5.join(
-				receiptsDirectory,
-				receiptFileName(receipt.handoffId),
-			);
-			try {
-				const current = codexDeliveryReceiptSchema.parse(
-					JSON.parse(fs4.readFileSync(receiptPath, "utf8")),
-				);
-				if (
-					current.sessionId !== sessionId ||
-					current.sessionId !== receipt.sessionId ||
-					current.batchId !== receipt.batchId ||
-					current.handoffId !== receipt.handoffId
-				) {
-					return false;
-				}
-				fs4.unlinkSync(receiptPath);
-				return true;
-			} catch {
-				return false;
-			}
-		},
-		publishReceipt(receipt) {
-			if (released) throw new Error("Codex lifecycle lock is already released");
-			const parsed = codexDeliveryReceiptSchema.parse(receipt);
-			if (parsed.sessionId !== sessionId) {
-				throw new Error(
-					"Codex receipt session does not own this lifecycle lock",
-				);
-			}
-			const receiptPath = path5.join(
-				receiptsDirectory,
-				receiptFileName(parsed.handoffId),
-			);
-			const temporaryPath = `${receiptPath}.${token}.tmp`;
-			let transactionOpen = false;
-			let lockReleased = false;
-			try {
-				database.exec("BEGIN IMMEDIATE");
-				transactionOpen = true;
-				if (!ownsLock(database, sessionId, token)) {
-					throw new Error(
-						"Codex lifecycle lock ownership changed before receipt publication",
-					);
-				}
-				const descriptor = fs4.openSync(temporaryPath, "wx", 384);
-				try {
-					fs4.writeFileSync(
-						descriptor,
-						`${JSON.stringify(parsed)}
-`,
-						"utf8",
-					);
-					fs4.fsyncSync(descriptor);
-				} finally {
-					fs4.closeSync(descriptor);
-				}
-				const deleted = database
-					.prepare(`DELETE FROM codex_lifecycle_locks
-             WHERE session_id = ? AND token = ?`)
-					.run(sessionId, token);
-				if (Number(deleted.changes) !== 1) {
-					throw new Error(
-						"Codex lifecycle lock ownership changed during receipt publication",
-					);
-				}
-				database.exec("COMMIT");
-				transactionOpen = false;
-				lockReleased = true;
-				released = true;
-				database.close();
-				fs4.renameSync(temporaryPath, receiptPath);
-			} catch (error) {
-				if (transactionOpen) {
-					try {
-						database.exec("ROLLBACK");
-					} catch {}
-				}
-				if (!lockReleased) {
-					try {
-						fs4.rmSync(temporaryPath, { force: true });
-					} catch {}
-				}
-				throw error;
-			}
-		},
-		release,
-	};
-};
-
-// src/codex/lifecycle.ts
-var MAX_REMINDER_BYTES = 240 * 1024;
-var TRUNCATION_SUFFIX = `
-
-[premind truncated this reminder to fit the Codex hook response]`;
-var namespacedSessionId = (hostSessionId) => `codex:${hostSessionId}`;
-var sessionHandleContext = (
-	sessionHandle,
-) => `Premind session handle: ${sessionHandle}
-Use this exact handle for premind MCP tools in this session; never invent or reuse another session's handle.`;
-var withSessionHandleContext = (reminder, sessionHandle) =>
-	sessionHandle
-		? `${sessionHandleContext(sessionHandle)}
-
-${reminder}`
-		: reminder;
-var withTimeout = async (operation, timeoutMs) => {
-	let timer;
-	try {
-		return await Promise.race([
-			operation,
-			new Promise((_resolve, reject) => {
-				timer = setTimeout(
-					() => reject(new Error(`Codex cleanup exceeded ${timeoutMs}ms`)),
-					timeoutMs,
-				);
-			}),
-		]);
-	} finally {
-		if (timer) clearTimeout(timer);
-	}
-};
-var truncateReminder = (text) => {
-	if (Buffer.byteLength(text, "utf8") <= MAX_REMINDER_BYTES) return text;
-	const budget =
-		MAX_REMINDER_BYTES - Buffer.byteLength(TRUNCATION_SUFFIX, "utf8");
-	const prefix = Buffer.from(text, "utf8")
-		.subarray(0, budget)
-		.toString("utf8")
-		.replace(/\uFFFD$/u, "");
-	return `${prefix}${TRUNCATION_SUFFIX}`;
-};
-var parseInput = (eventName, rawInput) => {
-	switch (eventName) {
-		case "SessionStart":
-			return sessionStartInputSchema.parse(rawInput);
-		case "UserPromptSubmit":
-			return userPromptSubmitInputSchema.parse(rawInput);
-		case "Stop":
-			return stopInputSchema.parse(rawInput);
-		case "Interrupt":
-			return interruptInputSchema.parse(rawInput);
-		case "SessionEnd":
-			return sessionEndInputSchema.parse(rawInput);
-	}
-};
-var contextOutput = (eventName, reminderText) => {
-	const output = {
-		hookSpecificOutput: {
-			hookEventName: eventName,
-			additionalContext: truncateReminder(reminderText),
-		},
-	};
-	return eventName === "SessionStart"
-		? sessionStartOutputSchema.parse(output)
-		: userPromptSubmitOutputSchema.parse(output);
-};
-var stopOutput = (reminderText) =>
-	stopOutputSchema.parse({
-		decision: "block",
-		reason: truncateReminder(reminderText),
-	});
-var isReceiptProven = (receipt, input) => {
-	switch (receipt.boundary) {
-		case "session_start":
-			return input.stop_hook_active === false;
-		case "user_prompt_submit":
-			return receipt.sourceTurnId === input.turn_id;
-		case "stop":
-			return input.stop_hook_active === true;
-	}
-};
-var reconcileReceipts = async (client, lock, now, stopInput) => {
-	for (const receipt of lock.listReceipts()) {
-		const expired = receipt.leaseExpiresAt <= now;
-		const proven = stopInput ? isReceiptProven(receipt, stopInput) : false;
-		if (!expired && !proven) continue;
-		try {
-			const result = await client.settleReminderClaim({
-				sessionId: receipt.sessionId,
-				batchId: receipt.batchId,
-				handoffId: receipt.handoffId,
-				outcome: proven ? "confirmed" : "failed",
-				...(proven ? {} : { failureReason: "Codex delivery receipt expired" }),
-			});
-			if (result.settled || expired) lock.compareAndDeleteReceipt(receipt);
-		} catch {}
-	}
-};
-var registerSession = async (
-	dependencies,
-	input,
-	busyState,
-	reactivate = true,
-) => {
-	const git = await dependencies.detectGitContext(input.cwd);
-	const sessionId = namespacedSessionId(input.session_id);
-	const registration = await dependencies.client.registerCodexSession({
-		sessionId,
-		hostSessionId: input.session_id,
-		repo: git.repo,
-		branch: git.branch,
-		busyState,
-		reactivate,
-	});
-	return { sessionId, active: registration.active ?? true };
-};
-var emitClaim = async (
-	dependencies,
-	lock,
-	eventName,
-	claim,
-	now,
-	expectedSessionId,
-	onFlushed,
-	sessionHandle,
-	sourceTurnId,
-) => {
-	if (claim.batch.sessionId !== expectedSessionId) {
-		throw new Error("Codex reminder claim belongs to another session");
-	}
-	const reminderText =
-		eventName === "SessionStart"
-			? withSessionHandleContext(claim.batch.reminderText, sessionHandle)
-			: claim.batch.reminderText;
-	const output =
-		eventName === "Stop"
-			? stopOutput(claim.batch.reminderText)
-			: contextOutput(eventName, reminderText);
-	const serialized = `${JSON.stringify(output)}
-`;
-	await dependencies.writeOutput(serialized);
-	onFlushed();
-	lock.publishReceipt({
-		sessionId: claim.batch.sessionId,
-		batchId: claim.batch.batchId,
-		handoffId: claim.handoffId,
-		boundary:
-			eventName === "SessionStart"
-				? "session_start"
-				: eventName === "UserPromptSubmit"
-					? "user_prompt_submit"
-					: "stop",
-		...(sourceTurnId ? { sourceTurnId } : {}),
-		outputFlushedAt: now(),
-		leaseExpiresAt: claim.leaseExpiresAt,
-	});
-};
-var writeNoOp = async (dependencies) => {
-	await dependencies.writeOutput(`${JSON.stringify(noOpOutputSchema.parse({}))}
-`);
-};
-var handleDeliveryBoundary = async (dependencies, input) => {
-	const eventName = input.hook_event_name;
-	if (eventName === "SessionStart") await dependencies.ensureDaemon();
-	const initialBusyState = eventName === "UserPromptSubmit" ? "busy" : "idle";
-	const { sessionId, active: sessionActive } = await registerSession(
-		dependencies,
-		input,
-		initialBusyState,
-		eventName === "UserPromptSubmit" ||
-			(eventName === "SessionStart" && input.source !== "compact"),
-	);
-	const lock = await dependencies.acquireLock(sessionId, false);
-	let outputAttempted = false;
-	let outputFlushed = false;
-	let activeClaim;
-	let sessionHandle;
-	try {
-		if (dependencies.ensureSessionBinding) {
-			sessionHandle = (
-				await dependencies.ensureSessionBinding(sessionId, input.cwd)
-			).sessionHandle;
-		}
-		await reconcileReceipts(
-			dependencies.client,
-			lock,
-			(dependencies.now ?? Date.now)(),
-			eventName === "Stop" ? input : undefined,
-		);
-		if (eventName === "SessionStart") {
-			if (input.source !== "compact") {
-				await dependencies.client.activateWorktree({
-					sessionId,
-					path: input.cwd,
-				});
-			}
-			if (input.source === "compact") {
-				lock.release();
-				outputAttempted = true;
-				await writeNoOp(dependencies);
-				outputFlushed = true;
-				return;
-			}
-		} else if (eventName === "UserPromptSubmit") {
-			await dependencies.client.updateSessionState({
-				sessionId,
-				busyState: "busy",
-			});
-		} else {
-			if (!sessionActive) {
-				lock.release();
-				outputAttempted = true;
-				await writeNoOp(dependencies);
-				outputFlushed = true;
-				return;
-			}
-			await dependencies.client.updateSessionState({
-				sessionId,
-				busyState: "idle",
-			});
-			if (input.stop_hook_active) {
-				lock.release();
-				outputAttempted = true;
-				await writeNoOp(dependencies);
-				outputFlushed = true;
-				return;
-			}
-		}
-		const boundary =
-			eventName === "SessionStart"
-				? "session_start"
-				: eventName === "UserPromptSubmit"
-					? "user_prompt_submit"
-					: "stop";
-		activeClaim =
-			(await dependencies.client.claimReminder({ sessionId, boundary }))
-				.claim ?? undefined;
-		if (!activeClaim) {
-			lock.release();
-			outputAttempted = true;
-			if (eventName === "SessionStart" && sessionHandle) {
-				await dependencies.writeOutput(`${JSON.stringify(contextOutput("SessionStart", sessionHandleContext(sessionHandle)))}
-`);
-			} else {
-				await writeNoOp(dependencies);
-			}
-			outputFlushed = true;
-			return;
-		}
-		outputAttempted = true;
-		await emitClaim(
-			dependencies,
-			lock,
-			eventName,
-			activeClaim,
-			dependencies.now ?? Date.now,
-			sessionId,
-			() => {
-				outputFlushed = true;
-			},
-			sessionHandle,
-			eventName === "UserPromptSubmit" ? input.turn_id : undefined,
-		);
-		return;
-	} catch {
-		dependencies.reportError?.(eventName, "delivery");
-		if (!outputFlushed && activeClaim) {
-			try {
-				await dependencies.client.settleReminderClaim({
-					sessionId,
-					batchId: activeClaim.batch.batchId,
-					handoffId: activeClaim.handoffId,
-					outcome: "failed",
-					failureReason: "Codex hook failed before output flush",
-				});
-			} catch {
-				dependencies.reportError?.(eventName, "claim settlement");
-			}
-		}
-		if (!outputAttempted) {
-			outputAttempted = true;
-			try {
-				await writeNoOp(dependencies);
-				outputFlushed = true;
-			} catch {
-				dependencies.reportError?.(eventName, "protocol flush");
-			}
-		}
-	} finally {
-		if (!outputFlushed) {
-			try {
-				lock.release();
-			} catch {
-				dependencies.reportError?.(eventName, "lifecycle lock release");
-			}
-		}
-	}
-};
-var handleCleanupBoundary = async (dependencies, input) => {
-	const sessionId = namespacedSessionId(input.session_id);
-	const client = dependencies.cleanupClient ?? dependencies.client;
-	let lock;
-	let outputAttempted = false;
-	try {
-		lock = await dependencies.acquireLock(sessionId, true);
-		const operation =
-			input.hook_event_name === "Interrupt"
-				? client.updateSessionState({ sessionId, busyState: "idle" })
-				: client.releaseSessionOwner(sessionId);
-		await withTimeout(operation, dependencies.cleanupTimeoutMs ?? 750);
-		if (input.hook_event_name === "Interrupt") {
-			outputAttempted = true;
-			await writeNoOp(dependencies);
-		}
-	} catch {
-		dependencies.reportError?.(input.hook_event_name, "cleanup");
-		if (input.hook_event_name === "Interrupt" && !outputAttempted) {
-			await writeNoOp(dependencies).catch(() => {
-				return;
-			});
-		}
-	} finally {
-		try {
-			lock?.release();
-		} catch {}
-	}
-};
-var runCodexLifecycle = async (eventName, rawInput, dependencies) => {
-	let input;
-	try {
-		input = parseInput(eventName, rawInput);
-		codexHookInputSchema.parse(input);
-	} catch {
-		dependencies.reportError?.(eventName, "validation");
-		if (eventName !== "SessionEnd") {
-			await writeNoOp(dependencies).catch(() => {
-				return;
-			});
-		}
-		return;
-	}
-	try {
-		if (
-			input.hook_event_name === "Interrupt" ||
-			input.hook_event_name === "SessionEnd"
-		) {
-			await handleCleanupBoundary(dependencies, input);
-			return;
-		}
-		await handleDeliveryBoundary(dependencies, input);
-	} catch {
-		dependencies.reportError?.(eventName, "setup");
-		if (eventName !== "SessionEnd") {
-			await writeNoOp(dependencies).catch(() => {
-				return;
-			});
-		}
-	}
-};
-
-// src/codex/session-binding.ts
-import { randomUUID as randomUUID4 } from "node:crypto";
-import fs5 from "node:fs";
-import path6 from "node:path";
 var sessionBindingSchema = exports_external
 	.object({
 		sessionHandle: exports_external.string().uuid(),
@@ -6198,12 +5459,10 @@ var sessionBindingSchema = exports_external
 		updatedAt: exports_external.number().int().nonnegative(),
 	})
 	.strict();
-var encodeSessionId2 = (sessionId) =>
-	Buffer.from(sessionId, "utf8").toString("base64url");
 var canonicalizeCwd = (cwd) => {
-	const resolved = path6.resolve(cwd);
+	const resolved = path5.resolve(cwd);
 	try {
-		return fs5.realpathSync.native(resolved);
+		return fs4.realpathSync.native(resolved);
 	} catch (error) {
 		const code = error.code;
 		if (code === "ENOENT" || code === "ENOTDIR") return resolved;
@@ -6211,182 +5470,380 @@ var canonicalizeCwd = (cwd) => {
 	}
 };
 var bindingsDirectory = (pluginData) =>
-	path6.join(pluginData, "premind", "v1", "session-bindings");
-var bindingPath = (pluginData, sessionId) =>
-	path6.join(
-		bindingsDirectory(pluginData),
-		`${encodeSessionId2(sessionId)}.json`,
-	);
+	path5.join(pluginData, "premind", "v1", "session-bindings");
 var readBinding = (filePath) => {
 	try {
 		return sessionBindingSchema.parse(
-			JSON.parse(fs5.readFileSync(filePath, "utf8")),
+			JSON.parse(fs4.readFileSync(filePath, "utf8")),
 		);
 	} catch {
 		return;
 	}
 };
-var ensureCodexSessionBinding = (
-	pluginData,
-	sessionId,
-	cwd,
-	now = Date.now(),
-) => {
+var listCodexSessionBindings = (pluginData) => {
 	const directory = bindingsDirectory(pluginData);
-	fs5.mkdirSync(directory, { recursive: true });
-	const filePath = bindingPath(pluginData, sessionId);
-	const existing = readBinding(filePath);
-	const binding = sessionBindingSchema.parse({
-		sessionHandle:
-			existing?.sessionId === sessionId
-				? existing.sessionHandle
-				: randomUUID4(),
-		sessionId,
-		cwd: canonicalizeCwd(cwd),
-		updatedAt: now,
-	});
-	const temporaryPath = `${filePath}.${randomUUID4()}.tmp`;
-	const descriptor = fs5.openSync(temporaryPath, "wx", 384);
 	try {
-		fs5.writeFileSync(
-			descriptor,
-			`${JSON.stringify(binding)}
-`,
-			"utf8",
-		);
-		fs5.fsyncSync(descriptor);
-	} finally {
-		fs5.closeSync(descriptor);
+		return fs4
+			.readdirSync(directory)
+			.filter((fileName) => fileName.endsWith(".json"))
+			.sort()
+			.flatMap((fileName) => {
+				const binding = readBinding(path5.join(directory, fileName));
+				return binding ? [binding] : [];
+			});
+	} catch (error) {
+		if (error.code === "ENOENT") return [];
+		throw error;
 	}
-	fs5.renameSync(temporaryPath, filePath);
-	return binding;
+};
+var resolveCodexSessionBinding = (options) => {
+	const liveSessionIds = new Set(
+		options.sessions
+			.filter(
+				(session) =>
+					session.host === "codex" &&
+					(session.status === "active" || session.status === "paused"),
+			)
+			.map((session) => session.sessionId),
+	);
+	const bindings = listCodexSessionBindings(options.pluginData).filter(
+		(binding) => liveSessionIds.has(binding.sessionId),
+	);
+	if (options.sessionHandle) {
+		const matched2 = bindings.filter(
+			(binding) => binding.sessionHandle === options.sessionHandle,
+		);
+		if (matched2.length !== 1) {
+			throw new Error("Unknown or inactive Premind session handle");
+		}
+		return matched2[0];
+	}
+	if (!options.cwd) return;
+	const resolvedCwd = canonicalizeCwd(options.cwd);
+	const matched = bindings.filter((binding) => binding.cwd === resolvedCwd);
+	if (matched.length > 1) {
+		throw new Error(
+			"Multiple Codex sessions match this working directory; pass the current sessionHandle explicitly",
+		);
+	}
+	return matched[0];
 };
 
-// src/codex/hook-runner.ts
-var RUNTIME_DIRECTORY = path7.dirname(fileURLToPath2(import.meta.url));
-var DAEMON_ENTRY = path7.join(RUNTIME_DIRECTORY, "premind-daemon.mjs");
-var MAX_INPUT_BYTES = 1024 * 1024;
-var CLEANUP_REQUEST_TIMEOUT_MS = 500;
-var CLEANUP_LOCK_TIMEOUT_MS = 300;
-var eventNames = new Set([
-	"SessionStart",
-	"UserPromptSubmit",
-	"Stop",
-	"Interrupt",
-	"SessionEnd",
+// src/codex/mcp-server.ts
+var RUNTIME_DIRECTORY = path6.dirname(fileURLToPath2(import.meta.url));
+var DAEMON_ENTRY = path6.join(RUNTIME_DIRECTORY, "premind-daemon.mjs");
+var MCP_PROTOCOL_VERSION = "2024-11-05";
+var jsonRpcIdSchema = exports_external.union([
+	exports_external.string(),
+	exports_external.number(),
+	exports_external.null(),
 ]);
-var readHookInput = async (input) => {
-	const chunks = [];
-	let totalBytes = 0;
-	for await (const chunk of input) {
-		const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-		totalBytes += buffer.length;
-		if (totalBytes > MAX_INPUT_BYTES) {
-			throw new Error("Codex hook input exceeds the supported size");
-		}
-		chunks.push(buffer);
+var requestSchema2 = exports_external
+	.object({
+		jsonrpc: exports_external.literal("2.0"),
+		id: jsonRpcIdSchema.optional(),
+		method: exports_external.string().min(1),
+		params: exports_external.unknown().optional(),
+	})
+	.strict();
+var initializeArgumentsSchema = exports_external
+	.object({ protocolVersion: exports_external.string().min(1) })
+	.passthrough();
+var statusArgumentsSchema = exports_external
+	.object({ sessionHandle: exports_external.string().uuid().optional() })
+	.strict();
+var activateArgumentsSchema = exports_external
+	.object({
+		sessionHandle: exports_external.string().uuid(),
+		path: exports_external.string().min(1),
+	})
+	.strict();
+var subscriptionArgumentsSchema = exports_external
+	.object({
+		sessionHandle: exports_external.string().uuid(),
+		prNumber: exports_external.number().int().positive(),
+		repo: exports_external.string().min(1).optional(),
+	})
+	.strict();
+var toolCallSchema = exports_external
+	.object({
+		name: exports_external.string().min(1),
+		arguments: exports_external.unknown().optional(),
+	})
+	.strict();
+var tools = [
+	{
+		name: "premind_status",
+		description:
+			"Return redacted Premind status and, when resolvable, status for the current Codex session.",
+		inputSchema: {
+			type: "object",
+			properties: { sessionHandle: { type: "string", format: "uuid" } },
+			additionalProperties: false,
+		},
+	},
+	{
+		name: "premind_activate_worktree",
+		description: "Bind this Codex session to a linked or nested worktree path.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				sessionHandle: { type: "string", format: "uuid" },
+				path: { type: "string", minLength: 1 },
+			},
+			required: ["sessionHandle", "path"],
+			additionalProperties: false,
+		},
+	},
+	{
+		name: "premind_subscribe",
+		description: "Subscribe this Codex session to a pull request.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				sessionHandle: { type: "string", format: "uuid" },
+				prNumber: { type: "integer", minimum: 1 },
+				repo: { type: "string", minLength: 1 },
+			},
+			required: ["sessionHandle", "prNumber"],
+			additionalProperties: false,
+		},
+	},
+	{
+		name: "premind_unsubscribe",
+		description: "Unsubscribe this Codex session from a pull request.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				sessionHandle: { type: "string", format: "uuid" },
+				prNumber: { type: "integer", minimum: 1 },
+				repo: { type: "string", minLength: 1 },
+			},
+			required: ["sessionHandle", "prNumber"],
+			additionalProperties: false,
+		},
+	},
+];
+var text = (value) => ({
+	content: [{ type: "text", text: value }],
+});
+var toolError = () => ({
+	content: [
+		{
+			type: "text",
+			text: "Premind could not complete this request. Check premind_status and retry.",
+		},
+	],
+	isError: true,
+});
+
+class JsonRpcError extends Error {
+	code;
+	constructor(code, message) {
+		super(message);
+		this.code = code;
 	}
-	const serialized = Buffer.concat(chunks).toString("utf8");
-	if (!serialized.trim()) throw new Error("Codex hook input is empty");
-	try {
-		return JSON.parse(serialized);
-	} catch (error) {
-		throw new Error("Codex hook input is not valid JSON", { cause: error });
-	}
-};
-var flushProtocolOutput = async (output, value) => {
-	await new Promise((resolve, reject) => {
-		let settled = false;
-		const finish = (error) => {
-			if (settled) return;
-			settled = true;
-			output.removeListener("error", onError);
-			if (error) reject(error);
-			else resolve();
-		};
-		const onError = (error) => finish(error);
-		output.once("error", onError);
-		output.write(value, () => finish());
+}
+var resolveBinding = async (dependencies, sessionHandle) => {
+	const status = await dependencies.client.debugStatus();
+	const binding = resolveCodexSessionBinding({
+		pluginData: dependencies.pluginData,
+		sessions: status.sessions,
+		...(sessionHandle ? { sessionHandle } : { cwd: dependencies.cwd }),
 	});
+	return { binding, status };
 };
-var isEventName = (value) => eventNames.has(value);
-var writeDiagnostic = (output, eventName, stage) => {
-	output.write(`premind Codex ${eventName} hook failed during ${stage}; continuing
-`);
+var requireBinding = async (dependencies, sessionHandle) => {
+	const { binding } = await resolveBinding(dependencies, sessionHandle);
+	if (!binding) throw new Error("Premind could not resolve this Codex session");
+	return binding;
 };
-var runHookMain = async (options = {}) => {
-	const eventName = options.eventName ?? process.argv[2];
-	const environment = options.environment ?? process.env;
-	const input = options.input ?? process.stdin;
-	const output = options.output ?? process.stdout;
-	const diagnostics = options.diagnostics ?? process.stderr;
-	if (!isEventName(eventName)) {
-		writeDiagnostic(diagnostics, "unknown", "event validation");
-		return;
+var parseToolCall = (params) => {
+	const call = toolCallSchema.safeParse(params);
+	if (!call.success) {
+		throw new JsonRpcError(-32602, "Invalid tools/call parameters");
 	}
-	try {
-		const rawInput = await readHookInput(input);
-		const ensureDaemon = createDaemonLauncher({
-			daemonEntry: DAEMON_ENTRY,
-			requiredOperations: CODEX_REQUIRED_DAEMON_OPERATIONS,
-		});
-		const client = new PremindDaemonClient({ ensureDaemon });
-		const cleanupClient = new PremindDaemonClient({
-			ensureDaemon: async () => {
-				return;
-			},
-			maxRetries: 0,
-			requestTimeoutMs: CLEANUP_REQUEST_TIMEOUT_MS,
-		});
-		const pluginData = environment.PLUGIN_DATA;
-		await runCodexLifecycle(eventName, rawInput, {
-			client,
-			cleanupClient,
-			ensureDaemon,
-			detectGitContext,
-			acquireLock: async (sessionId, cleanupBoundary) => {
-				if (!pluginData) throw new Error("PLUGIN_DATA is required");
-				return await acquireSessionLifecycleLock(pluginData, sessionId, {
-					...(cleanupBoundary ? { timeoutMs: CLEANUP_LOCK_TIMEOUT_MS } : {}),
-				});
-			},
-			ensureSessionBinding: async (sessionId, cwd) => {
-				if (!pluginData) throw new Error("PLUGIN_DATA is required");
-				return ensureCodexSessionBinding(pluginData, sessionId, cwd);
-			},
-			writeOutput: async (value) => {
-				await flushProtocolOutput(output, value);
-			},
-			reportError: (failedEvent, stage) =>
-				writeDiagnostic(diagnostics, failedEvent, stage),
-		});
-	} catch {
-		writeDiagnostic(diagnostics, eventName, "runner setup");
-		if (eventName !== "SessionEnd") {
-			await flushProtocolOutput(
-				output,
-				`{}
-`,
-			).catch(() => {
-				return;
-			});
+	const rawArguments = call.data.arguments ?? {};
+	switch (call.data.name) {
+		case "premind_status": {
+			const args = statusArgumentsSchema.safeParse(rawArguments);
+			if (!args.success)
+				throw new JsonRpcError(-32602, "Invalid tool arguments");
+			return { name: call.data.name, args: args.data };
 		}
+		case "premind_activate_worktree": {
+			const args = activateArgumentsSchema.safeParse(rawArguments);
+			if (!args.success)
+				throw new JsonRpcError(-32602, "Invalid tool arguments");
+			return { name: call.data.name, args: args.data };
+		}
+		case "premind_subscribe":
+		case "premind_unsubscribe": {
+			const args = subscriptionArgumentsSchema.safeParse(rawArguments);
+			if (!args.success)
+				throw new JsonRpcError(-32602, "Invalid tool arguments");
+			return { name: call.data.name, args: args.data };
+		}
+		default:
+			throw new JsonRpcError(-32602, "Unknown Premind tool");
+	}
+};
+var callTool = async (tool, dependencies) => {
+	try {
+		await dependencies.ensureDaemon();
+		if (tool.name === "premind_status") {
+			const { binding: binding2, status } = await resolveBinding(
+				dependencies,
+				tool.args.sessionHandle,
+			);
+			const current = binding2
+				? status.sessions.find(
+						(session) => session.sessionId === binding2.sessionId,
+					)
+				: undefined;
+			return text(
+				JSON.stringify({
+					globallyDisabled: status.globallyDisabled,
+					activeSessions: status.activeSessions,
+					activeWatchers: status.activeWatchers,
+					...(current
+						? {
+								currentSession: {
+									repo: current.repo,
+									branch: current.branch,
+									status: current.status,
+									pendingReminderCount: current.pendingReminderCount,
+									subscriptions: current.subscriptions ?? [],
+								},
+							}
+						: {}),
+				}),
+			);
+		}
+		const binding = await requireBinding(dependencies, tool.args.sessionHandle);
+		if (tool.name === "premind_activate_worktree") {
+			const result2 = await dependencies.client.activateWorktree({
+				sessionId: binding.sessionId,
+				path: tool.args.path,
+			});
+			return text(
+				`Premind activated ${result2.binding.repo} from this Codex session.`,
+			);
+		}
+		if (tool.name === "premind_subscribe") {
+			const result2 = await dependencies.client.subscribe({
+				sessionId: binding.sessionId,
+				prNumber: tool.args.prNumber,
+				...(tool.args.repo ? { repo: tool.args.repo } : {}),
+			});
+			return text(
+				`Premind subscribed this Codex session to ${result2.subscription.repo}#${result2.subscription.prNumber}.`,
+			);
+		}
+		const result = await dependencies.client.unsubscribe({
+			sessionId: binding.sessionId,
+			prNumber: tool.args.prNumber,
+			...(tool.args.repo ? { repo: tool.args.repo } : {}),
+		});
+		return text(
+			`Premind unsubscribe result: ${result.unsubscribed ? "removed" : "no active subscription"}.`,
+		);
+	} catch {
+		return toolError();
+	}
+};
+var handleCodexMcpRequest = async (message, dependencies) => {
+	const request = requestSchema2.safeParse(message);
+	if (!request.success) throw new JsonRpcError(-32600, "Invalid Request");
+	if (request.data.method === "initialize") {
+		const params = initializeArgumentsSchema.safeParse(request.data.params);
+		if (!params.success) {
+			throw new JsonRpcError(-32602, "Invalid initialize parameters");
+		}
+		return {
+			protocolVersion: MCP_PROTOCOL_VERSION,
+			capabilities: { tools: {} },
+			serverInfo: { name: "premind", version: "0.1.0" },
+		};
+	}
+	if (request.data.method === "notifications/initialized") return;
+	if (request.data.method === "tools/list") return { tools };
+	if (request.data.method !== "tools/call") {
+		throw new JsonRpcError(-32601, "Method not found");
+	}
+	const tool = parseToolCall(request.data.params);
+	return await callTool(tool, dependencies);
+};
+var handleCodexMcpLine = async (line, dependencies) => {
+	let message;
+	try {
+		message = JSON.parse(line);
+	} catch {
+		return {
+			jsonrpc: "2.0",
+			id: null,
+			error: { code: -32700, message: "Parse error" },
+		};
+	}
+	const request = requestSchema2.safeParse(message);
+	if (!request.success) {
+		return {
+			jsonrpc: "2.0",
+			id: null,
+			error: { code: -32600, message: "Invalid Request" },
+		};
+	}
+	const isNotification = !("id" in request.data);
+	try {
+		const result = await handleCodexMcpRequest(request.data, dependencies);
+		if (isNotification) return;
+		return { jsonrpc: "2.0", id: request.data.id ?? null, result };
+	} catch (error) {
+		if (isNotification) return;
+		const protocolError =
+			error instanceof JsonRpcError
+				? error
+				: new JsonRpcError(-32600, "Invalid Request");
+		return {
+			jsonrpc: "2.0",
+			id: request.data.id ?? null,
+			error: { code: protocolError.code, message: protocolError.message },
+		};
 	}
 };
 var isMainModule = () => {
 	if (!process.argv[1]) return false;
 	try {
 		return (
-			fs6.realpathSync(process.argv[1]) ===
-			fs6.realpathSync(fileURLToPath2(import.meta.url))
+			fs5.realpathSync(process.argv[1]) ===
+			fs5.realpathSync(fileURLToPath2(import.meta.url))
 		);
 	} catch {
 		return false;
 	}
 };
 if (isMainModule()) {
-	runHookMain().catch(() => {
-		process.exitCode = 0;
+	const pluginData = process.env.PLUGIN_DATA;
+	if (!pluginData) throw new Error("PLUGIN_DATA is required for Premind MCP");
+	const ensureDaemon = createDaemonLauncher({
+		daemonEntry: DAEMON_ENTRY,
+		requiredOperations: CODEX_REQUIRED_DAEMON_OPERATIONS,
+	});
+	const dependencies = {
+		client: new PremindDaemonClient({ ensureDaemon }),
+		pluginData,
+		cwd: process.env.PWD ?? process.cwd(),
+		ensureDaemon,
+	};
+	const input = readline.createInterface({
+		input: process.stdin,
+		crlfDelay: Infinity,
+	});
+	input.on("line", async (line) => {
+		const reply = await handleCodexMcpLine(line, dependencies);
+		if (reply)
+			process.stdout.write(`${JSON.stringify(reply)}
+`);
 	});
 }
-export { runHookMain, readHookInput, flushProtocolOutput };
+export { handleCodexMcpRequest, handleCodexMcpLine };

@@ -9979,7 +9979,12 @@ class WorktreeBindingRegistry {
 	getSnapshot(sessionId) {
 		return this.getOrCreate(sessionId).getSnapshot();
 	}
-	async activateWorktree(sessionId, requestedPath, resolveWorktree) {
+	async activateWorktree(
+		sessionId,
+		requestedPath,
+		resolveWorktree,
+		beforePersist,
+	) {
 		const actor = this.getOrCreate(sessionId);
 		actor.send({ type: "ACTIVATE_WORKTREE", path: requestedPath });
 		let worktree;
@@ -9991,10 +9996,16 @@ class WorktreeBindingRegistry {
 			throw error;
 		}
 		actor.send({ type: "WORKTREE_RESOLVED", worktree });
-		return this.persist(sessionId, () => {
-			const binding = this.bindingFromActor(sessionId, actor);
-			return this.store.activateWorktree(binding);
-		});
+		try {
+			return this.persist(sessionId, () => {
+				beforePersist?.();
+				const binding = this.bindingFromActor(sessionId, actor);
+				return this.store.activateWorktree(binding);
+			});
+		} catch (error) {
+			this.discard(sessionId);
+			throw error;
+		}
 	}
 	pullRequestFound(sessionId, pullRequest, now = Date.now()) {
 		const durableBinding = this.store.getWorktreeBinding(sessionId);
@@ -10233,6 +10244,12 @@ class WorktreeBindingRegistry {
 }
 
 // src/daemon/ipc/router.ts
+class InactiveCodexSessionError extends Error {
+	constructor() {
+		super("Codex session is no longer active");
+	}
+}
+
 class Router {
 	store;
 	resolveWorktree;
@@ -10252,6 +10269,14 @@ class Router {
 		this.worktreeBindings = worktreeBindings;
 		this.reminderHandoffs = reminderHandoffs;
 		this.onDemandChanged = onDemandChanged;
+	}
+	requireActiveCodexSession(sessionId) {
+		const session = this.store.getSession(sessionId);
+		if (!session || session.host !== "codex") return;
+		if (session.status === "active" || session.status === "paused") {
+			return;
+		}
+		return this.fail("SESSION_INACTIVE", "Codex session is no longer active");
 	}
 	async handle(request) {
 		try {
@@ -10499,6 +10524,8 @@ class Router {
 		return this.store.hasDaemonDemand(now);
 	}
 	async handleActivateWorktree(payload) {
+		const inactive = this.requireActiveCodexSession(payload.sessionId);
+		if (inactive) return inactive;
 		if (!this.store.getSession(payload.sessionId)) {
 			return this.fail(
 				"SESSION_NOT_FOUND",
@@ -10510,9 +10537,17 @@ class Router {
 				payload.sessionId,
 				payload.path,
 				this.resolveWorktree,
+				() => {
+					if (this.requireActiveCodexSession(payload.sessionId)) {
+						throw new InactiveCodexSessionError();
+					}
+				},
 			);
 			return this.ok({ binding, watching: binding.branch !== null });
 		} catch (error) {
+			if (error instanceof InactiveCodexSessionError) {
+				return this.fail("SESSION_INACTIVE", error.message);
+			}
 			return this.fail(
 				"WORKTREE_RESOLUTION_FAILED",
 				error instanceof Error
@@ -10522,6 +10557,8 @@ class Router {
 		}
 	}
 	handleSubscribe(payload) {
+		const inactive = this.requireActiveCodexSession(payload.sessionId);
+		if (inactive) return inactive;
 		if (!this.store.getSession(payload.sessionId)) {
 			return this.fail(
 				"SESSION_NOT_FOUND",
@@ -10546,6 +10583,8 @@ class Router {
 		});
 	}
 	handleUnsubscribe(payload) {
+		const inactive = this.requireActiveCodexSession(payload.sessionId);
+		if (inactive) return inactive;
 		if (!this.store.getSession(payload.sessionId)) {
 			return this.fail(
 				"SESSION_NOT_FOUND",
@@ -10608,10 +10647,10 @@ class Router {
 }
 
 // src/daemon/persistence/store.ts
+import { randomUUID } from "node:crypto";
 import fs3 from "node:fs";
 import path4 from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { randomUUID } from "node:crypto";
 
 // src/daemon/reminders/detail-files.ts
 import fs2 from "node:fs";

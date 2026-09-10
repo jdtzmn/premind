@@ -583,7 +583,11 @@ describe("Claude session IPC", () => {
 
 describe("generic reminder claim IPC", () => {
   test("accepts the documented atomic-claim wire format", () => {
-    for (const boundary of ["session_start", "user_prompt_submit", "stop"] as const) {
+    for (const boundary of [
+      "session_start",
+      "user_prompt_submit",
+      "stop",
+    ] as const) {
       assert.equal(
         requestSchema.safeParse({
           type: "claimReminder",
@@ -618,7 +622,9 @@ describe("generic reminder claim IPC", () => {
   });
 
   test("migrates the pre-Codex host constraint without losing sessions", () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "premind-codex-migrate-"));
+    const dir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "premind-codex-migrate-"),
+    );
     tempPaths.push(dir);
     const dbPath = path.join(dir, "premind.db");
     const legacy = new DatabaseSync(dbPath);
@@ -640,7 +646,10 @@ describe("generic reminder claim IPC", () => {
     legacy.close();
 
     const store = new StateStore(dbPath);
-    assert.equal(store.getSession("claude:legacy")?.last_delivered_event_seq, 7);
+    assert.equal(
+      store.getSession("claude:legacy")?.last_delivered_event_seq,
+      7,
+    );
     store.registerSession({
       sessionId: "codex:new",
       host: "codex",
@@ -657,7 +666,9 @@ describe("generic reminder claim IPC", () => {
   });
 
   test("leases one claim, rejects stale tokens, and preserves dormant session state", async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "premind-codex-router-test-"));
+    const dir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "premind-codex-router-test-"),
+    );
     tempPaths.push(dir);
     const dbPath = path.join(dir, "premind.db");
     let store = new StateStore(dbPath);
@@ -720,21 +731,25 @@ describe("generic reminder claim IPC", () => {
     ]);
     const claimResults = claims
       .filter((response) => response.ok)
-      .map((response) =>
-        (response.result as {
-          claim: {
-            batch: { batchId: string };
-            handoffId: string;
-            leaseExpiresAt: number;
-          } | null;
-        }).claim,
+      .map(
+        (response) =>
+          (
+            response.result as {
+              claim: {
+                batch: { batchId: string };
+                handoffId: string;
+                leaseExpiresAt: number;
+              } | null;
+            }
+          ).claim,
       )
       .filter((claim) => claim !== null);
     assert.equal(claimResults.length, 1);
     const firstClaim = claimResults[0];
     assert.ok(firstClaim);
     const claimedBatchId = firstClaim.batch.batchId;
-    const unclaimedBatchId = claimedBatchId === batchId ? secondBatchId : batchId;
+    const unclaimedBatchId =
+      claimedBatchId === batchId ? secondBatchId : batchId;
     assert.equal(
       store.getReminderBatchRecord(unclaimedBatchId, sessionId)?.state,
       "built",
@@ -767,7 +782,10 @@ describe("generic reminder claim IPC", () => {
         outcome: "confirmed",
       },
     });
-    assert.equal(stale.ok && (stale.result as { settled: boolean }).settled, false);
+    assert.equal(
+      stale.ok && (stale.result as { settled: boolean }).settled,
+      false,
+    );
 
     const retried = await router.handle({
       type: "claimReminder",
@@ -775,10 +793,12 @@ describe("generic reminder claim IPC", () => {
       payload: { sessionId, boundary: "user_prompt_submit" },
     });
     assert.equal(retried.ok, true);
-    const secondClaim = (retried as {
-      ok: true;
-      result: { claim: { batch: { batchId: string }; handoffId: string } };
-    }).result.claim;
+    const secondClaim = (
+      retried as {
+        ok: true;
+        result: { claim: { batch: { batchId: string }; handoffId: string } };
+      }
+    ).result.claim;
     assert.notEqual(secondClaim.handoffId, firstClaim.handoffId);
     assert.equal(secondClaim.batch.batchId, claimedBatchId);
     const delayedFirstSettlement = await competingRouter.handle({
@@ -807,7 +827,10 @@ describe("generic reminder claim IPC", () => {
         outcome: "confirmed",
       },
     });
-    assert.equal(settled.ok && (settled.result as { settled: boolean }).settled, true);
+    assert.equal(
+      settled.ok && (settled.result as { settled: boolean }).settled,
+      true,
+    );
     assert.equal(store.getReminderBatchRecord(claimedBatchId, sessionId), null);
     assert.equal(
       store.getReminderBatchRecord(unclaimedBatchId, sessionId)?.state,
@@ -881,10 +904,12 @@ describe("generic reminder claim IPC", () => {
       payload: {},
     });
     assert.equal(status.ok, true);
-    const operations = (status as {
-      ok: true;
-      result: { daemon: { operations: string[] } };
-    }).result.daemon.operations;
+    const operations = (
+      status as {
+        ok: true;
+        result: { daemon: { operations: string[] } };
+      }
+    ).result.daemon.operations;
     assert.ok(operations.includes("registerCodexSession"));
     assert.ok(operations.includes("claimReminder"));
     assert.ok(operations.includes("settleReminderClaim"));
