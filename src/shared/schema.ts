@@ -1,11 +1,11 @@
-import { z } from "zod"
+import { z } from "zod";
 import {
   PREMIND_CLIENT_HEARTBEAT_MS,
   PREMIND_CLIENT_LEASE_TTL_MS,
   PREMIND_IDLE_DELIVERY_THRESHOLD_MS,
   PREMIND_IDLE_SHUTDOWN_GRACE_MS,
   PREMIND_PROTOCOL_VERSION,
-} from "./constants.ts"
+} from "./constants.ts";
 
 export const clientMetadataSchema = z
   .object({
@@ -13,40 +13,45 @@ export const clientMetadataSchema = z
     projectRoot: z.string().min(1),
     sessionSource: z.string().min(1).optional(),
   })
-  .strict()
+  .strict();
 
-export const sessionStatusSchema = z.enum(["active", "paused", "closed"])
-export const busyStateSchema = z.enum(["busy", "idle"])
+export const sessionStatusSchema = z.enum(["active", "paused", "closed"]);
+export const busyStateSchema = z.enum(["busy", "idle"]);
+export const sessionHostSchema = z.enum(["opencode", "pi", "claude"]);
 
 // Only idleDeliveryThresholdMs is actually consumed today. Add new fields
 // here as they become real features. Defining fields that aren't wired
 // through leads to config that silently does nothing — worse than no config.
 export const premindConfigSchema = z
   .object({
-    // How long the session must be idle before pending PR updates are delivered.
-    // Minimum 5 seconds to ensure the countdown toast has time to display.
-    idleDeliveryThresholdMs: z.number().int().min(5_000).default(PREMIND_IDLE_DELIVERY_THRESHOLD_MS),
+    // OpenCode-only: how long an idle session waits before pending PR updates deliver.
+    // Claude Code delivers only at a Stop boundary in v0.2.
+    idleDeliveryThresholdMs: z
+      .number()
+      .int()
+      .min(5_000)
+      .default(PREMIND_IDLE_DELIVERY_THRESHOLD_MS),
   })
-  .strict()
+  .strict();
 
 export const registerClientPayloadSchema = z
   .object({
     clientId: z.string().min(1),
     metadata: clientMetadataSchema,
   })
-  .strict()
+  .strict();
 
 export const heartbeatClientPayloadSchema = z
   .object({
     clientId: z.string().min(1),
   })
-  .strict()
+  .strict();
 
 export const releaseClientPayloadSchema = z
   .object({
     clientId: z.string().min(1),
   })
-  .strict()
+  .strict();
 
 export const registerSessionPayloadSchema = z
   .object({
@@ -55,10 +60,12 @@ export const registerSessionPayloadSchema = z
     repo: z.string().min(1),
     branch: z.string().min(1),
     isPrimary: z.boolean().default(true),
+    host: sessionHostSchema.optional(),
+    hostSessionId: z.string().min(1).optional(),
     status: sessionStatusSchema.default("active"),
     busyState: busyStateSchema.default("idle"),
   })
-  .strict()
+  .strict();
 
 export const updateSessionStatePayloadSchema = z
   .object({
@@ -71,13 +78,13 @@ export const updateSessionStatePayloadSchema = z
   .strict()
   .refine((value) => Object.keys(value).length > 1, {
     message: "At least one field besides sessionId must be provided",
-  })
+  });
 
 export const unregisterSessionPayloadSchema = z
   .object({
     sessionId: z.string().min(1),
   })
-  .strict()
+  .strict();
 export const ensureSessionControlPayloadSchema = z
   .object({
     clientId: z.string().min(1),
@@ -85,23 +92,38 @@ export const ensureSessionControlPayloadSchema = z
     repo: z.string().min(1),
     branch: z.string().min(1),
     isPrimary: z.boolean().default(true),
+    host: sessionHostSchema.optional(),
+    hostSessionId: z.string().min(1).optional(),
     busyState: busyStateSchema.default("idle"),
     paused: z.boolean(),
   })
-  .strict()
+  .strict();
 
 export const sessionControlPayloadSchema = z
   .object({
     sessionId: z.string().min(1),
   })
-  .strict()
+  .strict();
+export const suspendClaudeSessionPayloadSchema = sessionControlPayloadSchema;
+
+// Claude hook processes are short lived, so this deliberately has no clientId.
+// The daemon owns the stable identity derived from Claude's session_id.
+export const claudeSessionPayloadSchema = z
+  .object({
+    sessionId: z.string().min(1),
+    hostSessionId: z.string().min(1).optional(),
+    repo: z.string().min(1),
+    branch: z.string().min(1),
+    busyState: busyStateSchema.default("idle"),
+  })
+  .strict();
 
 export const activateWorktreePayloadSchema = z
   .object({
     sessionId: z.string().min(1),
     path: z.string().min(1),
   })
-  .strict()
+  .strict();
 
 const subscriptionControlPayloadSchema = z
   .object({
@@ -109,10 +131,10 @@ const subscriptionControlPayloadSchema = z
     prNumber: z.number().int().positive(),
     repo: z.string().min(1).optional(),
   })
-  .strict()
+  .strict();
 
-export const subscribePayloadSchema = subscriptionControlPayloadSchema
-export const unsubscribePayloadSchema = subscriptionControlPayloadSchema
+export const subscribePayloadSchema = subscriptionControlPayloadSchema;
+export const unsubscribePayloadSchema = subscriptionControlPayloadSchema;
 
 export const reminderEventSchema = z
   .object({
@@ -122,7 +144,7 @@ export const reminderEventSchema = z
     summary: z.string().min(1),
     referenceLink: z.string().min(1).optional(),
   })
-  .passthrough()
+  .passthrough();
 
 export const reminderBatchSchema = z
   .object({
@@ -135,13 +157,13 @@ export const reminderBatchSchema = z
     reminderText: z.string().min(1),
     events: z.array(reminderEventSchema),
   })
-  .strict()
+  .strict();
 
 export const getPendingReminderPayloadSchema = z
   .object({
     sessionId: z.string().min(1),
   })
-  .strict()
+  .strict();
 
 export const ackReminderPayloadSchema = z
   .object({
@@ -150,17 +172,19 @@ export const ackReminderPayloadSchema = z
     state: z.enum(["handed_off", "confirmed", "failed"]),
     error: z.string().min(1).optional(),
   })
-  .strict()
+  .strict();
+
+export const confirmClaudeHandoffPayloadSchema = sessionControlPayloadSchema;
 
 export const setGlobalDisabledPayloadSchema = z
   .object({
     disabled: z.boolean(),
   })
-  .strict()
+  .strict();
 
-export const getGlobalDisabledPayloadSchema = z.object({}).strict()
+export const getGlobalDisabledPayloadSchema = z.object({}).strict();
 
-export const debugStatusPayloadSchema = z.object({}).strict()
+export const debugStatusPayloadSchema = z.object({}).strict();
 
 export const daemonInfoSchema = z
   .object({
@@ -168,8 +192,9 @@ export const daemonInfoSchema = z
     heartbeatMs: z.literal(PREMIND_CLIENT_HEARTBEAT_MS),
     leaseTtlMs: z.literal(PREMIND_CLIENT_LEASE_TTL_MS),
     idleShutdownGraceMs: z.literal(PREMIND_IDLE_SHUTDOWN_GRACE_MS),
+    operations: z.array(z.string().min(1)).optional(),
   })
-  .strict()
+  .strict();
 
 export const debugStatusResponseSchema = z
   .object({
@@ -185,6 +210,7 @@ export const debugStatusResponseSchema = z
       z
         .object({
           sessionId: z.string().min(1),
+          host: sessionHostSchema,
           repo: z.string().min(1),
           branch: z.string().min(1),
           prNumber: z.number().int().nullable(),
@@ -221,26 +247,53 @@ export const debugStatusResponseSchema = z
         .strict(),
     ),
   })
-  .strict()
+  .strict();
 
-export type ClientMetadata = z.infer<typeof clientMetadataSchema>
-export type PremindConfig = z.infer<typeof premindConfigSchema>
-export type RegisterClientPayload = z.infer<typeof registerClientPayloadSchema>
-export type HeartbeatClientPayload = z.infer<typeof heartbeatClientPayloadSchema>
-export type ReleaseClientPayload = z.infer<typeof releaseClientPayloadSchema>
-export type RegisterSessionPayload = z.infer<typeof registerSessionPayloadSchema>
-export type EnsureSessionControlPayload = z.infer<
-  typeof ensureSessionControlPayloadSchema
->
-export type UpdateSessionStatePayload = z.infer<typeof updateSessionStatePayloadSchema>
-export type UnregisterSessionPayload = z.infer<typeof unregisterSessionPayloadSchema>
-export type SessionControlPayload = z.infer<typeof sessionControlPayloadSchema>
-export type ActivateWorktreePayload = z.infer<typeof activateWorktreePayloadSchema>
-export type SubscribePayload = z.infer<typeof subscribePayloadSchema>
-export type UnsubscribePayload = z.infer<typeof unsubscribePayloadSchema>
-export type ReminderEvent = z.infer<typeof reminderEventSchema>
-export type ReminderBatch = z.infer<typeof reminderBatchSchema>
-export type AckReminderPayload = z.infer<typeof ackReminderPayloadSchema>
-export type SetGlobalDisabledPayload = z.infer<typeof setGlobalDisabledPayloadSchema>
-export type GetGlobalDisabledPayload = z.infer<typeof getGlobalDisabledPayloadSchema>
-export type DebugStatusResponse = z.infer<typeof debugStatusResponseSchema>
+export type ClientMetadata = z.infer<typeof clientMetadataSchema>;
+export type PremindConfig = z.infer<typeof premindConfigSchema>;
+export type SessionHost = z.infer<typeof sessionHostSchema>;
+export type RegisterClientPayload = z.infer<typeof registerClientPayloadSchema>;
+export type HeartbeatClientPayload = z.infer<
+  typeof heartbeatClientPayloadSchema
+>;
+export type ReleaseClientPayload = z.infer<typeof releaseClientPayloadSchema>;
+export type RegisterSessionPayload = Omit<
+  z.infer<typeof registerSessionPayloadSchema>,
+  "host" | "hostSessionId"
+> & {
+  host?: SessionHost;
+  hostSessionId?: string;
+};
+export type EnsureSessionControlPayload = Omit<
+  z.infer<typeof ensureSessionControlPayloadSchema>,
+  "host" | "hostSessionId"
+> & {
+  host?: SessionHost;
+  hostSessionId?: string;
+};
+export type UpdateSessionStatePayload = z.infer<
+  typeof updateSessionStatePayloadSchema
+>;
+export type UnregisterSessionPayload = z.infer<
+  typeof unregisterSessionPayloadSchema
+>;
+export type SessionControlPayload = z.infer<typeof sessionControlPayloadSchema>;
+export type ClaudeSessionPayload = z.infer<typeof claudeSessionPayloadSchema>;
+export type ActivateWorktreePayload = z.infer<
+  typeof activateWorktreePayloadSchema
+>;
+export type SubscribePayload = z.infer<typeof subscribePayloadSchema>;
+export type UnsubscribePayload = z.infer<typeof unsubscribePayloadSchema>;
+export type ReminderEvent = z.infer<typeof reminderEventSchema>;
+export type ReminderBatch = z.infer<typeof reminderBatchSchema>;
+export type AckReminderPayload = z.infer<typeof ackReminderPayloadSchema>;
+export type ConfirmClaudeHandoffPayload = z.infer<
+  typeof confirmClaudeHandoffPayloadSchema
+>;
+export type SetGlobalDisabledPayload = z.infer<
+  typeof setGlobalDisabledPayloadSchema
+>;
+export type GetGlobalDisabledPayload = z.infer<
+  typeof getGlobalDisabledPayloadSchema
+>;
+export type DebugStatusResponse = z.infer<typeof debugStatusResponseSchema>;

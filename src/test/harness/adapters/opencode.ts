@@ -6,7 +6,7 @@
  * `ownedSessions`, idle timers, and the in-flight guard.
  */
 
-import { createPremindPlugin } from "../../../plugin/index.ts"
+import { createPremindPlugin } from "../../../plugin-opencode/index.ts";
 import type { AdapterDriver, DeliveryCapture } from "./types.ts"
 
 type PluginRuntime = {

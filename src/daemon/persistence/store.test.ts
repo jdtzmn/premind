@@ -2054,3 +2054,37 @@ describe("migrate: legacy pr_watchers upgrade", () => {
     assert.deepEqual(columnsOf(dbPath), first, "reopening must not re-add columns or throw")
   })
 })
+
+describe("migrate: session hosts", () => {
+  test("backfills legacy hosts and preserves active Claude reminder batches during lease pruning", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "premind-host-migrate-"))
+    tempPaths.push(dir)
+    const dbPath = path.join(dir, "premind.db")
+    const legacy = new DatabaseSync(dbPath)
+    legacy.exec(`
+      CREATE TABLE sessions (
+        session_id TEXT PRIMARY KEY, client_id TEXT NOT NULL, repo TEXT NOT NULL, branch TEXT NOT NULL,
+        pr_number INTEGER, is_primary INTEGER NOT NULL, status TEXT NOT NULL, busy_state TEXT NOT NULL,
+        last_delivered_event_seq INTEGER NOT NULL DEFAULT 0, last_activity_at INTEGER NOT NULL,
+        created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+      );
+      INSERT INTO sessions VALUES
+        ('legacy-opencode', 'lease-gone', 'acme/repo', 'feature/open', NULL, 1, 'active', 'idle', 0, 1, 1, 1),
+        ('legacy-claude', 'claude:legacy-claude', 'acme/repo', 'feature/claude', NULL, 1, 'active', 'idle', 0, 1, 1, 1);
+    `)
+    legacy.close()
+
+    const store = new StateStore(dbPath)
+    assert.equal(store.getSession("legacy-opencode")?.host, "opencode")
+    assert.equal(store.getSession("legacy-opencode")?.host_session_id, "legacy-opencode")
+    assert.equal(store.getSession("legacy-claude")?.host, "claude")
+    const batchId = store.createOrReplaceReminder("legacy-claude", null, "keep me", [], 0)
+
+    const pruned = store.pruneClosedOrOrphanedSessions()
+    assert.equal(pruned.sessions, 1)
+    assert.equal(store.getSession("legacy-opencode"), undefined)
+    assert.equal(store.getSession("legacy-claude")?.status, "active")
+    assert.equal(store.getReminderBatchRecord(batchId, "legacy-claude")?.reminderText, "keep me")
+    store.close()
+  })
+})

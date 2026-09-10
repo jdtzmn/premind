@@ -26,7 +26,7 @@ describe("plugin packaging", () => {
 	});
 
 	test("plugin entry exports PremindPlugin and createPremindPlugin", async () => {
-		const mod = await import("../../plugin/index.ts");
+		const mod = await import("../../plugin-opencode/index.ts");
 		assert.equal(
 			typeof mod.PremindPlugin,
 			"function",
@@ -55,7 +55,7 @@ describe("plugin packaging", () => {
 	});
 
 	test("daemon entry file exists relative to plugin", () => {
-		const pluginDir = path.resolve(ROOT, "src", "plugin");
+		const pluginDir = path.resolve(ROOT, "src", "plugin-opencode");
 		const daemonEntry = path.resolve(pluginDir, "..", "daemon", "index.ts");
 		assert.ok(
 			fs.existsSync(daemonEntry),

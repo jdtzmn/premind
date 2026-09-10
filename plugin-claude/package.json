@@ -1,0 +1,9 @@
+{
+  "name": "premind-claude-plugin",
+  "private": true,
+  "type": "module",
+  "version": "0.2.0",
+  "engines": {
+    "node": ">=22.13.0"
+  }
+}
