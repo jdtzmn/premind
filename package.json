@@ -22,6 +22,7 @@
 		"test:compat": "node --import tsx --test src/plugin/__tests__/compatibility.test.ts",
 		"test:codex:contract": "node --import tsx --test src/codex/__tests__/contract-fixture.test.ts",
 		"test:codex:install": "node scripts/validate-codex-contract-fixture.mjs",
+		"test:codex:live": "node scripts/validate-codex-live-contract.mjs",
 		"test:live": "node --import tsx src/test/live-validation.ts",
 		"test:live:contract": "node --import tsx src/test/live-validation.ts --contract-only",
 		"test:harness": "node --import tsx --test src/test/delivery-reliability.test.ts src/test/pr-update-delivery.test.ts src/test/delivery-conservation.test.ts"
