@@ -61,7 +61,10 @@ test("daemon start lock is shared and releases only its own acquisition", () => 
 test("Claude probe requires advertised Claude IPC operations while allowing legacy generic probes", async () => {
   const dir = createTempDir();
   const socketPath = path.join(dir, "premind.sock");
-  const server = await listen(socketPath, CLAUDE_REQUIRED_DAEMON_OPERATIONS.slice(0, -1));
+  const server = await listen(
+    socketPath,
+    CLAUDE_REQUIRED_DAEMON_OPERATIONS.slice(0, -1),
+  );
 
   try {
     assert.equal(await probeDaemon(socketPath), true);
@@ -83,6 +86,8 @@ test("Claude probe requires advertised Claude IPC operations while allowing lega
       true,
     );
   } finally {
-    await new Promise<void>((resolve) => compatibleServer.close(() => resolve()));
+    await new Promise<void>((resolve) =>
+      compatibleServer.close(() => resolve()),
+    );
   }
 });

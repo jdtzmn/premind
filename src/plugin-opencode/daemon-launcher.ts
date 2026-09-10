@@ -54,98 +54,102 @@ export async function ensureDaemonRunning(socketPath = PREMIND_SOCKET_PATH) {
     if (await isDaemonRunning(socketPath)) return;
 
     const runner = findRunner();
-  if (!runner) {
-    const diag = {
-      timedOut: false,
-      spawnError: "no runner found: tsx and bun are unavailable",
-    };
+    if (!runner) {
+      const diag = {
+        timedOut: false,
+        spawnError: "no runner found: tsx and bun are unavailable",
+      };
+      writePluginRuntimeState({
+        phase: "daemon-start-failed",
+        daemonStarted: false,
+        daemonDiagnostics: diag,
+      });
+      throw new Error(
+        "Cannot start premind daemon: tsx and bun are unavailable",
+      );
+    }
+
+    // Capture stdout/stderr during startup so failures are diagnosable.
+    let stdoutBuf = "";
+    let stderrBuf = "";
+    let spawnError: string | undefined;
+    let exitCode: number | null = null;
+    let exitSignal: string | null = null;
+
+    // Spawn with an explicit cwd set to the daemon entry's directory.
+    // This avoids CWD-relative module resolution quirks when opencode's process
+    // is in a project that has tsx (or other loaders) in its local node_modules —
+    // those loaders would resolve the daemon entry relative to the wrong base.
+    const spawnCwd = path.dirname(DAEMON_ENTRY);
+    const spawnCommand = [runner.command, ...runner.args, DAEMON_ENTRY].join(
+      " ",
+    );
+
+    // Write pre-spawn diagnostics immediately so they're visible even if the
+    // spawn hangs or crashes before we can capture the diagnostics below.
     writePluginRuntimeState({
-      phase: "daemon-start-failed",
+      phase: "daemon-spawning",
       daemonStarted: false,
-      daemonDiagnostics: diag,
+      daemonDiagnostics: {
+        runner: runner.command,
+        daemonEntry: DAEMON_ENTRY,
+        spawnCwd,
+        spawnCommand,
+      },
     });
-    throw new Error("Cannot start premind daemon: tsx and bun are unavailable");
-  }
 
-  // Capture stdout/stderr during startup so failures are diagnosable.
-  let stdoutBuf = "";
-  let stderrBuf = "";
-  let spawnError: string | undefined;
-  let exitCode: number | null = null;
-  let exitSignal: string | null = null;
+    const child = spawn(runner.command, [...runner.args, DAEMON_ENTRY], {
+      detached: true,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env },
+      cwd: spawnCwd,
+    });
 
-  // Spawn with an explicit cwd set to the daemon entry's directory.
-  // This avoids CWD-relative module resolution quirks when opencode's process
-  // is in a project that has tsx (or other loaders) in its local node_modules —
-  // those loaders would resolve the daemon entry relative to the wrong base.
-  const spawnCwd = path.dirname(DAEMON_ENTRY);
-  const spawnCommand = [runner.command, ...runner.args, DAEMON_ENTRY].join(" ");
+    child.stdout?.setEncoding("utf8");
+    child.stdout?.on("data", (chunk: string) => {
+      stdoutBuf = (stdoutBuf + chunk).slice(-STDIO_BUFFER_LIMIT);
+    });
+    child.stderr?.setEncoding("utf8");
+    child.stderr?.on("data", (chunk: string) => {
+      stderrBuf = (stderrBuf + chunk).slice(-STDIO_BUFFER_LIMIT);
+    });
+    child.on("error", (err) => {
+      spawnError = err.message;
+    });
+    child.on("exit", (code, signal) => {
+      exitCode = code;
+      exitSignal = signal;
+    });
 
-  // Write pre-spawn diagnostics immediately so they're visible even if the
-  // spawn hangs or crashes before we can capture the diagnostics below.
-  writePluginRuntimeState({
-    phase: "daemon-spawning",
-    daemonStarted: false,
-    daemonDiagnostics: {
+    const connected = await waitForSocket(socketPath);
+    child.unref();
+
+    const diag = {
       runner: runner.command,
       daemonEntry: DAEMON_ENTRY,
       spawnCwd,
       spawnCommand,
-    },
-  });
+      spawnPid: child.pid,
+      exitCode,
+      exitSignal,
+      ...(spawnError !== undefined ? { spawnError } : {}),
+      ...(stdoutBuf.length > 0 ? { stdout: stdoutBuf } : {}),
+      ...(stderrBuf.length > 0 ? { stderr: stderrBuf } : {}),
+    };
 
-  const child = spawn(runner.command, [...runner.args, DAEMON_ENTRY], {
-    detached: true,
-    stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env },
-    cwd: spawnCwd,
-  });
-
-  child.stdout?.setEncoding("utf8");
-  child.stdout?.on("data", (chunk: string) => {
-    stdoutBuf = (stdoutBuf + chunk).slice(-STDIO_BUFFER_LIMIT);
-  });
-  child.stderr?.setEncoding("utf8");
-  child.stderr?.on("data", (chunk: string) => {
-    stderrBuf = (stderrBuf + chunk).slice(-STDIO_BUFFER_LIMIT);
-  });
-  child.on("error", (err) => {
-    spawnError = err.message;
-  });
-  child.on("exit", (code, signal) => {
-    exitCode = code;
-    exitSignal = signal;
-  });
-
-  const connected = await waitForSocket(socketPath);
-  child.unref();
-
-  const diag = {
-    runner: runner.command,
-    daemonEntry: DAEMON_ENTRY,
-    spawnCwd,
-    spawnCommand,
-    spawnPid: child.pid,
-    exitCode,
-    exitSignal,
-    ...(spawnError === undefined ? {} : { spawnError }),
-    ...(stdoutBuf.length > 0 ? { stdout: stdoutBuf } : {}),
-    ...(stderrBuf.length > 0 ? { stderr: stderrBuf } : {}),
-  };
-
-  if (!connected) {
-    const fullDiag = { ...diag, timedOut: true };
-    writePluginRuntimeState({
-      phase: "daemon-start-failed",
-      daemonStarted: false,
-      daemonDiagnostics: fullDiag,
-    });
-    throw new Error(
-      `premind daemon failed to start after ${CONNECT_MAX_RETRIES * CONNECT_RETRY_MS}ms` +
-        (stderrBuf ? `\nstderr: ${stderrBuf.trim()}` : "") +
-        (spawnError ? `\nspawn error: ${spawnError}` : ""),
-    );
-  }
+    if (!connected) {
+      const fullDiag = { ...diag, timedOut: true };
+      writePluginRuntimeState({
+        phase: "daemon-start-failed",
+        daemonStarted: false,
+        daemonDiagnostics: fullDiag,
+      });
+      throw new Error(
+        `premind daemon failed to start after ${CONNECT_MAX_RETRIES * CONNECT_RETRY_MS}ms` +
+          (stderrBuf ? `\nstderr: ${stderrBuf.trim()}` : "") +
+          (spawnError ? `\nspawn error: ${spawnError}` : ""),
+      );
+    }
   } finally {
     releaseDaemonStartLock(lock);
   }
