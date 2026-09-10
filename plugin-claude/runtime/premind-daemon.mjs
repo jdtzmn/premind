@@ -1,0 +1,13325 @@
+var __create = Object.create;
+var __getProtoOf = Object.getPrototypeOf;
+var __defProp = Object.defineProperty;
+var __getOwnPropNames = Object.getOwnPropertyNames;
+var __hasOwnProp = Object.prototype.hasOwnProperty;
+function __accessProp(key) {
+  return this[key];
+}
+var __toESMCache_node;
+var __toESMCache_esm;
+var __toESM = (mod, isNodeMode, target) => {
+  var canCache = mod != null && typeof mod === "object";
+  if (canCache) {
+    var cache = isNodeMode ? __toESMCache_node ??= new WeakMap : __toESMCache_esm ??= new WeakMap;
+    var cached = cache.get(mod);
+    if (cached)
+      return cached;
+  }
+  target = mod == null ? {} : __create(__getProtoOf(mod));
+  const to = isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target;
+  for (const key of __getOwnPropNames(mod))
+    if (!__hasOwnProp.call(to, key))
+      __defProp(to, key, {
+        get: __accessProp.bind(mod, key),
+        enumerable: true
+      });
+  if (canCache)
+    cache.set(mod, to);
+  return to;
+};
+var __commonJS = (cb, mod) => () => (mod || cb((mod = { exports: {} }).exports, mod), mod.exports);
+var __returnValue = (v) => v;
+function __exportSetter(name, newValue) {
+  this[name] = __returnValue.bind(null, newValue);
+}
+var __export = (target, all) => {
+  for (var name in all)
+    __defProp(target, name, {
+      get: all[name],
+      enumerable: true,
+      configurable: true,
+      set: __exportSetter.bind(all, name)
+    });
+};
+
+// node_modules/xstate/dist/xstate-dev.development.cjs.js
+var require_xstate_dev_development_cjs = __commonJS((exports) => {
+  Object.defineProperty(exports, "__esModule", { value: true });
+  function getGlobal() {
+    if (typeof globalThis !== "undefined") {
+      return globalThis;
+    }
+    if (typeof self !== "undefined") {
+      return self;
+    }
+    if (typeof window !== "undefined") {
+      return window;
+    }
+    if (typeof global !== "undefined") {
+      return global;
+    }
+      console.warn("XState could not find a global object in this environment. Please let the maintainers know and raise an issue here: https://github.com/statelyai/xstate/issues");
+  }
+  function getDevTools() {
+    const w = getGlobal();
+    if (w.__xstate__) {
+      return w.__xstate__;
+    }
+    return;
+  }
+  function registerService(service) {
+    if (typeof window === "undefined") {
+      return;
+    }
+    const devTools = getDevTools();
+    if (devTools) {
+      devTools.register(service);
+    }
+  }
+  var devToolsAdapter = (service) => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    const devTools = getDevTools();
+    if (devTools) {
+      devTools.register(service);
+    }
+  };
+  exports.devToolsAdapter = devToolsAdapter;
+  exports.getGlobal = getGlobal;
+  exports.registerService = registerService;
+});
+
+// node_modules/xstate/dist/raise-53e20da7.development.cjs.js
+var require_raise_53e20da7_development_cjs = __commonJS((exports) => {
+  var dist_xstateDev = require_xstate_dev_development_cjs();
+
+  class Mailbox {
+    constructor(_process) {
+      this._process = _process;
+      this._active = false;
+      this._current = null;
+      this._last = null;
+    }
+    start() {
+      this._active = true;
+      this.flush();
+    }
+    clear() {
+      if (this._current) {
+        this._current.next = null;
+        this._last = this._current;
+      }
+    }
+    enqueue(event) {
+      const enqueued = {
+        value: event,
+        next: null
+      };
+      if (this._current) {
+        this._last.next = enqueued;
+        this._last = enqueued;
+        return;
+      }
+      this._current = enqueued;
+      this._last = enqueued;
+      if (this._active) {
+        this.flush();
+      }
+    }
+    flush() {
+      while (this._current) {
+        const consumed = this._current;
+        this._process(consumed.value);
+        this._current = consumed.next;
+      }
+      this._last = null;
+    }
+  }
+  var STATE_DELIMITER = ".";
+  var TARGETLESS_KEY = "";
+  var NULL_EVENT = "";
+  var STATE_IDENTIFIER = "#";
+  var WILDCARD = "*";
+  var XSTATE_INIT = "xstate.init";
+  var XSTATE_ERROR = "xstate.error";
+  var XSTATE_STOP = "xstate.stop";
+  function createAfterEvent(delayRef, id) {
+    return {
+      type: `xstate.after.${delayRef}.${id}`
+    };
+  }
+  function createDoneStateEvent(id, output) {
+    return {
+      type: `xstate.done.state.${id}`,
+      output
+    };
+  }
+  function createDoneActorEvent(invokeId, output) {
+    return {
+      type: `xstate.done.actor.${invokeId}`,
+      output,
+      actorId: invokeId
+    };
+  }
+  function createErrorActorEvent(id, error) {
+    return {
+      type: `xstate.error.actor.${id}`,
+      error,
+      actorId: id
+    };
+  }
+  function createInitEvent(input) {
+    return {
+      type: XSTATE_INIT,
+      input
+    };
+  }
+  function reportUnhandledError(err) {
+    setTimeout(() => {
+      throw err;
+    });
+  }
+  var symbolObservable = (() => typeof Symbol === "function" && Symbol.observable || "@@observable")();
+  function matchesState(parentStateId, childStateId) {
+    const parentStateValue = toStateValue(parentStateId);
+    const childStateValue = toStateValue(childStateId);
+    if (typeof childStateValue === "string") {
+      if (typeof parentStateValue === "string") {
+        return childStateValue === parentStateValue;
+      }
+      return false;
+    }
+    if (typeof parentStateValue === "string") {
+      return parentStateValue in childStateValue;
+    }
+    return Object.keys(parentStateValue).every((key) => {
+      if (!(key in childStateValue)) {
+        return false;
+      }
+      return matchesState(parentStateValue[key], childStateValue[key]);
+    });
+  }
+  function toStatePath(stateId) {
+    if (isArray(stateId)) {
+      return stateId;
+    }
+    const result = [];
+    let segment = "";
+    for (let i = 0;i < stateId.length; i++) {
+      const char = stateId.charCodeAt(i);
+      switch (char) {
+        case 92:
+          segment += stateId[i + 1];
+          i++;
+          continue;
+        case 46:
+          result.push(segment);
+          segment = "";
+          continue;
+      }
+      segment += stateId[i];
+    }
+    result.push(segment);
+    return result;
+  }
+  function toStateValue(stateValue) {
+    if (isMachineSnapshot(stateValue)) {
+      return stateValue.value;
+    }
+    if (typeof stateValue !== "string") {
+      return stateValue;
+    }
+    const statePath = toStatePath(stateValue);
+    return pathToStateValue(statePath);
+  }
+  function pathToStateValue(statePath) {
+    if (statePath.length === 1) {
+      return statePath[0];
+    }
+    const value = {};
+    let marker = value;
+    for (let i = 0;i < statePath.length - 1; i++) {
+      if (i === statePath.length - 2) {
+        marker[statePath[i]] = statePath[i + 1];
+      } else {
+        const previous = marker;
+        marker = {};
+        previous[statePath[i]] = marker;
+      }
+    }
+    return value;
+  }
+  function mapValues(collection, iteratee) {
+    const result = {};
+    const collectionKeys = Object.keys(collection);
+    for (let i = 0;i < collectionKeys.length; i++) {
+      const key = collectionKeys[i];
+      result[key] = iteratee(collection[key], key, collection, i);
+    }
+    return result;
+  }
+  function toArrayStrict(value) {
+    if (isArray(value)) {
+      return value;
+    }
+    return [value];
+  }
+  function toArray(value) {
+    if (value === undefined) {
+      return [];
+    }
+    return toArrayStrict(value);
+  }
+  function resolveOutput(mapper, context, event, self2) {
+    if (typeof mapper === "function") {
+      return mapper({
+        context,
+        event,
+        self: self2
+      });
+    }
+    if (mapper && typeof mapper === "object" && Object.values(mapper).some((val) => typeof val === "function")) {
+      console.warn(`Dynamically mapping values to individual properties is deprecated. Use a single function that returns the mapped object instead.
+Found object containing properties whose values are possibly mapping functions: ${Object.entries(mapper).filter(([, value]) => typeof value === "function").map(([key, value]) => `
+ - ${key}: ${value.toString().replace(/\n\s*/g, "")}`).join("")}`);
+    }
+    return mapper;
+  }
+  function isArray(value) {
+    return Array.isArray(value);
+  }
+  function isErrorActorEvent(event) {
+    return event.type.startsWith("xstate.error.actor");
+  }
+  function toTransitionConfigArray(configLike) {
+    return toArrayStrict(configLike).map((transitionLike) => {
+      if (typeof transitionLike === "undefined" || typeof transitionLike === "string") {
+        return {
+          target: transitionLike
+        };
+      }
+      return transitionLike;
+    });
+  }
+  function normalizeTarget(target) {
+    if (target === undefined || target === TARGETLESS_KEY) {
+      return;
+    }
+    return toArray(target);
+  }
+  function toObserver(nextHandler, errorHandler, completionHandler) {
+    const isObserver = typeof nextHandler === "object";
+    const self2 = isObserver ? nextHandler : undefined;
+    return {
+      next: (isObserver ? nextHandler.next : nextHandler)?.bind(self2),
+      error: (isObserver ? nextHandler.error : errorHandler)?.bind(self2),
+      complete: (isObserver ? nextHandler.complete : completionHandler)?.bind(self2)
+    };
+  }
+  function createInvokeId(stateNodeId, index) {
+    return `${index}.${stateNodeId}`;
+  }
+  function resolveReferencedActor(machine, src) {
+    const match = src.match(/^xstate\.invoke\.(\d+)\.(.*)/);
+    if (!match) {
+      return machine.implementations.actors[src];
+    }
+    const [, indexStr, nodeId] = match;
+    const node = machine.getStateNodeById(nodeId);
+    const invokeConfig = node.config.invoke;
+    return (Array.isArray(invokeConfig) ? invokeConfig[indexStr] : invokeConfig).src;
+  }
+  function getAllOwnEventDescriptors(snapshot) {
+    return [...new Set([...snapshot._nodes.flatMap((sn) => sn.ownEvents)])];
+  }
+  function matchesEventDescriptor(eventType, descriptor) {
+    if (descriptor === eventType) {
+      return true;
+    }
+    if (descriptor === WILDCARD) {
+      return true;
+    }
+    if (!descriptor.endsWith(".*")) {
+      return false;
+    }
+    if (/.*\*.+/.test(descriptor)) {
+      console.warn(`Wildcards can only be the last token of an event descriptor (e.g., "event.*") or the entire event descriptor ("*"). Check the "${descriptor}" event.`);
+    }
+    const partialEventTokens = descriptor.split(".");
+    const eventTokens = eventType.split(".");
+    for (let tokenIndex = 0;tokenIndex < partialEventTokens.length; tokenIndex++) {
+      const partialEventToken = partialEventTokens[tokenIndex];
+      const eventToken = eventTokens[tokenIndex];
+      if (partialEventToken === "*") {
+        const isLastToken = tokenIndex === partialEventTokens.length - 1;
+        if (!isLastToken) {
+          console.warn(`Infix wildcards in transition events are not allowed. Check the "${descriptor}" transition.`);
+        }
+        return isLastToken;
+      }
+      if (partialEventToken !== eventToken) {
+        return false;
+      }
+    }
+    return true;
+  }
+  function createScheduledEventId(actorRef, id) {
+    return `${actorRef.sessionId}.${id}`;
+  }
+  var idCounter = 0;
+  function createSystem(rootActor, options) {
+    const children = new Map;
+    const keyedActors = new Map;
+    const reverseKeyedActors = new WeakMap;
+    const inspectionObservers = new Set;
+    const timerMap = {};
+    const {
+      clock,
+      logger
+    } = options;
+    const scheduler = {
+      schedule: (source, target, event, delay, id = Math.random().toString(36).slice(2)) => {
+        const scheduledEvent = {
+          source,
+          target,
+          event,
+          delay,
+          id,
+          startedAt: Date.now()
+        };
+        const scheduledEventId = createScheduledEventId(source, id);
+        system._snapshot._scheduledEvents[scheduledEventId] = scheduledEvent;
+        const timeout = clock.setTimeout(() => {
+          delete timerMap[scheduledEventId];
+          delete system._snapshot._scheduledEvents[scheduledEventId];
+          system._relay(source, target, event);
+        }, delay);
+        timerMap[scheduledEventId] = timeout;
+      },
+      cancel: (source, id) => {
+        const scheduledEventId = createScheduledEventId(source, id);
+        const timeout = timerMap[scheduledEventId];
+        delete timerMap[scheduledEventId];
+        delete system._snapshot._scheduledEvents[scheduledEventId];
+        if (timeout !== undefined) {
+          clock.clearTimeout(timeout);
+        }
+      },
+      cancelAll: (actorRef) => {
+        for (const scheduledEventId in system._snapshot._scheduledEvents) {
+          const scheduledEvent = system._snapshot._scheduledEvents[scheduledEventId];
+          if (scheduledEvent.source === actorRef) {
+            scheduler.cancel(actorRef, scheduledEvent.id);
+          }
+        }
+      }
+    };
+    const sendInspectionEvent = (event) => {
+      if (!inspectionObservers.size) {
+        return;
+      }
+      const resolvedInspectionEvent = {
+        ...event,
+        rootId: rootActor.sessionId
+      };
+      inspectionObservers.forEach((observer) => observer.next?.(resolvedInspectionEvent));
+    };
+    const system = {
+      _snapshot: {
+        _scheduledEvents: (options?.snapshot && options.snapshot.scheduler) ?? {}
+      },
+      _bookId: () => `x:${idCounter++}`,
+      _register: (sessionId, actorRef) => {
+        children.set(sessionId, actorRef);
+        return sessionId;
+      },
+      _unregister: (actorRef) => {
+        children.delete(actorRef.sessionId);
+        const systemId = reverseKeyedActors.get(actorRef);
+        if (systemId !== undefined) {
+          keyedActors.delete(systemId);
+          reverseKeyedActors.delete(actorRef);
+        }
+      },
+      get: (systemId) => {
+        return keyedActors.get(systemId);
+      },
+      getAll: () => {
+        return Object.fromEntries(keyedActors.entries());
+      },
+      _set: (systemId, actorRef) => {
+        const existing = keyedActors.get(systemId);
+        if (existing && existing !== actorRef) {
+          throw new Error(`Actor with system ID '${systemId}' already exists.`);
+        }
+        keyedActors.set(systemId, actorRef);
+        reverseKeyedActors.set(actorRef, systemId);
+      },
+      inspect: (observerOrFn) => {
+        const observer = toObserver(observerOrFn);
+        inspectionObservers.add(observer);
+        return {
+          unsubscribe() {
+            inspectionObservers.delete(observer);
+          }
+        };
+      },
+      _sendInspectionEvent: sendInspectionEvent,
+      _relay: (source, target, event) => {
+        system._sendInspectionEvent({
+          type: "@xstate.event",
+          sourceRef: source,
+          actorRef: target,
+          event
+        });
+        target._send(event);
+      },
+      scheduler,
+      getSnapshot: () => {
+        return {
+          _scheduledEvents: {
+            ...system._snapshot._scheduledEvents
+          }
+        };
+      },
+      start: () => {
+        const scheduledEvents = system._snapshot._scheduledEvents;
+        system._snapshot._scheduledEvents = {};
+        for (const scheduledId in scheduledEvents) {
+          const {
+            source,
+            target,
+            event,
+            delay,
+            id
+          } = scheduledEvents[scheduledId];
+          scheduler.schedule(source, target, event, delay, id);
+        }
+      },
+      _clock: clock,
+      _logger: logger
+    };
+    return system;
+  }
+  exports.executingCustomAction = false;
+  var $$ACTOR_TYPE = 1;
+  var ProcessingStatus = /* @__PURE__ */ ((ProcessingStatus2) => {
+    ProcessingStatus2[ProcessingStatus2["NotStarted"] = 0] = "NotStarted";
+    ProcessingStatus2[ProcessingStatus2["Running"] = 1] = "Running";
+    ProcessingStatus2[ProcessingStatus2["Stopped"] = 2] = "Stopped";
+    return ProcessingStatus2;
+  })({});
+  var defaultOptions = {
+    clock: {
+      setTimeout: (fn, ms) => {
+        return setTimeout(fn, ms);
+      },
+      clearTimeout: (id) => {
+        return clearTimeout(id);
+      }
+    },
+    logger: console.log.bind(console),
+    devTools: false
+  };
+
+  class Actor {
+    constructor(logic, options) {
+      this.logic = logic;
+      this._snapshot = undefined;
+      this.clock = undefined;
+      this.options = undefined;
+      this.id = undefined;
+      this.mailbox = new Mailbox(this._process.bind(this));
+      this.observers = new Set;
+      this.eventListeners = new Map;
+      this.logger = undefined;
+      this._processingStatus = ProcessingStatus.NotStarted;
+      this._parent = undefined;
+      this._syncSnapshot = undefined;
+      this.ref = undefined;
+      this._actorScope = undefined;
+      this.systemId = undefined;
+      this.sessionId = undefined;
+      this.system = undefined;
+      this._doneEvent = undefined;
+      this.src = undefined;
+      this._deferred = [];
+      const resolvedOptions = {
+        ...defaultOptions,
+        ...options
+      };
+      const {
+        clock,
+        logger,
+        parent,
+        syncSnapshot,
+        id,
+        systemId,
+        inspect
+      } = resolvedOptions;
+      this.system = parent ? parent.system : createSystem(this, {
+        clock,
+        logger
+      });
+      if (inspect && !parent) {
+        this.system.inspect(toObserver(inspect));
+      }
+      this.sessionId = this.system._bookId();
+      this.id = id ?? this.sessionId;
+      this.logger = options?.logger ?? this.system._logger;
+      this.clock = options?.clock ?? this.system._clock;
+      this._parent = parent;
+      this._syncSnapshot = syncSnapshot;
+      this.options = resolvedOptions;
+      this.src = resolvedOptions.src ?? logic;
+      this.ref = this;
+      this._actorScope = {
+        self: this,
+        id: this.id,
+        sessionId: this.sessionId,
+        logger: this.logger,
+        defer: (fn) => {
+          this._deferred.push(fn);
+        },
+        system: this.system,
+        stopChild: (child) => {
+          if (child._parent !== this) {
+            throw new Error(`Cannot stop child actor ${child.id} of ${this.id} because it is not a child`);
+          }
+          child._stop();
+        },
+        emit: (emittedEvent) => {
+          const listeners = this.eventListeners.get(emittedEvent.type);
+          const wildcardListener = this.eventListeners.get("*");
+          if (!listeners && !wildcardListener) {
+            return;
+          }
+          const allListeners = [...listeners ? listeners.values() : [], ...wildcardListener ? wildcardListener.values() : []];
+          for (const handler of allListeners) {
+            try {
+              handler(emittedEvent);
+            } catch (err) {
+              reportUnhandledError(err);
+            }
+          }
+        },
+        actionExecutor: (action) => {
+          const exec = () => {
+            this._actorScope.system._sendInspectionEvent({
+              type: "@xstate.action",
+              actorRef: this,
+              action: {
+                type: action.type,
+                params: action.params
+              }
+            });
+            if (!action.exec) {
+              return;
+            }
+            const saveExecutingCustomAction = exports.executingCustomAction;
+            try {
+              exports.executingCustomAction = true;
+              action.exec(action.info, action.params);
+            } finally {
+              exports.executingCustomAction = saveExecutingCustomAction;
+            }
+          };
+          if (this._processingStatus === ProcessingStatus.Running) {
+            exec();
+          } else {
+            this._deferred.push(exec);
+          }
+        }
+      };
+      this.send = this.send.bind(this);
+      this.system._sendInspectionEvent({
+        type: "@xstate.actor",
+        actorRef: this
+      });
+      if (systemId) {
+        this.systemId = systemId;
+        this.system._set(systemId, this);
+      }
+      this._initState(options?.snapshot ?? options?.state);
+      if (systemId && this._snapshot.status !== "active") {
+        this.system._unregister(this);
+      }
+    }
+    _initState(persistedState) {
+      try {
+        this._snapshot = persistedState ? this.logic.restoreSnapshot ? this.logic.restoreSnapshot(persistedState, this._actorScope) : persistedState : this.logic.getInitialSnapshot(this._actorScope, this.options?.input);
+      } catch (err) {
+        this._snapshot = {
+          status: "error",
+          output: undefined,
+          error: err
+        };
+      }
+    }
+    update(snapshot, event) {
+      this._snapshot = snapshot;
+      let deferredFn;
+      while (deferredFn = this._deferred.shift()) {
+        try {
+          deferredFn();
+        } catch (err) {
+          this._deferred.length = 0;
+          this._snapshot = {
+            ...snapshot,
+            status: "error",
+            error: err
+          };
+        }
+      }
+      switch (this._snapshot.status) {
+        case "active":
+          for (const observer of this.observers) {
+            try {
+              observer.next?.(snapshot);
+            } catch (err) {
+              reportUnhandledError(err);
+            }
+          }
+          break;
+        case "done":
+          for (const observer of this.observers) {
+            try {
+              observer.next?.(snapshot);
+            } catch (err) {
+              reportUnhandledError(err);
+            }
+          }
+          this._stopProcedure();
+          this._complete();
+          this._doneEvent = createDoneActorEvent(this.id, this._snapshot.output);
+          if (this._parent) {
+            this.system._relay(this, this._parent, this._doneEvent);
+          }
+          break;
+        case "error":
+          this._error(this._snapshot.error);
+          break;
+      }
+      this.system._sendInspectionEvent({
+        type: "@xstate.snapshot",
+        actorRef: this,
+        event,
+        snapshot
+      });
+    }
+    subscribe(nextListenerOrObserver, errorListener, completeListener) {
+      const observer = toObserver(nextListenerOrObserver, errorListener, completeListener);
+      if (this._processingStatus === ProcessingStatus.Stopped) {
+        switch (this._snapshot.status) {
+          case "done":
+            try {
+              observer.complete?.();
+            } catch (err) {
+              reportUnhandledError(err);
+            }
+            break;
+          case "error": {
+            const err = this._snapshot.error;
+            if (observer.error) {
+              try {
+                observer.error(err);
+              } catch (err2) {
+                reportUnhandledError(err2);
+              }
+            } else {
+              reportUnhandledError(err);
+            }
+            break;
+          }
+        }
+      } else {
+        this.observers.add(observer);
+      }
+      return {
+        unsubscribe: () => {
+          this.observers.delete(observer);
+        }
+      };
+    }
+    on(type, handler) {
+      let listeners = this.eventListeners.get(type);
+      if (!listeners) {
+        listeners = new Set;
+        this.eventListeners.set(type, listeners);
+      }
+      const wrappedHandler = handler.bind(undefined);
+      listeners.add(wrappedHandler);
+      return {
+        unsubscribe: () => {
+          listeners.delete(wrappedHandler);
+        }
+      };
+    }
+    select(selector, equalityFn = Object.is) {
+      return {
+        subscribe: (observerOrFn) => {
+          const observer = toObserver(observerOrFn);
+          const snapshot = this.getSnapshot();
+          let previousSelected = selector(snapshot);
+          return this.subscribe((snapshot2) => {
+            const nextSelected = selector(snapshot2);
+            if (!equalityFn(previousSelected, nextSelected)) {
+              previousSelected = nextSelected;
+              observer.next?.(nextSelected);
+            }
+          });
+        },
+        get: () => selector(this.getSnapshot())
+      };
+    }
+    start() {
+      if (this._processingStatus === ProcessingStatus.Running) {
+        return this;
+      }
+      if (this._syncSnapshot) {
+        this.subscribe({
+          next: (snapshot) => {
+            if (snapshot.status === "active") {
+              this.system._relay(this, this._parent, {
+                type: `xstate.snapshot.${this.id}`,
+                snapshot
+              });
+            }
+          },
+          error: () => {}
+        });
+      }
+      this.system._register(this.sessionId, this);
+      if (this.systemId) {
+        this.system._set(this.systemId, this);
+      }
+      this._processingStatus = ProcessingStatus.Running;
+      const initEvent = createInitEvent(this.options.input);
+      this.system._sendInspectionEvent({
+        type: "@xstate.event",
+        sourceRef: this._parent,
+        actorRef: this,
+        event: initEvent
+      });
+      const status = this._snapshot.status;
+      switch (status) {
+        case "done":
+          this.update(this._snapshot, initEvent);
+          return this;
+        case "error":
+          this._error(this._snapshot.error);
+          return this;
+      }
+      if (!this._parent) {
+        this.system.start();
+      }
+      if (this.logic.start) {
+        try {
+          this.logic.start(this._snapshot, this._actorScope);
+        } catch (err) {
+          this._snapshot = {
+            ...this._snapshot,
+            status: "error",
+            error: err
+          };
+          this._error(err);
+          return this;
+        }
+      }
+      this.update(this._snapshot, initEvent);
+      if (this.options.devTools) {
+        this.attachDevTools();
+      }
+      this.mailbox.start();
+      return this;
+    }
+    _process(event) {
+      let nextState;
+      let caughtError;
+      try {
+        nextState = this.logic.transition(this._snapshot, event, this._actorScope);
+      } catch (err) {
+        caughtError = {
+          err
+        };
+      }
+      if (caughtError) {
+        const {
+          err
+        } = caughtError;
+        this._snapshot = {
+          ...this._snapshot,
+          status: "error",
+          error: err
+        };
+        this._error(err);
+        return;
+      }
+      this.update(nextState, event);
+      if (event.type === XSTATE_STOP) {
+        this._stopProcedure();
+        this._complete();
+      }
+    }
+    _stop() {
+      if (this._processingStatus === ProcessingStatus.Stopped) {
+        return this;
+      }
+      this.mailbox.clear();
+      if (this._processingStatus === ProcessingStatus.NotStarted) {
+        this._processingStatus = ProcessingStatus.Stopped;
+        return this;
+      }
+      this.mailbox.enqueue({
+        type: XSTATE_STOP
+      });
+      return this;
+    }
+    stop() {
+      if (this._parent) {
+        throw new Error("A non-root actor cannot be stopped directly.");
+      }
+      return this._stop();
+    }
+    _complete() {
+      for (const observer of this.observers) {
+        try {
+          observer.complete?.();
+        } catch (err) {
+          reportUnhandledError(err);
+        }
+      }
+      this.observers.clear();
+      this.eventListeners.clear();
+    }
+    _reportError(err) {
+      if (!this.observers.size) {
+        if (!this._parent) {
+          reportUnhandledError(err);
+        }
+        this.eventListeners.clear();
+        return;
+      }
+      let reportError = false;
+      for (const observer of this.observers) {
+        const errorListener = observer.error;
+        reportError ||= !errorListener;
+        try {
+          errorListener?.(err);
+        } catch (err2) {
+          reportUnhandledError(err2);
+        }
+      }
+      this.observers.clear();
+      this.eventListeners.clear();
+      if (reportError) {
+        reportUnhandledError(err);
+      }
+    }
+    _error(err) {
+      this._stopProcedure();
+      this._reportError(err);
+      if (this._parent) {
+        this.system._relay(this, this._parent, createErrorActorEvent(this.id, err));
+      }
+    }
+    _stopProcedure() {
+      if (this._processingStatus !== ProcessingStatus.Running) {
+        return this;
+      }
+      this.system.scheduler.cancelAll(this);
+      this.mailbox.clear();
+      this.mailbox = new Mailbox(this._process.bind(this));
+      this._processingStatus = ProcessingStatus.Stopped;
+      this.system._unregister(this);
+      return this;
+    }
+    _send(event) {
+      if (this._processingStatus === ProcessingStatus.Stopped) {
+        {
+          let eventString;
+          try {
+            eventString = JSON.stringify(event);
+          } catch {
+            eventString = String(event);
+          }
+          console.warn(`Event "${event.type}" was sent to stopped actor "${this.id} (${this.sessionId})". This actor has already reached its final state, and will not transition.
+Event: ${eventString}`);
+        }
+        return;
+      }
+      this.mailbox.enqueue(event);
+    }
+    send(event) {
+      if (typeof event === "string") {
+        throw new Error(`Only event objects may be sent to actors; use .send({ type: "${event}" }) instead`);
+      }
+      this.system._relay(undefined, this, event);
+    }
+    attachDevTools() {
+      const {
+        devTools
+      } = this.options;
+      if (devTools) {
+        const resolvedDevToolsAdapter = typeof devTools === "function" ? devTools : dist_xstateDev.devToolsAdapter;
+        resolvedDevToolsAdapter(this);
+      }
+    }
+    toJSON() {
+      return {
+        xstate$$type: $$ACTOR_TYPE,
+        id: this.id
+      };
+    }
+    getPersistedSnapshot(options) {
+      return this.logic.getPersistedSnapshot(this._snapshot, options);
+    }
+    [symbolObservable]() {
+      return this;
+    }
+    getSnapshot() {
+      if (!this._snapshot) {
+        throw new Error(`Snapshot can't be read while the actor initializes itself`);
+      }
+      return this._snapshot;
+    }
+  }
+  function createActor(logic, ...[options]) {
+    return new Actor(logic, options);
+  }
+  var interpret = createActor;
+  function resolveCancel(_, snapshot, actionArgs, actionParams, {
+    sendId
+  }) {
+    const resolvedSendId = typeof sendId === "function" ? sendId(actionArgs, actionParams) : sendId;
+    return [snapshot, {
+      sendId: resolvedSendId
+    }, undefined];
+  }
+  function executeCancel(actorScope, params) {
+    actorScope.defer(() => {
+      actorScope.system.scheduler.cancel(actorScope.self, params.sendId);
+    });
+  }
+  function cancel(sendId) {
+    function cancel2(_args, _params) {
+        throw new Error(`This isn't supposed to be called`);
+    }
+    cancel2.type = "xstate.cancel";
+    cancel2.sendId = sendId;
+    cancel2.resolve = resolveCancel;
+    cancel2.execute = executeCancel;
+    return cancel2;
+  }
+  function resolveSpawn(actorScope, snapshot, actionArgs, _actionParams, {
+    id,
+    systemId,
+    src,
+    input,
+    syncSnapshot
+  }) {
+    const logic = typeof src === "string" ? resolveReferencedActor(snapshot.machine, src) : src;
+    const resolvedId = typeof id === "function" ? id(actionArgs) : id;
+    let actorRef;
+    let resolvedInput ;
+    if (logic) {
+      resolvedInput = typeof input === "function" ? input({
+        context: snapshot.context,
+        event: actionArgs.event,
+        self: actorScope.self
+      }) : input;
+      actorRef = createActor(logic, {
+        id: resolvedId,
+        src,
+        parent: actorScope.self,
+        syncSnapshot,
+        systemId,
+        input: resolvedInput
+      });
+    }
+    if (!actorRef) {
+      console.warn(`Actor type '${src}' not found in machine '${actorScope.id}'.`);
+    }
+    return [cloneMachineSnapshot(snapshot, {
+      children: {
+        ...snapshot.children,
+        [resolvedId]: actorRef
+      }
+    }), {
+      id,
+      systemId,
+      actorRef,
+      src,
+      input: resolvedInput
+    }, undefined];
+  }
+  function executeSpawn(actorScope, {
+    actorRef
+  }) {
+    if (!actorRef) {
+      return;
+    }
+    actorScope.defer(() => {
+      if (actorRef._processingStatus === ProcessingStatus.Stopped) {
+        return;
+      }
+      actorRef.start();
+    });
+  }
+  function spawnChild(...[src, {
+    id,
+    systemId,
+    input,
+    syncSnapshot = false
+  } = {}]) {
+    function spawnChild2(_args, _params) {
+        throw new Error(`This isn't supposed to be called`);
+    }
+    spawnChild2.type = "xstate.spawnChild";
+    spawnChild2.id = id;
+    spawnChild2.systemId = systemId;
+    spawnChild2.src = src;
+    spawnChild2.input = input;
+    spawnChild2.syncSnapshot = syncSnapshot;
+    spawnChild2.resolve = resolveSpawn;
+    spawnChild2.execute = executeSpawn;
+    return spawnChild2;
+  }
+  function resolveStop(_, snapshot, args, actionParams, {
+    actorRef
+  }) {
+    const actorRefOrString = typeof actorRef === "function" ? actorRef(args, actionParams) : actorRef;
+    const resolvedActorRef = typeof actorRefOrString === "string" ? snapshot.children[actorRefOrString] : actorRefOrString;
+    let children = snapshot.children;
+    if (resolvedActorRef) {
+      children = {
+        ...children
+      };
+      delete children[resolvedActorRef.id];
+    }
+    return [cloneMachineSnapshot(snapshot, {
+      children
+    }), resolvedActorRef, undefined];
+  }
+  function unregisterRecursively(actorScope, actorRef) {
+    const snapshot = actorRef.getSnapshot();
+    if (snapshot && "children" in snapshot) {
+      for (const child of Object.values(snapshot.children)) {
+        unregisterRecursively(actorScope, child);
+      }
+    }
+    actorScope.system._unregister(actorRef);
+  }
+  function executeStop(actorScope, actorRef) {
+    if (!actorRef) {
+      return;
+    }
+    unregisterRecursively(actorScope, actorRef);
+    if (actorRef._processingStatus !== ProcessingStatus.Running) {
+      actorScope.stopChild(actorRef);
+      return;
+    }
+    actorScope.defer(() => {
+      actorScope.stopChild(actorRef);
+    });
+  }
+  function stopChild(actorRef) {
+    function stop2(_args, _params) {
+        throw new Error(`This isn't supposed to be called`);
+    }
+    stop2.type = "xstate.stopChild";
+    stop2.actorRef = actorRef;
+    stop2.resolve = resolveStop;
+    stop2.execute = executeStop;
+    return stop2;
+  }
+  var stop = stopChild;
+  function checkStateIn(snapshot, _, {
+    stateValue
+  }) {
+    if (typeof stateValue === "string" && isStateId(stateValue)) {
+      const target = snapshot.machine.getStateNodeById(stateValue);
+      return snapshot._nodes.some((sn) => sn === target);
+    }
+    return snapshot.matches(stateValue);
+  }
+  function stateIn(stateValue) {
+    function stateIn2() {
+        throw new Error(`This isn't supposed to be called`);
+    }
+    stateIn2.check = checkStateIn;
+    stateIn2.stateValue = stateValue;
+    return stateIn2;
+  }
+  function checkNot(snapshot, {
+    context,
+    event
+  }, {
+    guards
+  }) {
+    return !evaluateGuard(guards[0], context, event, snapshot);
+  }
+  function not(guard) {
+    function not2(_args, _params) {
+        throw new Error(`This isn't supposed to be called`);
+    }
+    not2.check = checkNot;
+    not2.guards = [guard];
+    return not2;
+  }
+  function checkAnd(snapshot, {
+    context,
+    event
+  }, {
+    guards
+  }) {
+    return guards.every((guard) => evaluateGuard(guard, context, event, snapshot));
+  }
+  function and(guards) {
+    function and2(_args, _params) {
+        throw new Error(`This isn't supposed to be called`);
+    }
+    and2.check = checkAnd;
+    and2.guards = guards;
+    return and2;
+  }
+  function checkOr(snapshot, {
+    context,
+    event
+  }, {
+    guards
+  }) {
+    return guards.some((guard) => evaluateGuard(guard, context, event, snapshot));
+  }
+  function or(guards) {
+    function or2(_args, _params) {
+        throw new Error(`This isn't supposed to be called`);
+    }
+    or2.check = checkOr;
+    or2.guards = guards;
+    return or2;
+  }
+  function evaluateGuard(guard, context, event, snapshot) {
+    const {
+      machine
+    } = snapshot;
+    const isInline = typeof guard === "function";
+    const resolved = isInline ? guard : machine.implementations.guards[typeof guard === "string" ? guard : guard.type];
+    if (!isInline && !resolved) {
+      throw new Error(`Guard '${typeof guard === "string" ? guard : guard.type}' is not implemented.'.`);
+    }
+    if (typeof resolved !== "function") {
+      return evaluateGuard(resolved, context, event, snapshot);
+    }
+    const guardArgs = {
+      context,
+      event
+    };
+    const guardParams = isInline || typeof guard === "string" ? undefined : ("params" in guard) ? typeof guard.params === "function" ? guard.params({
+      context,
+      event
+    }) : guard.params : undefined;
+    if (!("check" in resolved)) {
+      return resolved(guardArgs, guardParams);
+    }
+    const builtinGuard = resolved;
+    return builtinGuard.check(snapshot, guardArgs, resolved);
+  }
+  function isAtomicStateNode(stateNode) {
+    return stateNode.type === "atomic" || stateNode.type === "final";
+  }
+  function getChildren(stateNode) {
+    return Object.values(stateNode.states).filter((sn) => sn.type !== "history");
+  }
+  function getProperAncestors(stateNode, toStateNode) {
+    const ancestors = [];
+    if (toStateNode === stateNode) {
+      return ancestors;
+    }
+    let m = stateNode.parent;
+    while (m && m !== toStateNode) {
+      ancestors.push(m);
+      m = m.parent;
+    }
+    return ancestors;
+  }
+  function getAllStateNodes(stateNodes) {
+    const nodeSet = new Set(stateNodes);
+    const adjList = getAdjList(nodeSet);
+    for (const s of nodeSet) {
+      if (s.type === "compound" && (!adjList.get(s) || !adjList.get(s).length)) {
+        getInitialStateNodesWithTheirAncestors(s).forEach((sn) => nodeSet.add(sn));
+      } else if (s.type === "parallel") {
+          for (const child of getChildren(s)) {
+            if (child.type === "history") {
+              continue;
+            }
+            if (!nodeSet.has(child)) {
+              const initialStates = getInitialStateNodesWithTheirAncestors(child);
+              for (const initialStateNode of initialStates) {
+                nodeSet.add(initialStateNode);
+              }
+            }
+          }
+        }
+    }
+    for (const s of nodeSet) {
+      let m = s.parent;
+      while (m) {
+        nodeSet.add(m);
+        m = m.parent;
+      }
+    }
+    return nodeSet;
+  }
+  function getValueFromAdj(baseNode, adjList) {
+    const childStateNodes = adjList.get(baseNode);
+    if (!childStateNodes) {
+      return {};
+    }
+    if (baseNode.type === "compound") {
+      const childStateNode = childStateNodes[0];
+      if (childStateNode) {
+        if (isAtomicStateNode(childStateNode)) {
+          return childStateNode.key;
+        }
+      } else {
+        return {};
+      }
+    }
+    const stateValue = {};
+    for (const childStateNode of childStateNodes) {
+      stateValue[childStateNode.key] = getValueFromAdj(childStateNode, adjList);
+    }
+    return stateValue;
+  }
+  function getAdjList(stateNodes) {
+    const adjList = new Map;
+    for (const s of stateNodes) {
+      if (!adjList.has(s)) {
+        adjList.set(s, []);
+      }
+      if (s.parent) {
+        if (!adjList.has(s.parent)) {
+          adjList.set(s.parent, []);
+        }
+        adjList.get(s.parent).push(s);
+      }
+    }
+    return adjList;
+  }
+  function getStateValue(rootNode, stateNodes) {
+    const config = getAllStateNodes(stateNodes);
+    return getValueFromAdj(rootNode, getAdjList(config));
+  }
+  function isInFinalState(stateNodeSet, stateNode) {
+    if (stateNode.type === "compound") {
+      return getChildren(stateNode).some((s) => s.type === "final" && stateNodeSet.has(s));
+    }
+    if (stateNode.type === "parallel") {
+      return getChildren(stateNode).every((sn) => isInFinalState(stateNodeSet, sn));
+    }
+    return stateNode.type === "final";
+  }
+  var isStateId = (str) => str[0] === STATE_IDENTIFIER;
+  function getCandidates(stateNode, receivedEventType) {
+    const exactMatch = stateNode.transitions.get(receivedEventType);
+    const wildcardCandidates = [...stateNode.transitions.keys()].filter((eventDescriptor) => eventDescriptor !== receivedEventType && matchesEventDescriptor(receivedEventType, eventDescriptor)).sort((a, b) => b.length - a.length).flatMap((key) => stateNode.transitions.get(key));
+    return exactMatch ? [...exactMatch, ...wildcardCandidates] : wildcardCandidates;
+  }
+  function getDelayedTransitions(stateNode) {
+    const afterConfig = stateNode.config.after;
+    if (!afterConfig) {
+      return [];
+    }
+    const mutateEntryExit = (delay) => {
+      const afterEvent = createAfterEvent(delay, stateNode.id);
+      const eventType = afterEvent.type;
+      stateNode.entry.push(raise(afterEvent, {
+        id: eventType,
+        delay
+      }));
+      stateNode.exit.push(cancel(eventType));
+      return eventType;
+    };
+    const delayedTransitions = Object.keys(afterConfig).flatMap((delay) => {
+      const configTransition = afterConfig[delay];
+      const resolvedTransition = typeof configTransition === "string" ? {
+        target: configTransition
+      } : configTransition;
+      const resolvedDelay = Number.isNaN(+delay) ? delay : +delay;
+      const eventType = mutateEntryExit(resolvedDelay);
+      return toArray(resolvedTransition).map((transition) => ({
+        ...transition,
+        event: eventType,
+        delay: resolvedDelay
+      }));
+    });
+    return delayedTransitions.map((delayedTransition) => {
+      const {
+        delay
+      } = delayedTransition;
+      return {
+        ...formatTransition(stateNode, delayedTransition.event, delayedTransition),
+        delay
+      };
+    });
+  }
+  function formatTransition(stateNode, descriptor, transitionConfig) {
+    const normalizedTarget = normalizeTarget(transitionConfig.target);
+    const reenter = transitionConfig.reenter ?? false;
+    const target = resolveTarget(stateNode, normalizedTarget);
+    if (transitionConfig.cond) {
+      throw new Error(`State "${stateNode.id}" has declared \`cond\` for one of its transitions. This property has been renamed to \`guard\`. Please update your code.`);
+    }
+    const transition = {
+      ...transitionConfig,
+      actions: toArray(transitionConfig.actions),
+      guard: transitionConfig.guard,
+      target,
+      source: stateNode,
+      reenter,
+      eventType: descriptor,
+      toJSON: () => ({
+        ...transition,
+        source: `#${stateNode.id}`,
+        target: target ? target.map((t) => `#${t.id}`) : undefined
+      })
+    };
+    return transition;
+  }
+  function formatTransitions(stateNode) {
+    const transitions = new Map;
+    if (stateNode.config.on) {
+      for (const descriptor of Object.keys(stateNode.config.on)) {
+        if (descriptor === NULL_EVENT) {
+          throw new Error('Null events ("") cannot be specified as a transition key. Use `always: { ... }` instead.');
+        }
+        const transitionsConfig = stateNode.config.on[descriptor];
+        transitions.set(descriptor, toTransitionConfigArray(transitionsConfig).map((t) => formatTransition(stateNode, descriptor, t)));
+      }
+    }
+    if (stateNode.config.onDone) {
+      const descriptor = `xstate.done.state.${stateNode.id}`;
+      transitions.set(descriptor, toTransitionConfigArray(stateNode.config.onDone).map((t) => formatTransition(stateNode, descriptor, t)));
+    }
+    for (const invokeDef of stateNode.invoke) {
+      if (invokeDef.onDone) {
+        const descriptor = `xstate.done.actor.${invokeDef.id}`;
+        transitions.set(descriptor, toTransitionConfigArray(invokeDef.onDone).map((t) => formatTransition(stateNode, descriptor, t)));
+      }
+      if (invokeDef.onError) {
+        const descriptor = `xstate.error.actor.${invokeDef.id}`;
+        transitions.set(descriptor, toTransitionConfigArray(invokeDef.onError).map((t) => formatTransition(stateNode, descriptor, t)));
+      }
+      if (invokeDef.onSnapshot) {
+        const descriptor = `xstate.snapshot.${invokeDef.id}`;
+        transitions.set(descriptor, toTransitionConfigArray(invokeDef.onSnapshot).map((t) => formatTransition(stateNode, descriptor, t)));
+      }
+    }
+    for (const delayedTransition of stateNode.after) {
+      let existing = transitions.get(delayedTransition.eventType);
+      if (!existing) {
+        existing = [];
+        transitions.set(delayedTransition.eventType, existing);
+      }
+      existing.push(delayedTransition);
+    }
+    return transitions;
+  }
+  function formatRouteTransitions(rootStateNode) {
+    const routeTransitions = [];
+    const collectRoutes = (states) => {
+      Object.values(states).forEach((sn) => {
+        if (sn.config.route && sn.config.id) {
+          const routeId = sn.config.id;
+          const userGuard = sn.config.route.guard;
+          const routeMatches = ({
+            event
+          }) => event.to === `#${routeId}`;
+          const transition = {
+            ...sn.config.route,
+            guard: userGuard ? and([routeMatches, userGuard]) : routeMatches,
+            target: `#${routeId}`
+          };
+          routeTransitions.push(formatTransition(rootStateNode, "xstate.route", transition));
+        }
+        if (sn.states) {
+          collectRoutes(sn.states);
+        }
+      });
+    };
+    collectRoutes(rootStateNode.states);
+    if (routeTransitions.length > 0) {
+      rootStateNode.transitions.set("xstate.route", routeTransitions);
+    }
+  }
+  function formatInitialTransition(stateNode, _target) {
+    const resolvedTarget = typeof _target === "string" ? stateNode.states[_target] : _target ? stateNode.states[_target.target] : undefined;
+    if (!resolvedTarget && _target) {
+      throw new Error(`Initial state node "${_target}" not found on parent state node #${stateNode.id}`);
+    }
+    const transition = {
+      source: stateNode,
+      actions: !_target || typeof _target === "string" ? [] : toArray(_target.actions),
+      eventType: null,
+      reenter: false,
+      target: resolvedTarget ? [resolvedTarget] : [],
+      toJSON: () => ({
+        ...transition,
+        source: `#${stateNode.id}`,
+        target: resolvedTarget ? [`#${resolvedTarget.id}`] : []
+      })
+    };
+    return transition;
+  }
+  function resolveTarget(stateNode, targets) {
+    if (targets === undefined) {
+      return;
+    }
+    return targets.map((target) => {
+      if (typeof target !== "string") {
+        return target;
+      }
+      if (isStateId(target)) {
+        return stateNode.machine.getStateNodeById(target);
+      }
+      const isInternalTarget = target[0] === STATE_DELIMITER;
+      if (isInternalTarget && !stateNode.parent) {
+        return getStateNodeByPath(stateNode, target.slice(1));
+      }
+      const resolvedTarget = isInternalTarget ? stateNode.key + target : target;
+      if (stateNode.parent) {
+        try {
+          const targetStateNode = getStateNodeByPath(stateNode.parent, resolvedTarget);
+          return targetStateNode;
+        } catch (err) {
+          throw new Error(`Invalid transition definition for state node '${stateNode.id}':
+${err.message}`);
+        }
+      } else {
+        throw new Error(`Invalid target: "${target}" is not a valid target from the root node. Did you mean ".${target}"?`);
+      }
+    });
+  }
+  function resolveHistoryDefaultTransition(stateNode) {
+    const normalizedTarget = normalizeTarget(stateNode.config.target);
+    if (!normalizedTarget) {
+      if (stateNode.parent.type === "parallel") {
+        return {
+          target: [stateNode.parent]
+        };
+      }
+      return stateNode.parent.initial;
+    }
+    return {
+      target: normalizedTarget.map((t) => typeof t === "string" ? getStateNodeByPath(stateNode.parent, t) : t)
+    };
+  }
+  function isHistoryNode(stateNode) {
+    return stateNode.type === "history";
+  }
+  function getInitialStateNodesWithTheirAncestors(stateNode) {
+    const states = getInitialStateNodes(stateNode);
+    for (const initialState of states) {
+      for (const ancestor of getProperAncestors(initialState, stateNode)) {
+        states.add(ancestor);
+      }
+    }
+    return states;
+  }
+  function getInitialStateNodes(stateNode) {
+    const set = new Set;
+    function iter(descStateNode) {
+      if (set.has(descStateNode)) {
+        return;
+      }
+      set.add(descStateNode);
+      if (descStateNode.type === "compound") {
+        iter(descStateNode.initial.target[0]);
+      } else if (descStateNode.type === "parallel") {
+        for (const child of getChildren(descStateNode)) {
+          iter(child);
+        }
+      }
+    }
+    iter(stateNode);
+    return set;
+  }
+  function getStateNode(stateNode, stateKey) {
+    if (isStateId(stateKey)) {
+      return stateNode.machine.getStateNodeById(stateKey);
+    }
+    if (!stateNode.states) {
+      throw new Error(`Unable to retrieve child state '${stateKey}' from '${stateNode.id}'; no child states exist.`);
+    }
+    const result = stateNode.states[stateKey];
+    if (!result) {
+      throw new Error(`Child state '${stateKey}' does not exist on '${stateNode.id}'`);
+    }
+    return result;
+  }
+  function getStateNodeByPath(stateNode, statePath) {
+    if (typeof statePath === "string" && isStateId(statePath)) {
+      try {
+        return stateNode.machine.getStateNodeById(statePath);
+      } catch {}
+    }
+    const arrayStatePath = toStatePath(statePath).slice();
+    let currentStateNode = stateNode;
+    while (arrayStatePath.length) {
+      const key = arrayStatePath.shift();
+      if (!key.length) {
+        break;
+      }
+      currentStateNode = getStateNode(currentStateNode, key);
+    }
+    return currentStateNode;
+  }
+  function getStateNodes(stateNode, stateValue) {
+    if (typeof stateValue === "string") {
+      const childStateNode = stateNode.states[stateValue];
+      if (!childStateNode) {
+        throw new Error(`State '${stateValue}' does not exist on '${stateNode.id}'`);
+      }
+      return [stateNode, childStateNode];
+    }
+    const childStateKeys = Object.keys(stateValue);
+    const childStateNodes = childStateKeys.map((subStateKey) => getStateNode(stateNode, subStateKey)).filter(Boolean);
+    return [stateNode.machine.root, stateNode].concat(childStateNodes, childStateKeys.reduce((allSubStateNodes, subStateKey) => {
+      const subStateNode = getStateNode(stateNode, subStateKey);
+      if (!subStateNode) {
+        return allSubStateNodes;
+      }
+      const subStateNodes = getStateNodes(subStateNode, stateValue[subStateKey]);
+      return allSubStateNodes.concat(subStateNodes);
+    }, []));
+  }
+  function transitionAtomicNode(stateNode, stateValue, snapshot, event) {
+    const childStateNode = getStateNode(stateNode, stateValue);
+    const next = childStateNode.next(snapshot, event);
+    if (!next || !next.length) {
+      return stateNode.next(snapshot, event);
+    }
+    return next;
+  }
+  function transitionCompoundNode(stateNode, stateValue, snapshot, event) {
+    const subStateKeys = Object.keys(stateValue);
+    const childStateNode = getStateNode(stateNode, subStateKeys[0]);
+    const next = transitionNode(childStateNode, stateValue[subStateKeys[0]], snapshot, event);
+    if (!next || !next.length) {
+      return stateNode.next(snapshot, event);
+    }
+    return next;
+  }
+  function transitionParallelNode(stateNode, stateValue, snapshot, event) {
+    const allInnerTransitions = [];
+    for (const subStateKey of Object.keys(stateValue)) {
+      const subStateValue = stateValue[subStateKey];
+      if (!subStateValue) {
+        continue;
+      }
+      const subStateNode = getStateNode(stateNode, subStateKey);
+      const innerTransitions = transitionNode(subStateNode, subStateValue, snapshot, event);
+      if (innerTransitions) {
+        allInnerTransitions.push(...innerTransitions);
+      }
+    }
+    if (!allInnerTransitions.length) {
+      return stateNode.next(snapshot, event);
+    }
+    return allInnerTransitions;
+  }
+  function transitionNode(stateNode, stateValue, snapshot, event) {
+    if (typeof stateValue === "string") {
+      return transitionAtomicNode(stateNode, stateValue, snapshot, event);
+    }
+    if (Object.keys(stateValue).length === 1) {
+      return transitionCompoundNode(stateNode, stateValue, snapshot, event);
+    }
+    return transitionParallelNode(stateNode, stateValue, snapshot, event);
+  }
+  function getHistoryNodes(stateNode) {
+    return Object.keys(stateNode.states).map((key) => stateNode.states[key]).filter((sn) => sn.type === "history");
+  }
+  function isDescendant(childStateNode, parentStateNode) {
+    let marker = childStateNode;
+    while (marker.parent && marker.parent !== parentStateNode) {
+      marker = marker.parent;
+    }
+    return marker.parent === parentStateNode;
+  }
+  function hasIntersection(s1, s2) {
+    const set1 = new Set(s1);
+    const set2 = new Set(s2);
+    for (const item of set1) {
+      if (set2.has(item)) {
+        return true;
+      }
+    }
+    for (const item of set2) {
+      if (set1.has(item)) {
+        return true;
+      }
+    }
+    return false;
+  }
+  function removeConflictingTransitions(enabledTransitions, stateNodeSet, historyValue) {
+    const filteredTransitions = new Set;
+    for (const t1 of enabledTransitions) {
+      let t1Preempted = false;
+      const transitionsToRemove = new Set;
+      for (const t2 of filteredTransitions) {
+        if (hasIntersection(computeExitSet([t1], stateNodeSet, historyValue), computeExitSet([t2], stateNodeSet, historyValue))) {
+          if (isDescendant(t1.source, t2.source)) {
+            transitionsToRemove.add(t2);
+          } else {
+            t1Preempted = true;
+            break;
+          }
+        }
+      }
+      if (!t1Preempted) {
+        for (const t3 of transitionsToRemove) {
+          filteredTransitions.delete(t3);
+        }
+        filteredTransitions.add(t1);
+      }
+    }
+    return Array.from(filteredTransitions);
+  }
+  function findLeastCommonAncestor(stateNodes) {
+    const [head, ...tail] = stateNodes;
+    for (const ancestor of getProperAncestors(head, undefined)) {
+      if (tail.every((sn) => isDescendant(sn, ancestor))) {
+        return ancestor;
+      }
+    }
+  }
+  function getEffectiveTargetStates(transition, historyValue) {
+    if (!transition.target) {
+      return [];
+    }
+    const targets = new Set;
+    for (const targetNode of transition.target) {
+      if (isHistoryNode(targetNode)) {
+        if (historyValue[targetNode.id]) {
+          for (const node of historyValue[targetNode.id]) {
+            targets.add(node);
+          }
+        } else {
+          for (const node of getEffectiveTargetStates(resolveHistoryDefaultTransition(targetNode), historyValue)) {
+            targets.add(node);
+          }
+        }
+      } else {
+        targets.add(targetNode);
+      }
+    }
+    return [...targets];
+  }
+  function getTransitionDomain(transition, historyValue) {
+    const targetStates = getEffectiveTargetStates(transition, historyValue);
+    if (!targetStates) {
+      return;
+    }
+    if (!transition.reenter && targetStates.every((target) => target === transition.source || isDescendant(target, transition.source))) {
+      return transition.source;
+    }
+    const lca = findLeastCommonAncestor(targetStates.concat(transition.source));
+    if (lca) {
+      return lca;
+    }
+    if (transition.reenter) {
+      return;
+    }
+    return transition.source.machine.root;
+  }
+  function computeExitSet(transitions, stateNodeSet, historyValue) {
+    const statesToExit = new Set;
+    for (const t of transitions) {
+      if (t.target?.length) {
+        const domain = getTransitionDomain(t, historyValue);
+        if (t.reenter && t.source === domain) {
+          statesToExit.add(domain);
+        }
+        for (const stateNode of stateNodeSet) {
+          if (isDescendant(stateNode, domain)) {
+            statesToExit.add(stateNode);
+          }
+        }
+      }
+    }
+    return [...statesToExit];
+  }
+  function areStateNodeCollectionsEqual(prevStateNodes, nextStateNodeSet) {
+    if (prevStateNodes.length !== nextStateNodeSet.size) {
+      return false;
+    }
+    for (const node of prevStateNodes) {
+      if (!nextStateNodeSet.has(node)) {
+        return false;
+      }
+    }
+    return true;
+  }
+  function initialMicrostep(root, preInitialState, actorScope, initEvent, internalQueue) {
+    return microstep([{
+      target: [...getInitialStateNodes(root)],
+      source: root,
+      reenter: true,
+      actions: [],
+      eventType: null,
+      toJSON: null
+    }], preInitialState, actorScope, initEvent, true, internalQueue);
+  }
+  function microstep(transitions, currentSnapshot, actorScope, event, isInitial, internalQueue) {
+    const actions = [];
+    if (!transitions.length) {
+      return [currentSnapshot, actions];
+    }
+    const originalExecutor = actorScope.actionExecutor;
+    actorScope.actionExecutor = (action) => {
+      actions.push(action);
+      originalExecutor(action);
+    };
+    try {
+      const mutStateNodeSet = new Set(currentSnapshot._nodes);
+      let historyValue = currentSnapshot.historyValue;
+      const filteredTransitions = removeConflictingTransitions(transitions, mutStateNodeSet, historyValue);
+      let nextState = currentSnapshot;
+      if (!isInitial) {
+        [nextState, historyValue] = exitStates(nextState, event, actorScope, filteredTransitions, mutStateNodeSet, historyValue, internalQueue, actorScope.actionExecutor);
+      }
+      nextState = resolveActionsAndContext(nextState, event, actorScope, filteredTransitions.flatMap((t) => t.actions), internalQueue, undefined);
+      nextState = enterStates(nextState, event, actorScope, filteredTransitions, mutStateNodeSet, internalQueue, historyValue, isInitial);
+      const nextStateNodes = [...mutStateNodeSet];
+      if (nextState.status === "done") {
+        nextState = resolveActionsAndContext(nextState, event, actorScope, nextStateNodes.sort((a, b) => b.order - a.order).flatMap((state) => state.exit), internalQueue, undefined);
+      }
+      try {
+        if (historyValue === currentSnapshot.historyValue && areStateNodeCollectionsEqual(currentSnapshot._nodes, mutStateNodeSet)) {
+          return [nextState, actions];
+        }
+        return [cloneMachineSnapshot(nextState, {
+          _nodes: nextStateNodes,
+          historyValue
+        }), actions];
+      } catch (e) {
+        throw e;
+      }
+    } finally {
+      actorScope.actionExecutor = originalExecutor;
+    }
+  }
+  function getMachineOutput(snapshot, event, actorScope, rootNode, rootCompletionNode) {
+    if (rootNode.output === undefined) {
+      return;
+    }
+    const doneStateEvent = createDoneStateEvent(rootCompletionNode.id, rootCompletionNode.output !== undefined && rootCompletionNode.parent ? resolveOutput(rootCompletionNode.output, snapshot.context, event, actorScope.self) : undefined);
+    return resolveOutput(rootNode.output, snapshot.context, doneStateEvent, actorScope.self);
+  }
+  function enterStates(currentSnapshot, event, actorScope, filteredTransitions, mutStateNodeSet, internalQueue, historyValue, isInitial) {
+    let nextSnapshot = currentSnapshot;
+    const statesToEnter = new Set;
+    const statesForDefaultEntry = new Set;
+    computeEntrySet(filteredTransitions, historyValue, statesForDefaultEntry, statesToEnter);
+    if (isInitial) {
+      statesForDefaultEntry.add(currentSnapshot.machine.root);
+    }
+    const completedNodes = new Set;
+    for (const stateNodeToEnter of [...statesToEnter].sort((a, b) => a.order - b.order)) {
+      mutStateNodeSet.add(stateNodeToEnter);
+      const actions = [];
+      actions.push(...stateNodeToEnter.entry);
+      for (const invokeDef of stateNodeToEnter.invoke) {
+        actions.push(spawnChild(invokeDef.src, {
+          ...invokeDef,
+          syncSnapshot: !!invokeDef.onSnapshot
+        }));
+      }
+      if (statesForDefaultEntry.has(stateNodeToEnter)) {
+        const initialActions = stateNodeToEnter.initial.actions;
+        actions.push(...initialActions);
+      }
+      nextSnapshot = resolveActionsAndContext(nextSnapshot, event, actorScope, actions, internalQueue, stateNodeToEnter.invoke.map((invokeDef) => invokeDef.id));
+      if (stateNodeToEnter.type === "final") {
+        const parent = stateNodeToEnter.parent;
+        let ancestorMarker = parent?.type === "parallel" ? parent : parent?.parent;
+        let rootCompletionNode = ancestorMarker || stateNodeToEnter;
+        if (parent?.type === "compound") {
+          internalQueue.push(createDoneStateEvent(parent.id, stateNodeToEnter.output === undefined ? undefined : resolveOutput(stateNodeToEnter.output, nextSnapshot.context, event, actorScope.self)));
+        }
+        while (ancestorMarker?.type === "parallel" && !completedNodes.has(ancestorMarker) && isInFinalState(mutStateNodeSet, ancestorMarker)) {
+          completedNodes.add(ancestorMarker);
+          internalQueue.push(createDoneStateEvent(ancestorMarker.id));
+          rootCompletionNode = ancestorMarker;
+          ancestorMarker = ancestorMarker.parent;
+        }
+        if (ancestorMarker) {
+          continue;
+        }
+        nextSnapshot = cloneMachineSnapshot(nextSnapshot, {
+          status: "done",
+          output: getMachineOutput(nextSnapshot, event, actorScope, nextSnapshot.machine.root, rootCompletionNode)
+        });
+      }
+    }
+    return nextSnapshot;
+  }
+  function computeEntrySet(transitions, historyValue, statesForDefaultEntry, statesToEnter) {
+    for (const t of transitions) {
+      const domain = getTransitionDomain(t, historyValue);
+      for (const s of t.target || []) {
+        if (!isHistoryNode(s) && (t.source !== s || t.source !== domain || t.reenter)) {
+          statesToEnter.add(s);
+          statesForDefaultEntry.add(s);
+        }
+        addDescendantStatesToEnter(s, historyValue, statesForDefaultEntry, statesToEnter);
+      }
+      const targetStates = getEffectiveTargetStates(t, historyValue);
+      for (const s of targetStates) {
+        const ancestors = getProperAncestors(s, domain);
+        if (domain?.type === "parallel") {
+          ancestors.push(domain);
+        }
+        addAncestorStatesToEnter(statesToEnter, historyValue, statesForDefaultEntry, ancestors, !t.source.parent && t.reenter ? undefined : domain);
+      }
+    }
+  }
+  function addDescendantStatesToEnter(stateNode, historyValue, statesForDefaultEntry, statesToEnter) {
+    if (isHistoryNode(stateNode)) {
+      if (historyValue[stateNode.id]) {
+        const historyStateNodes = historyValue[stateNode.id];
+        for (const s of historyStateNodes) {
+          statesToEnter.add(s);
+          addDescendantStatesToEnter(s, historyValue, statesForDefaultEntry, statesToEnter);
+        }
+        for (const s of historyStateNodes) {
+          addProperAncestorStatesToEnter(s, stateNode.parent, statesToEnter, historyValue, statesForDefaultEntry);
+        }
+      } else {
+        const historyDefaultTransition = resolveHistoryDefaultTransition(stateNode);
+        for (const s of historyDefaultTransition.target) {
+          statesToEnter.add(s);
+          if (historyDefaultTransition === stateNode.parent?.initial) {
+            statesForDefaultEntry.add(stateNode.parent);
+          }
+          addDescendantStatesToEnter(s, historyValue, statesForDefaultEntry, statesToEnter);
+        }
+        for (const s of historyDefaultTransition.target) {
+          addProperAncestorStatesToEnter(s, stateNode.parent, statesToEnter, historyValue, statesForDefaultEntry);
+        }
+      }
+    } else if (stateNode.type === "compound") {
+        const [initialState] = stateNode.initial.target;
+        if (!isHistoryNode(initialState)) {
+          statesToEnter.add(initialState);
+          statesForDefaultEntry.add(initialState);
+        }
+        addDescendantStatesToEnter(initialState, historyValue, statesForDefaultEntry, statesToEnter);
+        addProperAncestorStatesToEnter(initialState, stateNode, statesToEnter, historyValue, statesForDefaultEntry);
+      } else if (stateNode.type === "parallel") {
+          for (const child of getChildren(stateNode).filter((sn) => !isHistoryNode(sn))) {
+            if (![...statesToEnter].some((s) => isDescendant(s, child))) {
+              if (!isHistoryNode(child)) {
+                statesToEnter.add(child);
+                statesForDefaultEntry.add(child);
+              }
+              addDescendantStatesToEnter(child, historyValue, statesForDefaultEntry, statesToEnter);
+            }
+          }
+        }
+  }
+  function addAncestorStatesToEnter(statesToEnter, historyValue, statesForDefaultEntry, ancestors, reentrancyDomain) {
+    for (const anc of ancestors) {
+      if (!reentrancyDomain || isDescendant(anc, reentrancyDomain)) {
+        statesToEnter.add(anc);
+      }
+      if (anc.type === "parallel") {
+        for (const child of getChildren(anc).filter((sn) => !isHistoryNode(sn))) {
+          if (![...statesToEnter].some((s) => isDescendant(s, child))) {
+            statesToEnter.add(child);
+            addDescendantStatesToEnter(child, historyValue, statesForDefaultEntry, statesToEnter);
+          }
+        }
+      }
+    }
+  }
+  function addProperAncestorStatesToEnter(stateNode, toStateNode, statesToEnter, historyValue, statesForDefaultEntry) {
+    addAncestorStatesToEnter(statesToEnter, historyValue, statesForDefaultEntry, getProperAncestors(stateNode, toStateNode));
+  }
+  function exitStates(currentSnapshot, event, actorScope, transitions, mutStateNodeSet, historyValue, internalQueue, _actionExecutor) {
+    let nextSnapshot = currentSnapshot;
+    const statesToExit = computeExitSet(transitions, mutStateNodeSet, historyValue);
+    statesToExit.sort((a, b) => b.order - a.order);
+    let changedHistory;
+    for (const exitStateNode of statesToExit) {
+      for (const historyNode of getHistoryNodes(exitStateNode)) {
+        let predicate;
+        if (historyNode.history === "deep") {
+          predicate = (sn) => isAtomicStateNode(sn) && isDescendant(sn, exitStateNode);
+        } else {
+          predicate = (sn) => {
+            return sn.parent === exitStateNode;
+          };
+        }
+        changedHistory ??= {
+          ...historyValue
+        };
+        changedHistory[historyNode.id] = Array.from(mutStateNodeSet).filter(predicate);
+      }
+    }
+    for (const s of statesToExit) {
+      nextSnapshot = resolveActionsAndContext(nextSnapshot, event, actorScope, [...s.exit, ...s.invoke.map((def) => stopChild(def.id))], internalQueue, undefined);
+      mutStateNodeSet.delete(s);
+    }
+    return [nextSnapshot, changedHistory || historyValue];
+  }
+  function getAction(machine, actionType) {
+    return machine.implementations.actions[actionType];
+  }
+  function resolveAndExecuteActionsWithContext(currentSnapshot, event, actorScope, actions, extra, retries) {
+    const {
+      machine
+    } = currentSnapshot;
+    let intermediateSnapshot = currentSnapshot;
+    for (const action of actions) {
+      const isInline = typeof action === "function";
+      const resolvedAction = isInline ? action : getAction(machine, typeof action === "string" ? action : action.type);
+      const actionArgs = {
+        context: intermediateSnapshot.context,
+        event,
+        self: actorScope.self,
+        system: actorScope.system
+      };
+      const actionParams = isInline || typeof action === "string" ? undefined : ("params" in action) ? typeof action.params === "function" ? action.params({
+        context: intermediateSnapshot.context,
+        event
+      }) : action.params : undefined;
+      if (!resolvedAction || !("resolve" in resolvedAction)) {
+        actorScope.actionExecutor({
+          type: typeof action === "string" ? action : typeof action === "object" ? action.type : action.name || "(anonymous)",
+          info: actionArgs,
+          params: actionParams,
+          exec: resolvedAction
+        });
+        continue;
+      }
+      const builtinAction = resolvedAction;
+      const [nextState, params, actions2] = builtinAction.resolve(actorScope, intermediateSnapshot, actionArgs, actionParams, resolvedAction, extra);
+      intermediateSnapshot = nextState;
+      if ("retryResolve" in builtinAction) {
+        retries?.push([builtinAction, params]);
+      }
+      if ("execute" in builtinAction) {
+        actorScope.actionExecutor({
+          type: builtinAction.type,
+          info: actionArgs,
+          params,
+          exec: builtinAction.execute.bind(null, actorScope, params)
+        });
+      }
+      if (actions2) {
+        intermediateSnapshot = resolveAndExecuteActionsWithContext(intermediateSnapshot, event, actorScope, actions2, extra, retries);
+      }
+    }
+    return intermediateSnapshot;
+  }
+  function resolveActionsAndContext(currentSnapshot, event, actorScope, actions, internalQueue, deferredActorIds) {
+    const retries = deferredActorIds ? [] : undefined;
+    const nextState = resolveAndExecuteActionsWithContext(currentSnapshot, event, actorScope, actions, {
+      internalQueue,
+      deferredActorIds
+    }, retries);
+    retries?.forEach(([builtinAction, params]) => {
+      builtinAction.retryResolve(actorScope, nextState, params);
+    });
+    return nextState;
+  }
+  function macrostep(snapshot, event, actorScope, internalQueue) {
+    if (event.type === WILDCARD) {
+      throw new Error(`An event cannot have the wildcard type ('${WILDCARD}')`);
+    }
+    let nextSnapshot = snapshot;
+    const microsteps = [];
+    function addMicrostep(step, event2, transitions) {
+      actorScope.system._sendInspectionEvent({
+        type: "@xstate.microstep",
+        actorRef: actorScope.self,
+        event: event2,
+        snapshot: step[0],
+        _transitions: transitions
+      });
+      microsteps.push(step);
+    }
+    if (event.type === XSTATE_STOP) {
+      nextSnapshot = cloneMachineSnapshot(stopChildren(nextSnapshot, event, actorScope), {
+        status: "stopped"
+      });
+      addMicrostep([nextSnapshot, []], event, []);
+      return {
+        snapshot: nextSnapshot,
+        microsteps
+      };
+    }
+    let nextEvent = event;
+    if (nextEvent.type !== XSTATE_INIT) {
+      const currentEvent = nextEvent;
+      const isErr = isErrorActorEvent(currentEvent);
+      const transitions = selectTransitions(currentEvent, nextSnapshot);
+      if (isErr && !transitions.length) {
+        nextSnapshot = cloneMachineSnapshot(snapshot, {
+          status: "error",
+          error: currentEvent.error
+        });
+        addMicrostep([nextSnapshot, []], currentEvent, []);
+        return {
+          snapshot: nextSnapshot,
+          microsteps
+        };
+      }
+      const step = microstep(transitions, snapshot, actorScope, nextEvent, false, internalQueue);
+      nextSnapshot = step[0];
+      addMicrostep(step, currentEvent, transitions);
+    }
+    let shouldSelectEventlessTransitions = true;
+    const maxIterations = snapshot.machine.options?.maxIterations ?? Infinity;
+    let iterationCount = 0;
+    while (nextSnapshot.status === "active") {
+      iterationCount++;
+      if (iterationCount > maxIterations) {
+        throw new Error(`Infinite loop detected: the machine has processed more than ${maxIterations} microsteps without reaching a stable state. This usually happens when there's a cycle of transitions (e.g., eventless transitions or raised events causing state A -> B -> C -> A).`);
+      }
+      let enabledTransitions = shouldSelectEventlessTransitions ? selectEventlessTransitions(nextSnapshot, nextEvent) : [];
+      const previousState = enabledTransitions.length ? nextSnapshot : undefined;
+      if (!enabledTransitions.length) {
+        if (!internalQueue.length) {
+          break;
+        }
+        nextEvent = internalQueue.shift();
+        enabledTransitions = selectTransitions(nextEvent, nextSnapshot);
+      }
+      const step = microstep(enabledTransitions, nextSnapshot, actorScope, nextEvent, false, internalQueue);
+      nextSnapshot = step[0];
+      shouldSelectEventlessTransitions = nextSnapshot !== previousState;
+      addMicrostep(step, nextEvent, enabledTransitions);
+    }
+    if (nextSnapshot.status !== "active") {
+      stopChildren(nextSnapshot, nextEvent, actorScope);
+    }
+    return {
+      snapshot: nextSnapshot,
+      microsteps
+    };
+  }
+  function stopChildren(nextState, event, actorScope) {
+    return resolveActionsAndContext(nextState, event, actorScope, Object.values(nextState.children).map((child) => stopChild(child)), [], undefined);
+  }
+  function selectTransitions(event, nextState) {
+    return nextState.machine.getTransitionData(nextState, event);
+  }
+  function selectEventlessTransitions(nextState, event) {
+    const enabledTransitionSet = new Set;
+    const atomicStates = nextState._nodes.filter(isAtomicStateNode);
+    for (const stateNode of atomicStates) {
+      loop:
+        for (const s of [stateNode].concat(getProperAncestors(stateNode, undefined))) {
+          if (!s.always) {
+            continue;
+          }
+          for (const transition of s.always) {
+            if (transition.guard === undefined || evaluateGuard(transition.guard, nextState.context, event, nextState)) {
+              enabledTransitionSet.add(transition);
+              break loop;
+            }
+          }
+        }
+    }
+    return removeConflictingTransitions(Array.from(enabledTransitionSet), new Set(nextState._nodes), nextState.historyValue);
+  }
+  function resolveStateValue(rootNode, stateValue) {
+    const allStateNodes = getAllStateNodes(getStateNodes(rootNode, stateValue));
+    return getStateValue(rootNode, [...allStateNodes]);
+  }
+  function isMachineSnapshot(value) {
+    return !!value && typeof value === "object" && "machine" in value && "value" in value;
+  }
+  var machineSnapshotMatches = function matches(testValue) {
+    return matchesState(testValue, this.value);
+  };
+  var machineSnapshotHasTag = function hasTag(tag) {
+    return this.tags.has(tag);
+  };
+  var machineSnapshotCan = function can(event) {
+    if (!this.machine) {
+      console.warn(`state.can(...) used outside of a machine-created State object; this will always return false.`);
+    }
+    const transitionData = this.machine.getTransitionData(this, event);
+    return !!transitionData?.length && transitionData.some((t) => t.target !== undefined || t.actions.length);
+  };
+  var machineSnapshotToJSON = function toJSON() {
+    const {
+      _nodes: nodes,
+      tags,
+      machine,
+      getMeta,
+      toJSON: toJSON2,
+      can,
+      hasTag,
+      matches,
+      ...jsonValues
+    } = this;
+    return {
+      ...jsonValues,
+      tags: Array.from(tags)
+    };
+  };
+  var machineSnapshotGetMeta = function getMeta() {
+    return this._nodes.reduce((acc, stateNode) => {
+      if (stateNode.meta !== undefined) {
+        acc[stateNode.id] = stateNode.meta;
+      }
+      return acc;
+    }, {});
+  };
+  function createMachineSnapshot(config, machine) {
+    return {
+      status: config.status,
+      output: config.output,
+      error: config.error,
+      machine,
+      context: config.context,
+      _nodes: config._nodes,
+      value: getStateValue(machine.root, config._nodes),
+      tags: new Set(config._nodes.flatMap((sn) => sn.tags)),
+      children: config.children,
+      historyValue: config.historyValue || {},
+      matches: machineSnapshotMatches,
+      hasTag: machineSnapshotHasTag,
+      can: machineSnapshotCan,
+      getMeta: machineSnapshotGetMeta,
+      toJSON: machineSnapshotToJSON
+    };
+  }
+  function cloneMachineSnapshot(snapshot, config = {}) {
+    return createMachineSnapshot({
+      ...snapshot,
+      ...config
+    }, snapshot.machine);
+  }
+  function serializeHistoryValue(historyValue) {
+    if (typeof historyValue !== "object" || historyValue === null) {
+      return {};
+    }
+    const result = {};
+    for (const key in historyValue) {
+      const value = historyValue[key];
+      if (Array.isArray(value)) {
+        result[key] = value.map((item) => ({
+          id: item.id
+        }));
+      }
+    }
+    return result;
+  }
+  function getPersistedSnapshot(snapshot, options) {
+    const {
+      _nodes: nodes,
+      tags,
+      machine,
+      children,
+      context,
+      can,
+      hasTag,
+      matches,
+      getMeta,
+      toJSON,
+      ...jsonValues
+    } = snapshot;
+    const childrenJson = {};
+    for (const id in children) {
+      const child = children[id];
+      if (typeof child.src !== "string" && (!options || !("__unsafeAllowInlineActors" in options))) {
+        throw new Error("An inline child actor cannot be persisted.");
+      }
+      childrenJson[id] = {
+        snapshot: child.getPersistedSnapshot(options),
+        src: child.src,
+        systemId: child.systemId,
+        syncSnapshot: child._syncSnapshot
+      };
+    }
+    const persisted = {
+      ...jsonValues,
+      context: persistContext(context),
+      children: childrenJson,
+      historyValue: serializeHistoryValue(jsonValues.historyValue)
+    };
+    return persisted;
+  }
+  function persistContext(contextPart) {
+    let copy;
+    for (const key in contextPart) {
+      const value = contextPart[key];
+      if (value && typeof value === "object") {
+        if ("sessionId" in value && "send" in value && "ref" in value) {
+          copy ??= Array.isArray(contextPart) ? contextPart.slice() : {
+            ...contextPart
+          };
+          copy[key] = {
+            xstate$$type: $$ACTOR_TYPE,
+            id: value.id
+          };
+        } else {
+          const result = persistContext(value);
+          if (result !== value) {
+            copy ??= Array.isArray(contextPart) ? contextPart.slice() : {
+              ...contextPart
+            };
+            copy[key] = result;
+          }
+        }
+      }
+    }
+    return copy ?? contextPart;
+  }
+  function resolveRaise(_, snapshot, args, actionParams, {
+    event: eventOrExpr,
+    id,
+    delay
+  }, {
+    internalQueue
+  }) {
+    const delaysMap = snapshot.machine.implementations.delays;
+    if (typeof eventOrExpr === "string") {
+      throw new Error(`Only event objects may be used with raise; use raise({ type: "${eventOrExpr}" }) instead`);
+    }
+    const resolvedEvent = typeof eventOrExpr === "function" ? eventOrExpr(args, actionParams) : eventOrExpr;
+    let resolvedDelay;
+    if (typeof delay === "string") {
+      const configDelay = delaysMap && delaysMap[delay];
+      resolvedDelay = typeof configDelay === "function" ? configDelay(args, actionParams) : configDelay;
+    } else {
+      resolvedDelay = typeof delay === "function" ? delay(args, actionParams) : delay;
+    }
+    if (typeof resolvedDelay !== "number") {
+      internalQueue.push(resolvedEvent);
+    }
+    return [snapshot, {
+      event: resolvedEvent,
+      id,
+      delay: resolvedDelay
+    }, undefined];
+  }
+  function executeRaise(actorScope, params) {
+    const {
+      event,
+      delay,
+      id
+    } = params;
+    if (typeof delay === "number") {
+      actorScope.defer(() => {
+        const self2 = actorScope.self;
+        actorScope.system.scheduler.schedule(self2, self2, event, delay, id);
+      });
+      return;
+    }
+  }
+  function raise(eventOrExpr, options) {
+    if (exports.executingCustomAction) {
+      console.warn("Custom actions should not call `raise()` directly, as it is not imperative. See https://stately.ai/docs/actions#built-in-actions for more details.");
+    }
+    function raise2(_args, _params) {
+        throw new Error(`This isn't supposed to be called`);
+    }
+    raise2.type = "xstate.raise";
+    raise2.event = eventOrExpr;
+    raise2.id = options?.id;
+    raise2.delay = options?.delay;
+    raise2.resolve = resolveRaise;
+    raise2.execute = executeRaise;
+    return raise2;
+  }
+  exports.$$ACTOR_TYPE = $$ACTOR_TYPE;
+  exports.Actor = Actor;
+  exports.NULL_EVENT = NULL_EVENT;
+  exports.ProcessingStatus = ProcessingStatus;
+  exports.STATE_DELIMITER = STATE_DELIMITER;
+  exports.XSTATE_ERROR = XSTATE_ERROR;
+  exports.XSTATE_STOP = XSTATE_STOP;
+  exports.and = and;
+  exports.cancel = cancel;
+  exports.cloneMachineSnapshot = cloneMachineSnapshot;
+  exports.createActor = createActor;
+  exports.createErrorActorEvent = createErrorActorEvent;
+  exports.createInitEvent = createInitEvent;
+  exports.createInvokeId = createInvokeId;
+  exports.createMachineSnapshot = createMachineSnapshot;
+  exports.createSystem = createSystem;
+  exports.evaluateGuard = evaluateGuard;
+  exports.formatInitialTransition = formatInitialTransition;
+  exports.formatRouteTransitions = formatRouteTransitions;
+  exports.formatTransition = formatTransition;
+  exports.formatTransitions = formatTransitions;
+  exports.getAllOwnEventDescriptors = getAllOwnEventDescriptors;
+  exports.getAllStateNodes = getAllStateNodes;
+  exports.getCandidates = getCandidates;
+  exports.getDelayedTransitions = getDelayedTransitions;
+  exports.getPersistedSnapshot = getPersistedSnapshot;
+  exports.getProperAncestors = getProperAncestors;
+  exports.getStateNodeByPath = getStateNodeByPath;
+  exports.getStateNodes = getStateNodes;
+  exports.initialMicrostep = initialMicrostep;
+  exports.interpret = interpret;
+  exports.isAtomicStateNode = isAtomicStateNode;
+  exports.isInFinalState = isInFinalState;
+  exports.isMachineSnapshot = isMachineSnapshot;
+  exports.isStateId = isStateId;
+  exports.macrostep = macrostep;
+  exports.mapValues = mapValues;
+  exports.matchesEventDescriptor = matchesEventDescriptor;
+  exports.matchesState = matchesState;
+  exports.not = not;
+  exports.or = or;
+  exports.pathToStateValue = pathToStateValue;
+  exports.raise = raise;
+  exports.resolveActionsAndContext = resolveActionsAndContext;
+  exports.resolveReferencedActor = resolveReferencedActor;
+  exports.resolveStateValue = resolveStateValue;
+  exports.spawnChild = spawnChild;
+  exports.stateIn = stateIn;
+  exports.stop = stop;
+  exports.stopChild = stopChild;
+  exports.toArray = toArray;
+  exports.toObserver = toObserver;
+  exports.toStatePath = toStatePath;
+  exports.toTransitionConfigArray = toTransitionConfigArray;
+  exports.transitionNode = transitionNode;
+});
+
+// node_modules/xstate/dist/xstate-actors.development.cjs.js
+var require_xstate_actors_development_cjs = __commonJS((exports) => {
+  Object.defineProperty(exports, "__esModule", { value: true });
+  var dist_xstateGuards = require_raise_53e20da7_development_cjs();
+  require_xstate_dev_development_cjs();
+  function fromTransition(transition, initialContext) {
+    return {
+      config: transition,
+      transition: (snapshot, event, actorScope) => {
+        return {
+          ...snapshot,
+          context: transition(snapshot.context, event, actorScope)
+        };
+      },
+      getInitialSnapshot: (_, input) => {
+        return {
+          status: "active",
+          output: undefined,
+          error: undefined,
+          context: typeof initialContext === "function" ? initialContext({
+            input
+          }) : initialContext
+        };
+      },
+      getPersistedSnapshot: (snapshot) => snapshot,
+      restoreSnapshot: (snapshot) => snapshot
+    };
+  }
+  var instanceStates = /* @__PURE__ */ new WeakMap;
+  function fromCallback(callback) {
+    const logic = {
+      config: callback,
+      start: (state, actorScope) => {
+        const {
+          self: self2,
+          system,
+          emit
+        } = actorScope;
+        const callbackState = {
+          receivers: undefined,
+          dispose: undefined
+        };
+        instanceStates.set(self2, callbackState);
+        callbackState.dispose = callback({
+          input: state.input,
+          system,
+          self: self2,
+          sendBack: (event) => {
+            if (self2.getSnapshot().status === "stopped") {
+              return;
+            }
+            if (self2._parent) {
+              system._relay(self2, self2._parent, event);
+            }
+          },
+          receive: (listener) => {
+            callbackState.receivers ??= new Set;
+            callbackState.receivers.add(listener);
+          },
+          emit
+        });
+      },
+      transition: (state, event, actorScope) => {
+        const callbackState = instanceStates.get(actorScope.self);
+        if (event.type === dist_xstateGuards.XSTATE_STOP) {
+          state = {
+            ...state,
+            status: "stopped",
+            error: undefined
+          };
+          instanceStates.delete(actorScope.self);
+          callbackState.receivers?.clear();
+          callbackState.dispose?.();
+          return state;
+        }
+        callbackState.receivers?.forEach((receiver) => receiver(event));
+        return state;
+      },
+      getInitialSnapshot: (_, input) => {
+        return {
+          status: "active",
+          output: undefined,
+          error: undefined,
+          input
+        };
+      },
+      getPersistedSnapshot: (snapshot) => snapshot,
+      restoreSnapshot: (snapshot) => snapshot
+    };
+    return logic;
+  }
+  var XSTATE_OBSERVABLE_NEXT = "xstate.observable.next";
+  var XSTATE_OBSERVABLE_ERROR = "xstate.observable.error";
+  var XSTATE_OBSERVABLE_COMPLETE = "xstate.observable.complete";
+  function fromObservable(observableCreator) {
+    const logic = {
+      config: observableCreator,
+      transition: (snapshot, event) => {
+        if (snapshot.status !== "active") {
+          return snapshot;
+        }
+        switch (event.type) {
+          case XSTATE_OBSERVABLE_NEXT: {
+            const newSnapshot = {
+              ...snapshot,
+              context: event.data
+            };
+            return newSnapshot;
+          }
+          case XSTATE_OBSERVABLE_ERROR:
+            return {
+              ...snapshot,
+              status: "error",
+              error: event.data,
+              input: undefined,
+              _subscription: undefined
+            };
+          case XSTATE_OBSERVABLE_COMPLETE:
+            return {
+              ...snapshot,
+              status: "done",
+              input: undefined,
+              _subscription: undefined
+            };
+          case dist_xstateGuards.XSTATE_STOP:
+            snapshot._subscription.unsubscribe();
+            return {
+              ...snapshot,
+              status: "stopped",
+              input: undefined,
+              _subscription: undefined
+            };
+          default:
+            return snapshot;
+        }
+      },
+      getInitialSnapshot: (_, input) => {
+        return {
+          status: "active",
+          output: undefined,
+          error: undefined,
+          context: undefined,
+          input,
+          _subscription: undefined
+        };
+      },
+      start: (state, {
+        self: self2,
+        system,
+        emit
+      }) => {
+        if (state.status === "done") {
+          return;
+        }
+        state._subscription = observableCreator({
+          input: state.input,
+          system,
+          self: self2,
+          emit
+        }).subscribe({
+          next: (value) => {
+            system._relay(self2, self2, {
+              type: XSTATE_OBSERVABLE_NEXT,
+              data: value
+            });
+          },
+          error: (err) => {
+            system._relay(self2, self2, {
+              type: XSTATE_OBSERVABLE_ERROR,
+              data: err
+            });
+          },
+          complete: () => {
+            system._relay(self2, self2, {
+              type: XSTATE_OBSERVABLE_COMPLETE
+            });
+          }
+        });
+      },
+      getPersistedSnapshot: ({
+        _subscription,
+        ...state
+      }) => state,
+      restoreSnapshot: (state) => ({
+        ...state,
+        _subscription: undefined
+      })
+    };
+    return logic;
+  }
+  function fromEventObservable(lazyObservable) {
+    const logic = {
+      config: lazyObservable,
+      transition: (state, event) => {
+        if (state.status !== "active") {
+          return state;
+        }
+        switch (event.type) {
+          case XSTATE_OBSERVABLE_ERROR:
+            return {
+              ...state,
+              status: "error",
+              error: event.data,
+              input: undefined,
+              _subscription: undefined
+            };
+          case XSTATE_OBSERVABLE_COMPLETE:
+            return {
+              ...state,
+              status: "done",
+              input: undefined,
+              _subscription: undefined
+            };
+          case dist_xstateGuards.XSTATE_STOP:
+            state._subscription.unsubscribe();
+            return {
+              ...state,
+              status: "stopped",
+              input: undefined,
+              _subscription: undefined
+            };
+          default:
+            return state;
+        }
+      },
+      getInitialSnapshot: (_, input) => {
+        return {
+          status: "active",
+          output: undefined,
+          error: undefined,
+          context: undefined,
+          input,
+          _subscription: undefined
+        };
+      },
+      start: (state, {
+        self: self2,
+        system,
+        emit
+      }) => {
+        if (state.status === "done") {
+          return;
+        }
+        state._subscription = lazyObservable({
+          input: state.input,
+          system,
+          self: self2,
+          emit
+        }).subscribe({
+          next: (value) => {
+            if (self2._parent) {
+              system._relay(self2, self2._parent, value);
+            }
+          },
+          error: (err) => {
+            system._relay(self2, self2, {
+              type: XSTATE_OBSERVABLE_ERROR,
+              data: err
+            });
+          },
+          complete: () => {
+            system._relay(self2, self2, {
+              type: XSTATE_OBSERVABLE_COMPLETE
+            });
+          }
+        });
+      },
+      getPersistedSnapshot: ({
+        _subscription,
+        ...snapshot
+      }) => snapshot,
+      restoreSnapshot: (snapshot) => ({
+        ...snapshot,
+        _subscription: undefined
+      })
+    };
+    return logic;
+  }
+  var XSTATE_PROMISE_RESOLVE = "xstate.promise.resolve";
+  var XSTATE_PROMISE_REJECT = "xstate.promise.reject";
+  var controllerMap = new WeakMap;
+  function fromPromise(promiseCreator) {
+    const logic = {
+      config: promiseCreator,
+      transition: (state, event, scope) => {
+        if (state.status !== "active") {
+          return state;
+        }
+        switch (event.type) {
+          case XSTATE_PROMISE_RESOLVE: {
+            const resolvedValue = event.data;
+            return {
+              ...state,
+              status: "done",
+              output: resolvedValue,
+              input: undefined
+            };
+          }
+          case XSTATE_PROMISE_REJECT:
+            return {
+              ...state,
+              status: "error",
+              error: event.data,
+              input: undefined
+            };
+          case dist_xstateGuards.XSTATE_STOP: {
+            controllerMap.get(scope.self)?.abort();
+            controllerMap.delete(scope.self);
+            return {
+              ...state,
+              status: "stopped",
+              input: undefined
+            };
+          }
+          default:
+            return state;
+        }
+      },
+      start: (state, {
+        self: self2,
+        system,
+        emit
+      }) => {
+        if (state.status !== "active") {
+          return;
+        }
+        const controller = new AbortController;
+        controllerMap.set(self2, controller);
+        const resolvedPromise = Promise.resolve(promiseCreator({
+          input: state.input,
+          system,
+          self: self2,
+          signal: controller.signal,
+          emit
+        }));
+        resolvedPromise.then((response) => {
+          if (self2.getSnapshot().status !== "active") {
+            return;
+          }
+          controllerMap.delete(self2);
+          system._relay(self2, self2, {
+            type: XSTATE_PROMISE_RESOLVE,
+            data: response
+          });
+        }, (errorData) => {
+          if (self2.getSnapshot().status !== "active") {
+            return;
+          }
+          controllerMap.delete(self2);
+          system._relay(self2, self2, {
+            type: XSTATE_PROMISE_REJECT,
+            data: errorData
+          });
+        });
+      },
+      getInitialSnapshot: (_, input) => {
+        return {
+          status: "active",
+          output: undefined,
+          error: undefined,
+          input
+        };
+      },
+      getPersistedSnapshot: (snapshot) => snapshot,
+      restoreSnapshot: (snapshot) => snapshot
+    };
+    return logic;
+  }
+  var emptyLogic = fromTransition((_) => {
+    return;
+  }, undefined);
+  function createEmptyActor() {
+    return dist_xstateGuards.createActor(emptyLogic);
+  }
+  exports.createEmptyActor = createEmptyActor;
+  exports.fromCallback = fromCallback;
+  exports.fromEventObservable = fromEventObservable;
+  exports.fromObservable = fromObservable;
+  exports.fromPromise = fromPromise;
+  exports.fromTransition = fromTransition;
+});
+
+// node_modules/xstate/dist/assign-f03a9bed.development.cjs.js
+var require_assign_f03a9bed_development_cjs = __commonJS((exports) => {
+  var dist_xstateGuards = require_raise_53e20da7_development_cjs();
+  function createSpawner(actorScope, {
+    machine,
+    context
+  }, event, spawnedChildren) {
+    const spawn = (src, options) => {
+      if (typeof src === "string") {
+        const logic = dist_xstateGuards.resolveReferencedActor(machine, src);
+        if (!logic) {
+          throw new Error(`Actor logic '${src}' not implemented in machine '${machine.id}'`);
+        }
+        const actorRef = dist_xstateGuards.createActor(logic, {
+          id: options?.id,
+          parent: actorScope.self,
+          syncSnapshot: options?.syncSnapshot,
+          input: typeof options?.input === "function" ? options.input({
+            context,
+            event,
+            self: actorScope.self
+          }) : options?.input,
+          src,
+          systemId: options?.systemId
+        });
+        spawnedChildren[actorRef.id] = actorRef;
+        return actorRef;
+      } else {
+        const actorRef = dist_xstateGuards.createActor(src, {
+          id: options?.id,
+          parent: actorScope.self,
+          syncSnapshot: options?.syncSnapshot,
+          input: options?.input,
+          src,
+          systemId: options?.systemId
+        });
+        return actorRef;
+      }
+    };
+    return (src, options) => {
+      const actorRef = spawn(src, options);
+      spawnedChildren[actorRef.id] = actorRef;
+      actorScope.defer(() => {
+        if (actorRef._processingStatus === dist_xstateGuards.ProcessingStatus.Stopped) {
+          return;
+        }
+        actorRef.start();
+      });
+      return actorRef;
+    };
+  }
+  function resolveAssign(actorScope, snapshot, actionArgs, actionParams, {
+    assignment
+  }) {
+    if (!snapshot.context) {
+      throw new Error("Cannot assign to undefined `context`. Ensure that `context` is defined in the machine config.");
+    }
+    const spawnedChildren = {};
+    const assignArgs = {
+      context: snapshot.context,
+      event: actionArgs.event,
+      spawn: createSpawner(actorScope, snapshot, actionArgs.event, spawnedChildren),
+      self: actorScope.self,
+      system: actorScope.system
+    };
+    let partialUpdate = {};
+    if (typeof assignment === "function") {
+      partialUpdate = assignment(assignArgs, actionParams);
+    } else {
+      for (const key of Object.keys(assignment)) {
+        const propAssignment = assignment[key];
+        partialUpdate[key] = typeof propAssignment === "function" ? propAssignment(assignArgs, actionParams) : propAssignment;
+      }
+    }
+    const updatedContext = Object.assign({}, snapshot.context, partialUpdate);
+    return [dist_xstateGuards.cloneMachineSnapshot(snapshot, {
+      context: updatedContext,
+      children: Object.keys(spawnedChildren).length ? {
+        ...snapshot.children,
+        ...spawnedChildren
+      } : snapshot.children
+    }), undefined, undefined];
+  }
+  function assign(assignment) {
+    if (dist_xstateGuards.executingCustomAction) {
+      console.warn("Custom actions should not call `assign()` directly, as it is not imperative. See https://stately.ai/docs/actions#built-in-actions for more details.");
+    }
+    function assign2(_args, _params) {
+        throw new Error(`This isn't supposed to be called`);
+    }
+    assign2.type = "xstate.assign";
+    assign2.assignment = assignment;
+    assign2.resolve = resolveAssign;
+    return assign2;
+  }
+  exports.assign = assign;
+});
+
+// node_modules/xstate/dist/StateMachine-3778f5e0.development.cjs.js
+var require_StateMachine_3778f5e0_development_cjs = __commonJS((exports) => {
+  var dist_xstateGuards = require_raise_53e20da7_development_cjs();
+  var assign = require_assign_f03a9bed_development_cjs();
+  var cache = new WeakMap;
+  function memo(object, key, fn) {
+    let memoizedData = cache.get(object);
+    if (!memoizedData) {
+      memoizedData = {
+        [key]: fn()
+      };
+      cache.set(object, memoizedData);
+    } else if (!(key in memoizedData)) {
+      memoizedData[key] = fn();
+    }
+    return memoizedData[key];
+  }
+  var EMPTY_OBJECT = {};
+  var toSerializableAction = (action) => {
+    if (typeof action === "string") {
+      return {
+        type: action
+      };
+    }
+    if (typeof action === "function") {
+      if ("resolve" in action) {
+        return {
+          type: action.type
+        };
+      }
+      return {
+        type: action.name
+      };
+    }
+    return action;
+  };
+
+  class StateNode {
+    constructor(config, options) {
+      this.config = config;
+      this.key = undefined;
+      this.id = undefined;
+      this.type = undefined;
+      this.path = undefined;
+      this.states = undefined;
+      this.history = undefined;
+      this.entry = undefined;
+      this.exit = undefined;
+      this.parent = undefined;
+      this.machine = undefined;
+      this.meta = undefined;
+      this.output = undefined;
+      this.order = -1;
+      this.description = undefined;
+      this.tags = [];
+      this.transitions = undefined;
+      this.always = undefined;
+      this.parent = options._parent;
+      this.key = options._key;
+      this.machine = options._machine;
+      this.path = this.parent ? this.parent.path.concat(this.key) : [];
+      this.id = this.config.id || [this.machine.id, ...this.path].join(dist_xstateGuards.STATE_DELIMITER);
+      this.type = this.config.type || (this.config.states && Object.keys(this.config.states).length ? "compound" : this.config.history ? "history" : "atomic");
+      this.description = this.config.description;
+      this.order = this.machine.idMap.size;
+      this.machine.idMap.set(this.id, this);
+      this.states = this.config.states ? dist_xstateGuards.mapValues(this.config.states, (stateConfig, key) => {
+        const stateNode = new StateNode(stateConfig, {
+          _parent: this,
+          _key: key,
+          _machine: this.machine
+        });
+        return stateNode;
+      }) : EMPTY_OBJECT;
+      if (this.type === "compound" && !this.config.initial) {
+        throw new Error(`No initial state specified for compound state node "#${this.id}". Try adding { initial: "${Object.keys(this.states)[0]}" } to the state config.`);
+      }
+      this.history = this.config.history === true ? "shallow" : this.config.history || false;
+      this.entry = dist_xstateGuards.toArray(this.config.entry).slice();
+      this.exit = dist_xstateGuards.toArray(this.config.exit).slice();
+      this.meta = this.config.meta;
+      this.output = this.type === "final" || !this.parent ? this.config.output : undefined;
+      this.tags = dist_xstateGuards.toArray(config.tags).slice();
+    }
+    _initialize() {
+      this.transitions = dist_xstateGuards.formatTransitions(this);
+      if (this.config.always) {
+        this.always = dist_xstateGuards.toTransitionConfigArray(this.config.always).map((t) => dist_xstateGuards.formatTransition(this, dist_xstateGuards.NULL_EVENT, t));
+      }
+      Object.keys(this.states).forEach((key) => {
+        this.states[key]._initialize();
+      });
+    }
+    get definition() {
+      return {
+        id: this.id,
+        key: this.key,
+        version: this.machine.version,
+        type: this.type,
+        initial: this.initial ? {
+          target: this.initial.target,
+          source: this,
+          actions: this.initial.actions.map(toSerializableAction),
+          eventType: null,
+          reenter: false,
+          toJSON: () => ({
+            target: this.initial.target.map((t) => `#${t.id}`),
+            source: `#${this.id}`,
+            actions: this.initial.actions.map(toSerializableAction),
+            eventType: null
+          })
+        } : undefined,
+        history: this.history,
+        states: dist_xstateGuards.mapValues(this.states, (state) => {
+          return state.definition;
+        }),
+        on: this.on,
+        transitions: [...this.transitions.values()].flat().map((t) => ({
+          ...t,
+          actions: t.actions.map(toSerializableAction)
+        })),
+        entry: this.entry.map(toSerializableAction),
+        exit: this.exit.map(toSerializableAction),
+        meta: this.meta,
+        order: this.order || -1,
+        output: this.output,
+        invoke: this.invoke,
+        description: this.description,
+        tags: this.tags
+      };
+    }
+    toJSON() {
+      return this.definition;
+    }
+    get invoke() {
+      return memo(this, "invoke", () => dist_xstateGuards.toArray(this.config.invoke).map((invokeConfig, i) => {
+        const {
+          src,
+          systemId
+        } = invokeConfig;
+        const resolvedId = invokeConfig.id ?? dist_xstateGuards.createInvokeId(this.id, i);
+        const sourceName = typeof src === "string" ? src : `xstate.invoke.${dist_xstateGuards.createInvokeId(this.id, i)}`;
+        return {
+          ...invokeConfig,
+          src: sourceName,
+          id: resolvedId,
+          systemId,
+          toJSON() {
+            const {
+              onDone,
+              onError,
+              ...invokeDefValues
+            } = invokeConfig;
+            return {
+              ...invokeDefValues,
+              type: "xstate.invoke",
+              src: sourceName,
+              id: resolvedId
+            };
+          }
+        };
+      }));
+    }
+    get on() {
+      return memo(this, "on", () => {
+        const transitions = this.transitions;
+        return [...transitions].flatMap(([descriptor, t]) => t.map((t2) => [descriptor, t2])).reduce((map, [descriptor, transition]) => {
+          map[descriptor] = map[descriptor] || [];
+          map[descriptor].push(transition);
+          return map;
+        }, {});
+      });
+    }
+    get after() {
+      return memo(this, "delayedTransitions", () => dist_xstateGuards.getDelayedTransitions(this));
+    }
+    get initial() {
+      return memo(this, "initial", () => dist_xstateGuards.formatInitialTransition(this, this.config.initial));
+    }
+    next(snapshot, event) {
+      const eventType = event.type;
+      const actions = [];
+      let selectedTransition;
+      const candidates = memo(this, `candidates-${eventType}`, () => dist_xstateGuards.getCandidates(this, eventType));
+      for (const candidate of candidates) {
+        const {
+          guard
+        } = candidate;
+        const resolvedContext = snapshot.context;
+        let guardPassed = false;
+        try {
+          guardPassed = !guard || dist_xstateGuards.evaluateGuard(guard, resolvedContext, event, snapshot);
+        } catch (err) {
+          const guardType = typeof guard === "string" ? guard : typeof guard === "object" ? guard.type : undefined;
+          throw new Error(`Unable to evaluate guard ${guardType ? `'${guardType}' ` : ""}in transition for event '${eventType}' in state node '${this.id}':
+${err.message}`);
+        }
+        if (guardPassed) {
+          actions.push(...candidate.actions);
+          selectedTransition = candidate;
+          break;
+        }
+      }
+      return selectedTransition ? [selectedTransition] : undefined;
+    }
+    get events() {
+      return memo(this, "events", () => {
+        const {
+          states
+        } = this;
+        const events = new Set(this.ownEvents);
+        if (states) {
+          for (const stateId of Object.keys(states)) {
+            const state = states[stateId];
+            if (state.states) {
+              for (const event of state.events) {
+                events.add(`${event}`);
+              }
+            }
+          }
+        }
+        return Array.from(events);
+      });
+    }
+    get ownEvents() {
+      const keys = Object.keys(Object.fromEntries(this.transitions));
+      const events = new Set(keys.filter((descriptor) => {
+        return this.transitions.get(descriptor).some((transition) => !(!transition.target && !transition.actions.length && !transition.reenter));
+      }));
+      return Array.from(events);
+    }
+  }
+  var STATE_IDENTIFIER = "#";
+
+  class StateMachine {
+    constructor(config, implementations) {
+      this.config = config;
+      this.version = undefined;
+      this.schemas = undefined;
+      this.implementations = undefined;
+      this.options = undefined;
+      this.__xstatenode = true;
+      this.idMap = new Map;
+      this.root = undefined;
+      this.id = undefined;
+      this.states = undefined;
+      this.events = undefined;
+      this.id = config.id || "(machine)";
+      this.implementations = {
+        actors: implementations?.actors ?? {},
+        actions: implementations?.actions ?? {},
+        delays: implementations?.delays ?? {},
+        guards: implementations?.guards ?? {}
+      };
+      this.version = this.config.version;
+      this.schemas = this.config.schemas;
+      this.options = {
+        maxIterations: Infinity,
+        ...this.config.options
+      };
+      this.transition = this.transition.bind(this);
+      this.getInitialSnapshot = this.getInitialSnapshot.bind(this);
+      this.getPersistedSnapshot = this.getPersistedSnapshot.bind(this);
+      this.restoreSnapshot = this.restoreSnapshot.bind(this);
+      this.start = this.start.bind(this);
+      this.root = new StateNode(config, {
+        _key: this.id,
+        _machine: this
+      });
+      this.root._initialize();
+      dist_xstateGuards.formatRouteTransitions(this.root);
+      this.states = this.root.states;
+      this.events = this.root.events;
+      if (!("output" in this.root) && Object.values(this.states).some((state) => state.type === "final" && ("output" in state))) {
+        console.warn("Missing `machine.output` declaration (top-level final state with output detected)");
+      }
+    }
+    provide(implementations) {
+      const {
+        actions,
+        guards,
+        actors,
+        delays
+      } = this.implementations;
+      return new StateMachine(this.config, {
+        actions: {
+          ...actions,
+          ...implementations.actions
+        },
+        guards: {
+          ...guards,
+          ...implementations.guards
+        },
+        actors: {
+          ...actors,
+          ...implementations.actors
+        },
+        delays: {
+          ...delays,
+          ...implementations.delays
+        }
+      });
+    }
+    resolveState(config) {
+      const resolvedStateValue = dist_xstateGuards.resolveStateValue(this.root, config.value);
+      const nodeSet = dist_xstateGuards.getAllStateNodes(dist_xstateGuards.getStateNodes(this.root, resolvedStateValue));
+      return dist_xstateGuards.createMachineSnapshot({
+        _nodes: [...nodeSet],
+        context: config.context || {},
+        children: {},
+        status: dist_xstateGuards.isInFinalState(nodeSet, this.root) ? "done" : config.status || "active",
+        output: config.output,
+        error: config.error,
+        historyValue: config.historyValue
+      }, this);
+    }
+    transition(snapshot, event, actorScope) {
+      return dist_xstateGuards.macrostep(snapshot, event, actorScope, []).snapshot;
+    }
+    microstep(snapshot, event, actorScope) {
+      return dist_xstateGuards.macrostep(snapshot, event, actorScope, []).microsteps.map(([s]) => s);
+    }
+    getTransitionData(snapshot, event) {
+      return dist_xstateGuards.transitionNode(this.root, snapshot.value, snapshot, event) || [];
+    }
+    _getPreInitialState(actorScope, initEvent, internalQueue) {
+      const {
+        context
+      } = this.config;
+      const preInitial = dist_xstateGuards.createMachineSnapshot({
+        context: typeof context !== "function" && context ? context : {},
+        _nodes: [this.root],
+        children: {},
+        status: "active"
+      }, this);
+      if (typeof context === "function") {
+        const assignment = ({
+          spawn,
+          event,
+          self: self2
+        }) => context({
+          spawn,
+          input: event.input,
+          self: self2
+        });
+        return dist_xstateGuards.resolveActionsAndContext(preInitial, initEvent, actorScope, [assign.assign(assignment)], internalQueue, undefined);
+      }
+      return preInitial;
+    }
+    getInitialSnapshot(actorScope, input) {
+      const initEvent = dist_xstateGuards.createInitEvent(input);
+      const internalQueue = [];
+      let snapshot = dist_xstateGuards.createMachineSnapshot({
+        context: typeof this.config.context !== "function" && this.config.context ? this.config.context : {},
+        _nodes: [this.root],
+        children: {},
+        status: "active"
+      }, this);
+      try {
+        snapshot = this._getPreInitialState(actorScope, initEvent, internalQueue);
+        const [nextState] = dist_xstateGuards.initialMicrostep(this.root, snapshot, actorScope, initEvent, internalQueue);
+        const {
+          snapshot: macroState
+        } = dist_xstateGuards.macrostep(nextState, initEvent, actorScope, internalQueue);
+        return macroState;
+      } catch (error) {
+        return dist_xstateGuards.cloneMachineSnapshot(snapshot, {
+          status: "error",
+          error
+        });
+      }
+    }
+    start(snapshot) {
+      Object.values(snapshot.children).forEach((child) => {
+        if (child.getSnapshot().status === "active") {
+          child.start();
+        }
+      });
+    }
+    getStateNodeById(stateId) {
+      const fullPath = dist_xstateGuards.toStatePath(stateId);
+      const relativePath = fullPath.slice(1);
+      const resolvedStateId = dist_xstateGuards.isStateId(fullPath[0]) ? fullPath[0].slice(STATE_IDENTIFIER.length) : fullPath[0];
+      const stateNode = this.idMap.get(resolvedStateId);
+      if (!stateNode) {
+        throw new Error(`Child state node '#${resolvedStateId}' does not exist on machine '${this.id}'`);
+      }
+      return dist_xstateGuards.getStateNodeByPath(stateNode, relativePath);
+    }
+    get definition() {
+      return this.root.definition;
+    }
+    toJSON() {
+      return this.definition;
+    }
+    getPersistedSnapshot(snapshot, options) {
+      return dist_xstateGuards.getPersistedSnapshot(snapshot, options);
+    }
+    restoreSnapshot(snapshot, _actorScope) {
+      const children = {};
+      const snapshotChildren = snapshot.children;
+      Object.keys(snapshotChildren).forEach((actorId) => {
+        const actorData = snapshotChildren[actorId];
+        const childState = actorData.snapshot;
+        const src = actorData.src;
+        const logic = typeof src === "string" ? dist_xstateGuards.resolveReferencedActor(this, src) : src;
+        if (!logic) {
+          return;
+        }
+        const actorRef = dist_xstateGuards.createActor(logic, {
+          id: actorId,
+          parent: _actorScope.self,
+          syncSnapshot: actorData.syncSnapshot,
+          snapshot: childState,
+          src,
+          systemId: actorData.systemId
+        });
+        children[actorId] = actorRef;
+      });
+      function resolveHistoryReferencedState(root, referenced) {
+        if (referenced instanceof StateNode) {
+          return referenced;
+        }
+        try {
+          return root.machine.getStateNodeById(referenced.id);
+        } catch {
+            console.warn(`Could not resolve StateNode for id: ${referenced.id}`);
+        }
+      }
+      function reviveHistoryValue(root, historyValue) {
+        if (!historyValue || typeof historyValue !== "object") {
+          return {};
+        }
+        const revived = {};
+        for (const key in historyValue) {
+          const arr = historyValue[key];
+          for (const item of arr) {
+            const resolved = resolveHistoryReferencedState(root, item);
+            if (!resolved) {
+              continue;
+            }
+            revived[key] ??= [];
+            revived[key].push(resolved);
+          }
+        }
+        return revived;
+      }
+      const revivedHistoryValue = reviveHistoryValue(this.root, snapshot.historyValue);
+      const restoredSnapshot = dist_xstateGuards.createMachineSnapshot({
+        ...snapshot,
+        children,
+        _nodes: Array.from(dist_xstateGuards.getAllStateNodes(dist_xstateGuards.getStateNodes(this.root, snapshot.value))),
+        historyValue: revivedHistoryValue
+      }, this);
+      const seen = new Set;
+      function reviveContext(contextPart, children2) {
+        if (seen.has(contextPart)) {
+          return;
+        }
+        seen.add(contextPart);
+        for (const key in contextPart) {
+          const value = contextPart[key];
+          if (value && typeof value === "object") {
+            if ("xstate$$type" in value && value.xstate$$type === dist_xstateGuards.$$ACTOR_TYPE) {
+              contextPart[key] = children2[value.id];
+              continue;
+            }
+            reviveContext(value, children2);
+          }
+        }
+      }
+      reviveContext(restoredSnapshot.context, children);
+      return restoredSnapshot;
+    }
+  }
+  exports.StateMachine = StateMachine;
+  exports.StateNode = StateNode;
+});
+
+// node_modules/xstate/dist/log-0ed3e43f.development.cjs.js
+var require_log_0ed3e43f_development_cjs = __commonJS((exports) => {
+  var dist_xstateGuards = require_raise_53e20da7_development_cjs();
+  var assign = require_assign_f03a9bed_development_cjs();
+  function resolveEmit(_, snapshot, args, actionParams, {
+    event: eventOrExpr
+  }) {
+    const resolvedEvent = typeof eventOrExpr === "function" ? eventOrExpr(args, actionParams) : eventOrExpr;
+    return [snapshot, {
+      event: resolvedEvent
+    }, undefined];
+  }
+  function executeEmit(actorScope, {
+    event
+  }) {
+    actorScope.defer(() => actorScope.emit(event));
+  }
+  function emit(eventOrExpr) {
+    if (dist_xstateGuards.executingCustomAction) {
+      console.warn("Custom actions should not call `emit()` directly, as it is not imperative. See https://stately.ai/docs/actions#built-in-actions for more details.");
+    }
+    function emit2(_args, _params) {
+        throw new Error(`This isn't supposed to be called`);
+    }
+    emit2.type = "xstate.emit";
+    emit2.event = eventOrExpr;
+    emit2.resolve = resolveEmit;
+    emit2.execute = executeEmit;
+    return emit2;
+  }
+  var SpecialTargets = /* @__PURE__ */ ((SpecialTargets2) => {
+    SpecialTargets2["Parent"] = "#_parent";
+    SpecialTargets2["Internal"] = "#_internal";
+    return SpecialTargets2;
+  })({});
+  function resolveSendTo(actorScope, snapshot, args, actionParams, {
+    to,
+    event: eventOrExpr,
+    id,
+    delay
+  }, extra) {
+    const delaysMap = snapshot.machine.implementations.delays;
+    if (typeof eventOrExpr === "string") {
+      throw new Error(`Only event objects may be used with sendTo; use sendTo({ type: "${eventOrExpr}" }) instead`);
+    }
+    const resolvedEvent = typeof eventOrExpr === "function" ? eventOrExpr(args, actionParams) : eventOrExpr;
+    let resolvedDelay;
+    if (typeof delay === "string") {
+      const configDelay = delaysMap && delaysMap[delay];
+      resolvedDelay = typeof configDelay === "function" ? configDelay(args, actionParams) : configDelay;
+    } else {
+      resolvedDelay = typeof delay === "function" ? delay(args, actionParams) : delay;
+    }
+    const resolvedTarget = typeof to === "function" ? to(args, actionParams) : to;
+    let targetActorRef;
+    if (typeof resolvedTarget === "string") {
+      if (resolvedTarget === SpecialTargets.Parent) {
+        targetActorRef = actorScope.self._parent;
+      } else if (resolvedTarget === SpecialTargets.Internal) {
+        targetActorRef = actorScope.self;
+      } else if (resolvedTarget.startsWith("#_")) {
+        targetActorRef = snapshot.children[resolvedTarget.slice(2)];
+      } else {
+        targetActorRef = extra.deferredActorIds?.includes(resolvedTarget) ? resolvedTarget : snapshot.children[resolvedTarget];
+      }
+      if (!targetActorRef) {
+        throw new Error(`Unable to send event to actor '${resolvedTarget}' from machine '${snapshot.machine.id}'.`);
+      }
+    } else {
+      targetActorRef = resolvedTarget || actorScope.self;
+    }
+    return [snapshot, {
+      to: targetActorRef,
+      targetId: typeof resolvedTarget === "string" ? resolvedTarget : undefined,
+      event: resolvedEvent,
+      id,
+      delay: resolvedDelay
+    }, undefined];
+  }
+  function retryResolveSendTo(_, snapshot, params) {
+    if (typeof params.to === "string") {
+      params.to = snapshot.children[params.to];
+    }
+  }
+  function executeSendTo(actorScope, params) {
+    actorScope.defer(() => {
+      const {
+        to,
+        event,
+        delay,
+        id
+      } = params;
+      if (typeof delay === "number") {
+        actorScope.system.scheduler.schedule(actorScope.self, to, event, delay, id);
+        return;
+      }
+      actorScope.system._relay(actorScope.self, to, event.type === dist_xstateGuards.XSTATE_ERROR ? dist_xstateGuards.createErrorActorEvent(actorScope.self.id, event.data) : event);
+    });
+  }
+  function sendTo(to, eventOrExpr, options) {
+    if (dist_xstateGuards.executingCustomAction) {
+      console.warn("Custom actions should not call `sendTo()` directly, as it is not imperative. See https://stately.ai/docs/actions#built-in-actions for more details.");
+    }
+    function sendTo2(_args, _params) {
+        throw new Error(`This isn't supposed to be called`);
+    }
+    sendTo2.type = "xstate.sendTo";
+    sendTo2.to = to;
+    sendTo2.event = eventOrExpr;
+    sendTo2.id = options?.id;
+    sendTo2.delay = options?.delay;
+    sendTo2.resolve = resolveSendTo;
+    sendTo2.retryResolve = retryResolveSendTo;
+    sendTo2.execute = executeSendTo;
+    return sendTo2;
+  }
+  function sendParent(event, options) {
+    return sendTo(SpecialTargets.Parent, event, options);
+  }
+  function forwardTo(target, options) {
+    if (!target || typeof target === "function") {
+      const originalTarget = target;
+      target = (...args) => {
+        const resolvedTarget = typeof originalTarget === "function" ? originalTarget(...args) : originalTarget;
+        if (!resolvedTarget) {
+          throw new Error(`Attempted to forward event to undefined actor. This risks an infinite loop in the sender.`);
+        }
+        return resolvedTarget;
+      };
+    }
+    return sendTo(target, ({
+      event
+    }) => event, options);
+  }
+  function resolveEnqueueActions(actorScope, snapshot, args, actionParams, {
+    collect
+  }) {
+    const actions = [];
+    const enqueue = function enqueue2(action) {
+      actions.push(action);
+    };
+    enqueue.assign = (...args2) => {
+      actions.push(assign.assign(...args2));
+    };
+    enqueue.cancel = (...args2) => {
+      actions.push(dist_xstateGuards.cancel(...args2));
+    };
+    enqueue.raise = (...args2) => {
+      actions.push(dist_xstateGuards.raise(...args2));
+    };
+    enqueue.sendTo = (...args2) => {
+      actions.push(sendTo(...args2));
+    };
+    enqueue.sendParent = (...args2) => {
+      actions.push(sendParent(...args2));
+    };
+    enqueue.spawnChild = (...args2) => {
+      actions.push(dist_xstateGuards.spawnChild(...args2));
+    };
+    enqueue.stopChild = (...args2) => {
+      actions.push(dist_xstateGuards.stopChild(...args2));
+    };
+    enqueue.emit = (...args2) => {
+      actions.push(emit(...args2));
+    };
+    collect({
+      context: args.context,
+      event: args.event,
+      enqueue,
+      check: (guard) => dist_xstateGuards.evaluateGuard(guard, snapshot.context, args.event, snapshot),
+      self: actorScope.self,
+      system: actorScope.system
+    }, actionParams);
+    return [snapshot, undefined, actions];
+  }
+  function enqueueActions(collect) {
+    function enqueueActions2(_args, _params) {
+        throw new Error(`This isn't supposed to be called`);
+    }
+    enqueueActions2.type = "xstate.enqueueActions";
+    enqueueActions2.collect = collect;
+    enqueueActions2.resolve = resolveEnqueueActions;
+    return enqueueActions2;
+  }
+  function resolveLog(_, snapshot, actionArgs, actionParams, {
+    value,
+    label
+  }) {
+    return [snapshot, {
+      value: typeof value === "function" ? value(actionArgs, actionParams) : value,
+      label
+    }, undefined];
+  }
+  function executeLog({
+    logger
+  }, {
+    value,
+    label
+  }) {
+    if (label) {
+      logger(label, value);
+    } else {
+      logger(value);
+    }
+  }
+  function log(value = ({
+    context,
+    event
+  }) => ({
+    context,
+    event
+  }), label) {
+    function log2(_args, _params) {
+        throw new Error(`This isn't supposed to be called`);
+    }
+    log2.type = "xstate.log";
+    log2.value = value;
+    log2.label = label;
+    log2.resolve = resolveLog;
+    log2.execute = executeLog;
+    return log2;
+  }
+  exports.SpecialTargets = SpecialTargets;
+  exports.emit = emit;
+  exports.enqueueActions = enqueueActions;
+  exports.forwardTo = forwardTo;
+  exports.log = log;
+  exports.sendParent = sendParent;
+  exports.sendTo = sendTo;
+});
+
+// node_modules/xstate/dist/xstate.development.cjs.js
+var require_xstate_development_cjs = __commonJS((exports) => {
+  Object.defineProperty(exports, "__esModule", { value: true });
+  var dist_xstateActors = require_xstate_actors_development_cjs();
+  var dist_xstateGuards = require_raise_53e20da7_development_cjs();
+  var StateMachine = require_StateMachine_3778f5e0_development_cjs();
+  var assign = require_assign_f03a9bed_development_cjs();
+  var log = require_log_0ed3e43f_development_cjs();
+  require_xstate_dev_development_cjs();
+  function assertEvent(event, type) {
+    const types2 = dist_xstateGuards.toArray(type);
+    const matches = types2.some((descriptor) => dist_xstateGuards.matchesEventDescriptor(event.type, descriptor));
+    if (!matches) {
+      const typesText = types2.length === 1 ? `type matching "${types2[0]}"` : `one of types matching "${types2.join('", "')}"`;
+      throw new Error(`Expected event ${JSON.stringify(event)} to have ${typesText}`);
+    }
+  }
+  function createMachine(config, implementations) {
+    return new StateMachine.StateMachine(config, implementations);
+  }
+  function mapState(snapshot, mapper) {
+    const results = [];
+    const findMapper = (currentMapper, nodePath) => {
+      let mapper2 = currentMapper;
+      for (const key of nodePath) {
+        if (!mapper2?.states) {
+          return;
+        }
+        const states = mapper2.states;
+        if (!(key in states)) {
+          return;
+        }
+        mapper2 = states[key];
+      }
+      return mapper2;
+    };
+    const visited = new Set;
+    for (const atomicNode of snapshot._nodes.filter(dist_xstateGuards.isAtomicStateNode)) {
+      let current = atomicNode;
+      while (current && !visited.has(current)) {
+        visited.add(current);
+        const nodeMapper = findMapper(mapper, current.path);
+        if (nodeMapper?.map) {
+          results.push({
+            stateNode: current,
+            result: nodeMapper.map(snapshot)
+          });
+        }
+        current = current.parent;
+      }
+    }
+    return results;
+  }
+  function createInertActorScope(actorLogic) {
+    const self2 = dist_xstateGuards.createActor(actorLogic);
+    const freshSystem = dist_xstateGuards.createSystem(self2, {
+      clock: self2.system._clock,
+      logger: self2.system._logger
+    });
+    self2.system = freshSystem;
+    const inertActorScope = {
+      self: self2,
+      defer: () => {},
+      id: "",
+      logger: () => {},
+      sessionId: "",
+      stopChild: () => {},
+      system: freshSystem,
+      emit: () => {},
+      actionExecutor: () => {}
+    };
+    return inertActorScope;
+  }
+  function getInitialSnapshot(actorLogic, ...[input]) {
+    const actorScope = createInertActorScope(actorLogic);
+    return actorLogic.getInitialSnapshot(actorScope, input);
+  }
+  function getNextSnapshot(actorLogic, snapshot, event) {
+    const inertActorScope = createInertActorScope(actorLogic);
+    inertActorScope.self._snapshot = snapshot;
+    return actorLogic.transition(snapshot, event, inertActorScope);
+  }
+  function setup({
+    schemas,
+    actors,
+    actions,
+    guards,
+    delays
+  }) {
+    return {
+      assign: assign.assign,
+      sendTo: log.sendTo,
+      raise: dist_xstateGuards.raise,
+      log: log.log,
+      cancel: dist_xstateGuards.cancel,
+      stopChild: dist_xstateGuards.stopChild,
+      enqueueActions: log.enqueueActions,
+      emit: log.emit,
+      spawnChild: dist_xstateGuards.spawnChild,
+      createStateConfig: (config) => config,
+      createAction: (fn) => fn,
+      createMachine: (config) => createMachine({
+        ...config,
+        schemas
+      }, {
+        actors,
+        actions,
+        guards,
+        delays
+      }),
+      extend: (extended) => setup({
+        schemas,
+        actors,
+        actions: {
+          ...actions,
+          ...extended.actions
+        },
+        guards: {
+          ...guards,
+          ...extended.guards
+        },
+        delays: {
+          ...delays,
+          ...extended.delays
+        }
+      })
+    };
+  }
+
+  class SimulatedClock {
+    constructor() {
+      this.timeouts = new Map;
+      this._now = 0;
+      this._id = 0;
+      this._flushing = false;
+      this._flushingInvalidated = false;
+    }
+    now() {
+      return this._now;
+    }
+    getId() {
+      return this._id++;
+    }
+    setTimeout(fn, timeout) {
+      this._flushingInvalidated = this._flushing;
+      const id = this.getId();
+      this.timeouts.set(id, {
+        start: this.now(),
+        timeout,
+        fn
+      });
+      return id;
+    }
+    clearTimeout(id) {
+      this._flushingInvalidated = this._flushing;
+      this.timeouts.delete(id);
+    }
+    set(time) {
+      if (this._now > time) {
+        throw new Error("Unable to travel back in time");
+      }
+      this._now = time;
+      this.flushTimeouts();
+    }
+    flushTimeouts() {
+      if (this._flushing) {
+        this._flushingInvalidated = true;
+        return;
+      }
+      this._flushing = true;
+      const sorted = [...this.timeouts].sort(([_idA, timeoutA], [_idB, timeoutB]) => {
+        const endA = timeoutA.start + timeoutA.timeout;
+        const endB = timeoutB.start + timeoutB.timeout;
+        return endB > endA ? -1 : 1;
+      });
+      for (const [id, timeout] of sorted) {
+        if (this._flushingInvalidated) {
+          this._flushingInvalidated = false;
+          this._flushing = false;
+          this.flushTimeouts();
+          return;
+        }
+        if (this.now() - timeout.start >= timeout.timeout) {
+          this.timeouts.delete(id);
+          timeout.fn.call(null);
+        }
+      }
+      this._flushing = false;
+    }
+    increment(ms) {
+      this._now += ms;
+      this.flushTimeouts();
+    }
+  }
+  function toPromise(actor) {
+    return new Promise((resolve, reject) => {
+      actor.subscribe({
+        complete: () => {
+          resolve(actor.getSnapshot().output);
+        },
+        error: reject
+      });
+    });
+  }
+  function transition(logic, snapshot, event) {
+    const executableActions = [];
+    const actorScope = createInertActorScope(logic);
+    actorScope.actionExecutor = (action) => {
+      executableActions.push(action);
+    };
+    const nextSnapshot = logic.transition(snapshot, event, actorScope);
+    return [nextSnapshot, executableActions];
+  }
+  function initialTransition(logic, ...[input]) {
+    const executableActions = [];
+    const actorScope = createInertActorScope(logic);
+    actorScope.actionExecutor = (action) => {
+      executableActions.push(action);
+    };
+    const nextSnapshot = logic.getInitialSnapshot(actorScope, input);
+    return [nextSnapshot, executableActions];
+  }
+  function getMicrosteps(machine, snapshot, event) {
+    const actorScope = createInertActorScope(machine);
+    const {
+      microsteps
+    } = dist_xstateGuards.macrostep(snapshot, event, actorScope, []);
+    return microsteps;
+  }
+  function getInitialMicrosteps(machine, ...[input]) {
+    const actorScope = createInertActorScope(machine);
+    const initEvent = dist_xstateGuards.createInitEvent(input);
+    const internalQueue = [];
+    const preInitialSnapshot = machine._getPreInitialState(actorScope, initEvent, internalQueue);
+    const first = dist_xstateGuards.initialMicrostep(machine.root, preInitialSnapshot, actorScope, initEvent, internalQueue);
+    const {
+      microsteps
+    } = dist_xstateGuards.macrostep(first[0], initEvent, actorScope, internalQueue);
+    return [first, ...microsteps];
+  }
+  function getNextTransitions(state) {
+    const potentialTransitions = [];
+    const atomicStates = state._nodes.filter(dist_xstateGuards.isAtomicStateNode);
+    const visited = new Set;
+    for (const stateNode of atomicStates) {
+      for (const s of [stateNode].concat(dist_xstateGuards.getProperAncestors(stateNode, undefined))) {
+        if (visited.has(s.id)) {
+          continue;
+        }
+        visited.add(s.id);
+        for (const [, transitions] of s.transitions) {
+          potentialTransitions.push(...transitions);
+        }
+        if (s.always) {
+          potentialTransitions.push(...s.always);
+        }
+      }
+    }
+    return potentialTransitions;
+  }
+  var defaultWaitForOptions = {
+    timeout: Infinity
+  };
+  function waitFor(actorRef, predicate, options) {
+    const resolvedOptions = {
+      ...defaultWaitForOptions,
+      ...options
+    };
+    return new Promise((res, rej) => {
+      const {
+        signal
+      } = resolvedOptions;
+      if (signal?.aborted) {
+        rej(signal.reason);
+        return;
+      }
+      let done = false;
+      if (resolvedOptions.timeout < 0) {
+        console.error("`timeout` passed to `waitFor` is negative and it will reject its internal promise immediately.");
+      }
+      const handle = resolvedOptions.timeout === Infinity ? undefined : setTimeout(() => {
+        dispose();
+        rej(new Error(`Timeout of ${resolvedOptions.timeout} ms exceeded`));
+      }, resolvedOptions.timeout);
+      const dispose = () => {
+        clearTimeout(handle);
+        done = true;
+        sub?.unsubscribe();
+        if (abortListener) {
+          signal.removeEventListener("abort", abortListener);
+        }
+      };
+      function checkEmitted(emitted) {
+        if (predicate(emitted)) {
+          dispose();
+          res(emitted);
+        }
+      }
+      let abortListener;
+      let sub;
+      checkEmitted(actorRef.getSnapshot());
+      if (done) {
+        return;
+      }
+      if (signal) {
+        abortListener = () => {
+          dispose();
+          rej(signal.reason);
+        };
+        signal.addEventListener("abort", abortListener);
+      }
+      sub = actorRef.subscribe({
+        next: checkEmitted,
+        error: (err) => {
+          dispose();
+          rej(err);
+        },
+        complete: () => {
+          dispose();
+          rej(new Error(`Actor terminated without satisfying predicate`));
+        }
+      });
+      if (done) {
+        sub.unsubscribe();
+      }
+    });
+  }
+  exports.createEmptyActor = dist_xstateActors.createEmptyActor;
+  exports.fromCallback = dist_xstateActors.fromCallback;
+  exports.fromEventObservable = dist_xstateActors.fromEventObservable;
+  exports.fromObservable = dist_xstateActors.fromObservable;
+  exports.fromPromise = dist_xstateActors.fromPromise;
+  exports.fromTransition = dist_xstateActors.fromTransition;
+  exports.Actor = dist_xstateGuards.Actor;
+  exports.__unsafe_getAllOwnEventDescriptors = dist_xstateGuards.getAllOwnEventDescriptors;
+  exports.and = dist_xstateGuards.and;
+  exports.cancel = dist_xstateGuards.cancel;
+  exports.createActor = dist_xstateGuards.createActor;
+  exports.getStateNodes = dist_xstateGuards.getStateNodes;
+  exports.interpret = dist_xstateGuards.interpret;
+  exports.isMachineSnapshot = dist_xstateGuards.isMachineSnapshot;
+  exports.matchesState = dist_xstateGuards.matchesState;
+  exports.not = dist_xstateGuards.not;
+  exports.or = dist_xstateGuards.or;
+  exports.pathToStateValue = dist_xstateGuards.pathToStateValue;
+  exports.raise = dist_xstateGuards.raise;
+  exports.spawnChild = dist_xstateGuards.spawnChild;
+  exports.stateIn = dist_xstateGuards.stateIn;
+  exports.stop = dist_xstateGuards.stop;
+  exports.stopChild = dist_xstateGuards.stopChild;
+  exports.toObserver = dist_xstateGuards.toObserver;
+  exports.StateMachine = StateMachine.StateMachine;
+  exports.StateNode = StateMachine.StateNode;
+  exports.assign = assign.assign;
+  exports.SpecialTargets = log.SpecialTargets;
+  exports.emit = log.emit;
+  exports.enqueueActions = log.enqueueActions;
+  exports.forwardTo = log.forwardTo;
+  exports.log = log.log;
+  exports.sendParent = log.sendParent;
+  exports.sendTo = log.sendTo;
+  exports.SimulatedClock = SimulatedClock;
+  exports.assertEvent = assertEvent;
+  exports.createMachine = createMachine;
+  exports.getInitialMicrosteps = getInitialMicrosteps;
+  exports.getInitialSnapshot = getInitialSnapshot;
+  exports.getMicrosteps = getMicrosteps;
+  exports.getNextSnapshot = getNextSnapshot;
+  exports.getNextTransitions = getNextTransitions;
+  exports.initialTransition = initialTransition;
+  exports.mapState = mapState;
+  exports.setup = setup;
+  exports.toPromise = toPromise;
+  exports.transition = transition;
+  exports.waitFor = waitFor;
+});
+
+// src/shared/constants.ts
+import os from "node:os";
+import path from "node:path";
+var PREMIND_PROTOCOL_VERSION = 1;
+var PREMIND_SOCKET_PATH = process.env.PREMIND_SOCKET_PATH ?? path.join(os.tmpdir(), "premind.sock");
+var PREMIND_STATE_DIR = process.env.PREMIND_STATE_DIR ?? (process.platform === "darwin" ? path.join(os.homedir(), "Library", "Application Support", "premind") : path.join(process.env.XDG_STATE_HOME ?? path.join(os.homedir(), ".local", "state"), "premind"));
+var PREMIND_DB_PATH = path.join(PREMIND_STATE_DIR, "premind.db");
+var PREMIND_EVENT_DETAIL_DIR = path.join(PREMIND_STATE_DIR, "event-details");
+var PREMIND_CLIENT_HEARTBEAT_MS = 1e4;
+var PREMIND_CLIENT_LEASE_TTL_MS = 30000;
+var PREMIND_IDLE_SHUTDOWN_GRACE_MS = 15000;
+var PREMIND_IDLE_DELIVERY_THRESHOLD_MS = 60000;
+var PREMIND_SESSION_STALE_MS = 6 * 60 * 60 * 1000;
+var PREMIND_REMINDER_HANDOFF_STALE_MS = 5 * 60 * 1000;
+var PREMIND_PR_WATCHER_IDLE_GRACE_MS = 5 * 60 * 1000;
+var PREMIND_PR_STREAM_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+var PREMIND_SUBSCRIPTION_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+var PREMIND_CLOSED_SESSION_RETENTION_MS = 24 * 60 * 60 * 1000;
+var PREMIND_DAEMON_LOG_PATH = path.join(PREMIND_STATE_DIR, "daemon.log");
+var PREMIND_DAEMON_LOG_MAX_BYTES = 10 * 1024 * 1024;
+
+// src/daemon/logging/logger.ts
+import fs from "node:fs";
+var logStream = null;
+function getLogStream() {
+  if (logStream)
+    return logStream;
+  fs.mkdirSync(PREMIND_STATE_DIR, { recursive: true });
+  try {
+    const stat = fs.statSync(PREMIND_DAEMON_LOG_PATH);
+    if (stat.size > PREMIND_DAEMON_LOG_MAX_BYTES) {
+      fs.renameSync(PREMIND_DAEMON_LOG_PATH, `${PREMIND_DAEMON_LOG_PATH}.prev`);
+    }
+  } catch {}
+  logStream = fs.createWriteStream(PREMIND_DAEMON_LOG_PATH, { flags: "a" });
+  logStream.on("error", () => {
+    logStream = null;
+  });
+  return logStream;
+}
+
+class Logger {
+  service;
+  constructor(service) {
+    this.service = service;
+  }
+  debug(message, extra) {
+    this.write("debug", message, extra);
+  }
+  info(message, extra) {
+    this.write("info", message, extra);
+  }
+  warn(message, extra) {
+    this.write("warn", message, extra);
+  }
+  error(message, extra) {
+    this.write("error", message, extra);
+  }
+  write(level, message, extra) {
+    const entry = {
+      ts: new Date().toISOString(),
+      level,
+      service: this.service,
+      message,
+      ...extra ? { extra } : {}
+    };
+    const line = JSON.stringify(entry);
+    if (level === "error") {
+      process.stderr.write(`${line}
+`);
+    } else {
+      process.stdout.write(`${line}
+`);
+    }
+    try {
+      getLogStream().write(`${line}
+`);
+    } catch {}
+  }
+}
+var createLogger = (service) => new Logger(service);
+
+// src/daemon/ipc/server.ts
+import net2 from "node:net";
+import fs4 from "node:fs";
+
+// node_modules/zod/v3/external.js
+var exports_external = {};
+__export(exports_external, {
+  void: () => voidType,
+  util: () => util,
+  unknown: () => unknownType,
+  union: () => unionType,
+  undefined: () => undefinedType,
+  tuple: () => tupleType,
+  transformer: () => effectsType,
+  symbol: () => symbolType,
+  string: () => stringType,
+  strictObject: () => strictObjectType,
+  setErrorMap: () => setErrorMap,
+  set: () => setType,
+  record: () => recordType,
+  quotelessJson: () => quotelessJson,
+  promise: () => promiseType,
+  preprocess: () => preprocessType,
+  pipeline: () => pipelineType,
+  ostring: () => ostring,
+  optional: () => optionalType,
+  onumber: () => onumber,
+  oboolean: () => oboolean,
+  objectUtil: () => objectUtil,
+  object: () => objectType,
+  number: () => numberType,
+  nullable: () => nullableType,
+  null: () => nullType,
+  never: () => neverType,
+  nativeEnum: () => nativeEnumType,
+  nan: () => nanType,
+  map: () => mapType,
+  makeIssue: () => makeIssue,
+  literal: () => literalType,
+  lazy: () => lazyType,
+  late: () => late,
+  isValid: () => isValid,
+  isDirty: () => isDirty,
+  isAsync: () => isAsync,
+  isAborted: () => isAborted,
+  intersection: () => intersectionType,
+  instanceof: () => instanceOfType,
+  getParsedType: () => getParsedType,
+  getErrorMap: () => getErrorMap,
+  function: () => functionType,
+  enum: () => enumType,
+  effect: () => effectsType,
+  discriminatedUnion: () => discriminatedUnionType,
+  defaultErrorMap: () => en_default,
+  datetimeRegex: () => datetimeRegex,
+  date: () => dateType,
+  custom: () => custom,
+  coerce: () => coerce,
+  boolean: () => booleanType,
+  bigint: () => bigIntType,
+  array: () => arrayType,
+  any: () => anyType,
+  addIssueToContext: () => addIssueToContext,
+  ZodVoid: () => ZodVoid,
+  ZodUnknown: () => ZodUnknown,
+  ZodUnion: () => ZodUnion,
+  ZodUndefined: () => ZodUndefined,
+  ZodType: () => ZodType,
+  ZodTuple: () => ZodTuple,
+  ZodTransformer: () => ZodEffects,
+  ZodSymbol: () => ZodSymbol,
+  ZodString: () => ZodString,
+  ZodSet: () => ZodSet,
+  ZodSchema: () => ZodType,
+  ZodRecord: () => ZodRecord,
+  ZodReadonly: () => ZodReadonly,
+  ZodPromise: () => ZodPromise,
+  ZodPipeline: () => ZodPipeline,
+  ZodParsedType: () => ZodParsedType,
+  ZodOptional: () => ZodOptional,
+  ZodObject: () => ZodObject,
+  ZodNumber: () => ZodNumber,
+  ZodNullable: () => ZodNullable,
+  ZodNull: () => ZodNull,
+  ZodNever: () => ZodNever,
+  ZodNativeEnum: () => ZodNativeEnum,
+  ZodNaN: () => ZodNaN,
+  ZodMap: () => ZodMap,
+  ZodLiteral: () => ZodLiteral,
+  ZodLazy: () => ZodLazy,
+  ZodIssueCode: () => ZodIssueCode,
+  ZodIntersection: () => ZodIntersection,
+  ZodFunction: () => ZodFunction,
+  ZodFirstPartyTypeKind: () => ZodFirstPartyTypeKind,
+  ZodError: () => ZodError,
+  ZodEnum: () => ZodEnum,
+  ZodEffects: () => ZodEffects,
+  ZodDiscriminatedUnion: () => ZodDiscriminatedUnion,
+  ZodDefault: () => ZodDefault,
+  ZodDate: () => ZodDate,
+  ZodCatch: () => ZodCatch,
+  ZodBranded: () => ZodBranded,
+  ZodBoolean: () => ZodBoolean,
+  ZodBigInt: () => ZodBigInt,
+  ZodArray: () => ZodArray,
+  ZodAny: () => ZodAny,
+  Schema: () => ZodType,
+  ParseStatus: () => ParseStatus,
+  OK: () => OK,
+  NEVER: () => NEVER,
+  INVALID: () => INVALID,
+  EMPTY_PATH: () => EMPTY_PATH,
+  DIRTY: () => DIRTY,
+  BRAND: () => BRAND
+});
+
+// node_modules/zod/v3/helpers/util.js
+var util;
+((util2) => {
+  util2.assertEqual = (_) => {};
+  function assertIs(_arg) {}
+  util2.assertIs = assertIs;
+  function assertNever(_x) {
+    throw new Error;
+  }
+  util2.assertNever = assertNever;
+  util2.arrayToEnum = (items) => {
+    const obj = {};
+    for (const item of items) {
+      obj[item] = item;
+    }
+    return obj;
+  };
+  util2.getValidEnumValues = (obj) => {
+    const validKeys = util2.objectKeys(obj).filter((k) => typeof obj[obj[k]] !== "number");
+    const filtered = {};
+    for (const k of validKeys) {
+      filtered[k] = obj[k];
+    }
+    return util2.objectValues(filtered);
+  };
+  util2.objectValues = (obj) => {
+    return util2.objectKeys(obj).map((e) => obj[e]);
+  };
+  util2.objectKeys = typeof Object.keys === "function" ? (obj) => Object.keys(obj) : (object) => {
+    const keys = [];
+    for (const key in object) {
+      if (Object.hasOwn(object, key)) {
+        keys.push(key);
+      }
+    }
+    return keys;
+  };
+  util2.find = (arr, checker) => {
+    for (const item of arr) {
+      if (checker(item))
+        return item;
+    }
+    return;
+  };
+  util2.isInteger = typeof Number.isInteger === "function" ? (val) => Number.isInteger(val) : (val) => typeof val === "number" && Number.isFinite(val) && Math.floor(val) === val;
+  function joinValues(array, separator = " | ") {
+    return array.map((val) => typeof val === "string" ? `'${val}'` : val).join(separator);
+  }
+  util2.joinValues = joinValues;
+  util2.jsonStringifyReplacer = (_, value) => {
+    if (typeof value === "bigint") {
+      return value.toString();
+    }
+    return value;
+  };
+})(util || (util = {}));
+var objectUtil;
+((objectUtil2) => {
+  objectUtil2.mergeShapes = (first, second) => {
+    return {
+      ...first,
+      ...second
+    };
+  };
+})(objectUtil || (objectUtil = {}));
+var ZodParsedType = util.arrayToEnum([
+  "string",
+  "nan",
+  "number",
+  "integer",
+  "float",
+  "boolean",
+  "date",
+  "bigint",
+  "symbol",
+  "function",
+  "undefined",
+  "null",
+  "array",
+  "object",
+  "unknown",
+  "promise",
+  "void",
+  "never",
+  "map",
+  "set"
+]);
+var getParsedType = (data) => {
+  const t = typeof data;
+  switch (t) {
+    case "undefined":
+      return ZodParsedType.undefined;
+    case "string":
+      return ZodParsedType.string;
+    case "number":
+      return Number.isNaN(data) ? ZodParsedType.nan : ZodParsedType.number;
+    case "boolean":
+      return ZodParsedType.boolean;
+    case "function":
+      return ZodParsedType.function;
+    case "bigint":
+      return ZodParsedType.bigint;
+    case "symbol":
+      return ZodParsedType.symbol;
+    case "object":
+      if (Array.isArray(data)) {
+        return ZodParsedType.array;
+      }
+      if (data === null) {
+        return ZodParsedType.null;
+      }
+      if (data.then && typeof data.then === "function" && data.catch && typeof data.catch === "function") {
+        return ZodParsedType.promise;
+      }
+      if (typeof Map !== "undefined" && data instanceof Map) {
+        return ZodParsedType.map;
+      }
+      if (typeof Set !== "undefined" && data instanceof Set) {
+        return ZodParsedType.set;
+      }
+      if (typeof Date !== "undefined" && data instanceof Date) {
+        return ZodParsedType.date;
+      }
+      return ZodParsedType.object;
+    default:
+      return ZodParsedType.unknown;
+  }
+};
+
+// node_modules/zod/v3/ZodError.js
+var ZodIssueCode = util.arrayToEnum([
+  "invalid_type",
+  "invalid_literal",
+  "custom",
+  "invalid_union",
+  "invalid_union_discriminator",
+  "invalid_enum_value",
+  "unrecognized_keys",
+  "invalid_arguments",
+  "invalid_return_type",
+  "invalid_date",
+  "invalid_string",
+  "too_small",
+  "too_big",
+  "invalid_intersection_types",
+  "not_multiple_of",
+  "not_finite"
+]);
+var quotelessJson = (obj) => {
+  const json = JSON.stringify(obj, null, 2);
+  return json.replace(/"([^"]+)":/g, "$1:");
+};
+
+class ZodError extends Error {
+  get errors() {
+    return this.issues;
+  }
+  constructor(issues) {
+    super();
+    this.issues = [];
+    this.addIssue = (sub) => {
+      this.issues = [...this.issues, sub];
+    };
+    this.addIssues = (subs = []) => {
+      this.issues = [...this.issues, ...subs];
+    };
+    const actualProto = new.target.prototype;
+    if (Object.setPrototypeOf) {
+      Object.setPrototypeOf(this, actualProto);
+    } else {
+      this.__proto__ = actualProto;
+    }
+    this.name = "ZodError";
+    this.issues = issues;
+  }
+  format(_mapper) {
+    const mapper = _mapper || ((issue) => issue.message);
+    const fieldErrors = { _errors: [] };
+    const processError = (error) => {
+      for (const issue of error.issues) {
+        if (issue.code === "invalid_union") {
+          issue.unionErrors.map(processError);
+        } else if (issue.code === "invalid_return_type") {
+          processError(issue.returnTypeError);
+        } else if (issue.code === "invalid_arguments") {
+          processError(issue.argumentsError);
+        } else if (issue.path.length === 0) {
+          fieldErrors._errors.push(mapper(issue));
+        } else {
+          let curr = fieldErrors;
+          let i = 0;
+          while (i < issue.path.length) {
+            const el = issue.path[i];
+            const terminal = i === issue.path.length - 1;
+            if (terminal) {
+              curr[el] = curr[el] || { _errors: [] };
+              curr[el]._errors.push(mapper(issue));
+            } else {
+              curr[el] = curr[el] || { _errors: [] };
+            }
+            curr = curr[el];
+            i++;
+          }
+        }
+      }
+    };
+    processError(this);
+    return fieldErrors;
+  }
+  static assert(value) {
+    if (!(value instanceof ZodError)) {
+      throw new Error(`Not a ZodError: ${value}`);
+    }
+  }
+  toString() {
+    return this.message;
+  }
+  get message() {
+    return JSON.stringify(this.issues, util.jsonStringifyReplacer, 2);
+  }
+  get isEmpty() {
+    return this.issues.length === 0;
+  }
+  flatten(mapper = (issue) => issue.message) {
+    const fieldErrors = {};
+    const formErrors = [];
+    for (const sub of this.issues) {
+      if (sub.path.length > 0) {
+        const firstEl = sub.path[0];
+        fieldErrors[firstEl] = fieldErrors[firstEl] || [];
+        fieldErrors[firstEl].push(mapper(sub));
+      } else {
+        formErrors.push(mapper(sub));
+      }
+    }
+    return { formErrors, fieldErrors };
+  }
+  get formErrors() {
+    return this.flatten();
+  }
+}
+ZodError.create = (issues) => {
+  const error = new ZodError(issues);
+  return error;
+};
+
+// node_modules/zod/v3/locales/en.js
+var errorMap = (issue, _ctx) => {
+  let message;
+  switch (issue.code) {
+    case ZodIssueCode.invalid_type:
+      if (issue.received === ZodParsedType.undefined) {
+        message = "Required";
+      } else {
+        message = `Expected ${issue.expected}, received ${issue.received}`;
+      }
+      break;
+    case ZodIssueCode.invalid_literal:
+      message = `Invalid literal value, expected ${JSON.stringify(issue.expected, util.jsonStringifyReplacer)}`;
+      break;
+    case ZodIssueCode.unrecognized_keys:
+      message = `Unrecognized key(s) in object: ${util.joinValues(issue.keys, ", ")}`;
+      break;
+    case ZodIssueCode.invalid_union:
+      message = `Invalid input`;
+      break;
+    case ZodIssueCode.invalid_union_discriminator:
+      message = `Invalid discriminator value. Expected ${util.joinValues(issue.options)}`;
+      break;
+    case ZodIssueCode.invalid_enum_value:
+      message = `Invalid enum value. Expected ${util.joinValues(issue.options)}, received '${issue.received}'`;
+      break;
+    case ZodIssueCode.invalid_arguments:
+      message = `Invalid function arguments`;
+      break;
+    case ZodIssueCode.invalid_return_type:
+      message = `Invalid function return type`;
+      break;
+    case ZodIssueCode.invalid_date:
+      message = `Invalid date`;
+      break;
+    case ZodIssueCode.invalid_string:
+      if (typeof issue.validation === "object") {
+        if ("includes" in issue.validation) {
+          message = `Invalid input: must include "${issue.validation.includes}"`;
+          if (typeof issue.validation.position === "number") {
+            message = `${message} at one or more positions greater than or equal to ${issue.validation.position}`;
+          }
+        } else if ("startsWith" in issue.validation) {
+          message = `Invalid input: must start with "${issue.validation.startsWith}"`;
+        } else if ("endsWith" in issue.validation) {
+          message = `Invalid input: must end with "${issue.validation.endsWith}"`;
+        } else {
+          util.assertNever(issue.validation);
+        }
+      } else if (issue.validation === "regex") {
+        message = "Invalid";
+      } else {
+        message = `Invalid ${issue.validation}`;
+      }
+      break;
+    case ZodIssueCode.too_small:
+      if (issue.type === "array")
+        message = `Array must contain ${issue.exact ? "exactly" : issue.inclusive ? `at least` : `more than`} ${issue.minimum} element(s)`;
+      else if (issue.type === "string")
+        message = `String must contain ${issue.exact ? "exactly" : issue.inclusive ? `at least` : `over`} ${issue.minimum} character(s)`;
+      else if (issue.type === "number")
+        message = `Number must be ${issue.exact ? `exactly equal to ` : issue.inclusive ? `greater than or equal to ` : `greater than `}${issue.minimum}`;
+      else if (issue.type === "bigint")
+        message = `Number must be ${issue.exact ? `exactly equal to ` : issue.inclusive ? `greater than or equal to ` : `greater than `}${issue.minimum}`;
+      else if (issue.type === "date")
+        message = `Date must be ${issue.exact ? `exactly equal to ` : issue.inclusive ? `greater than or equal to ` : `greater than `}${new Date(Number(issue.minimum))}`;
+      else
+        message = "Invalid input";
+      break;
+    case ZodIssueCode.too_big:
+      if (issue.type === "array")
+        message = `Array must contain ${issue.exact ? `exactly` : issue.inclusive ? `at most` : `less than`} ${issue.maximum} element(s)`;
+      else if (issue.type === "string")
+        message = `String must contain ${issue.exact ? `exactly` : issue.inclusive ? `at most` : `under`} ${issue.maximum} character(s)`;
+      else if (issue.type === "number")
+        message = `Number must be ${issue.exact ? `exactly` : issue.inclusive ? `less than or equal to` : `less than`} ${issue.maximum}`;
+      else if (issue.type === "bigint")
+        message = `BigInt must be ${issue.exact ? `exactly` : issue.inclusive ? `less than or equal to` : `less than`} ${issue.maximum}`;
+      else if (issue.type === "date")
+        message = `Date must be ${issue.exact ? `exactly` : issue.inclusive ? `smaller than or equal to` : `smaller than`} ${new Date(Number(issue.maximum))}`;
+      else
+        message = "Invalid input";
+      break;
+    case ZodIssueCode.custom:
+      message = `Invalid input`;
+      break;
+    case ZodIssueCode.invalid_intersection_types:
+      message = `Intersection results could not be merged`;
+      break;
+    case ZodIssueCode.not_multiple_of:
+      message = `Number must be a multiple of ${issue.multipleOf}`;
+      break;
+    case ZodIssueCode.not_finite:
+      message = "Number must be finite";
+      break;
+    default:
+      message = _ctx.defaultError;
+      util.assertNever(issue);
+  }
+  return { message };
+};
+var en_default = errorMap;
+
+// node_modules/zod/v3/errors.js
+var overrideErrorMap = en_default;
+function setErrorMap(map) {
+  overrideErrorMap = map;
+}
+function getErrorMap() {
+  return overrideErrorMap;
+}
+// node_modules/zod/v3/helpers/parseUtil.js
+var makeIssue = (params) => {
+  const { data, path: path2, errorMaps, issueData } = params;
+  const fullPath = [...path2, ...issueData.path || []];
+  const fullIssue = {
+    ...issueData,
+    path: fullPath
+  };
+  if (issueData.message !== undefined) {
+    return {
+      ...issueData,
+      path: fullPath,
+      message: issueData.message
+    };
+  }
+  let errorMessage = "";
+  const maps = errorMaps.filter((m) => !!m).slice().reverse();
+  for (const map of maps) {
+    errorMessage = map(fullIssue, { data, defaultError: errorMessage }).message;
+  }
+  return {
+    ...issueData,
+    path: fullPath,
+    message: errorMessage
+  };
+};
+var EMPTY_PATH = [];
+function addIssueToContext(ctx, issueData) {
+  const overrideMap = getErrorMap();
+  const issue = makeIssue({
+    issueData,
+    data: ctx.data,
+    path: ctx.path,
+    errorMaps: [
+      ctx.common.contextualErrorMap,
+      ctx.schemaErrorMap,
+      overrideMap,
+      overrideMap === en_default ? undefined : en_default
+    ].filter((x) => !!x)
+  });
+  ctx.common.issues.push(issue);
+}
+
+class ParseStatus {
+  constructor() {
+    this.value = "valid";
+  }
+  dirty() {
+    if (this.value === "valid")
+      this.value = "dirty";
+  }
+  abort() {
+    if (this.value !== "aborted")
+      this.value = "aborted";
+  }
+  static mergeArray(status, results) {
+    const arrayValue = [];
+    for (const s of results) {
+      if (s.status === "aborted")
+        return INVALID;
+      if (s.status === "dirty")
+        status.dirty();
+      arrayValue.push(s.value);
+    }
+    return { status: status.value, value: arrayValue };
+  }
+  static async mergeObjectAsync(status, pairs) {
+    const syncPairs = [];
+    for (const pair of pairs) {
+      const key = await pair.key;
+      const value = await pair.value;
+      syncPairs.push({
+        key,
+        value
+      });
+    }
+    return ParseStatus.mergeObjectSync(status, syncPairs);
+  }
+  static mergeObjectSync(status, pairs) {
+    const finalObject = {};
+    for (const pair of pairs) {
+      const { key, value } = pair;
+      if (key.status === "aborted")
+        return INVALID;
+      if (value.status === "aborted")
+        return INVALID;
+      if (key.status === "dirty")
+        status.dirty();
+      if (value.status === "dirty")
+        status.dirty();
+      if (key.value !== "__proto__" && (typeof value.value !== "undefined" || pair.alwaysSet)) {
+        finalObject[key.value] = value.value;
+      }
+    }
+    return { status: status.value, value: finalObject };
+  }
+}
+var INVALID = Object.freeze({
+  status: "aborted"
+});
+var DIRTY = (value) => ({ status: "dirty", value });
+var OK = (value) => ({ status: "valid", value });
+var isAborted = (x) => x.status === "aborted";
+var isDirty = (x) => x.status === "dirty";
+var isValid = (x) => x.status === "valid";
+var isAsync = (x) => typeof Promise !== "undefined" && x instanceof Promise;
+// node_modules/zod/v3/helpers/errorUtil.js
+var errorUtil;
+((errorUtil2) => {
+  errorUtil2.errToObj = (message) => typeof message === "string" ? { message } : message || {};
+  errorUtil2.toString = (message) => typeof message === "string" ? message : message?.message;
+})(errorUtil || (errorUtil = {}));
+
+// node_modules/zod/v3/types.js
+class ParseInputLazyPath {
+  constructor(parent, value, path2, key) {
+    this._cachedPath = [];
+    this.parent = parent;
+    this.data = value;
+    this._path = path2;
+    this._key = key;
+  }
+  get path() {
+    if (!this._cachedPath.length) {
+      if (Array.isArray(this._key)) {
+        this._cachedPath.push(...this._path, ...this._key);
+      } else {
+        this._cachedPath.push(...this._path, this._key);
+      }
+    }
+    return this._cachedPath;
+  }
+}
+var handleResult = (ctx, result) => {
+  if (isValid(result)) {
+    return { success: true, data: result.value };
+  } else {
+    if (!ctx.common.issues.length) {
+      throw new Error("Validation failed but no issues detected.");
+    }
+    return {
+      success: false,
+      get error() {
+        if (this._error)
+          return this._error;
+        const error = new ZodError(ctx.common.issues);
+        this._error = error;
+        return this._error;
+      }
+    };
+  }
+};
+function processCreateParams(params) {
+  if (!params)
+    return {};
+  const { errorMap: errorMap2, invalid_type_error, required_error, description } = params;
+  if (errorMap2 && (invalid_type_error || required_error)) {
+    throw new Error(`Can't use "invalid_type_error" or "required_error" in conjunction with custom error map.`);
+  }
+  if (errorMap2)
+    return { errorMap: errorMap2, description };
+  const customMap = (iss, ctx) => {
+    const { message } = params;
+    if (iss.code === "invalid_enum_value") {
+      return { message: message ?? ctx.defaultError };
+    }
+    if (typeof ctx.data === "undefined") {
+      return { message: message ?? required_error ?? ctx.defaultError };
+    }
+    if (iss.code !== "invalid_type")
+      return { message: ctx.defaultError };
+    return { message: message ?? invalid_type_error ?? ctx.defaultError };
+  };
+  return { errorMap: customMap, description };
+}
+
+class ZodType {
+  get description() {
+    return this._def.description;
+  }
+  _getType(input) {
+    return getParsedType(input.data);
+  }
+  _getOrReturnCtx(input, ctx) {
+    return ctx || {
+      common: input.parent.common,
+      data: input.data,
+      parsedType: getParsedType(input.data),
+      schemaErrorMap: this._def.errorMap,
+      path: input.path,
+      parent: input.parent
+    };
+  }
+  _processInputParams(input) {
+    return {
+      status: new ParseStatus,
+      ctx: {
+        common: input.parent.common,
+        data: input.data,
+        parsedType: getParsedType(input.data),
+        schemaErrorMap: this._def.errorMap,
+        path: input.path,
+        parent: input.parent
+      }
+    };
+  }
+  _parseSync(input) {
+    const result = this._parse(input);
+    if (isAsync(result)) {
+      throw new Error("Synchronous parse encountered promise.");
+    }
+    return result;
+  }
+  _parseAsync(input) {
+    const result = this._parse(input);
+    return Promise.resolve(result);
+  }
+  parse(data, params) {
+    const result = this.safeParse(data, params);
+    if (result.success)
+      return result.data;
+    throw result.error;
+  }
+  safeParse(data, params) {
+    const ctx = {
+      common: {
+        issues: [],
+        async: params?.async ?? false,
+        contextualErrorMap: params?.errorMap
+      },
+      path: params?.path || [],
+      schemaErrorMap: this._def.errorMap,
+      parent: null,
+      data,
+      parsedType: getParsedType(data)
+    };
+    const result = this._parseSync({ data, path: ctx.path, parent: ctx });
+    return handleResult(ctx, result);
+  }
+  "~validate"(data) {
+    const ctx = {
+      common: {
+        issues: [],
+        async: !!this["~standard"].async
+      },
+      path: [],
+      schemaErrorMap: this._def.errorMap,
+      parent: null,
+      data,
+      parsedType: getParsedType(data)
+    };
+    if (!this["~standard"].async) {
+      try {
+        const result = this._parseSync({ data, path: [], parent: ctx });
+        return isValid(result) ? {
+          value: result.value
+        } : {
+          issues: ctx.common.issues
+        };
+      } catch (err) {
+        if (err?.message?.toLowerCase()?.includes("encountered")) {
+          this["~standard"].async = true;
+        }
+        ctx.common = {
+          issues: [],
+          async: true
+        };
+      }
+    }
+    return this._parseAsync({ data, path: [], parent: ctx }).then((result) => isValid(result) ? {
+      value: result.value
+    } : {
+      issues: ctx.common.issues
+    });
+  }
+  async parseAsync(data, params) {
+    const result = await this.safeParseAsync(data, params);
+    if (result.success)
+      return result.data;
+    throw result.error;
+  }
+  async safeParseAsync(data, params) {
+    const ctx = {
+      common: {
+        issues: [],
+        contextualErrorMap: params?.errorMap,
+        async: true
+      },
+      path: params?.path || [],
+      schemaErrorMap: this._def.errorMap,
+      parent: null,
+      data,
+      parsedType: getParsedType(data)
+    };
+    const maybeAsyncResult = this._parse({ data, path: ctx.path, parent: ctx });
+    const result = await (isAsync(maybeAsyncResult) ? maybeAsyncResult : Promise.resolve(maybeAsyncResult));
+    return handleResult(ctx, result);
+  }
+  refine(check, message) {
+    const getIssueProperties = (val) => {
+      if (typeof message === "string" || typeof message === "undefined") {
+        return { message };
+      } else if (typeof message === "function") {
+        return message(val);
+      } else {
+        return message;
+      }
+    };
+    return this._refinement((val, ctx) => {
+      const result = check(val);
+      const setError = () => ctx.addIssue({
+        code: ZodIssueCode.custom,
+        ...getIssueProperties(val)
+      });
+      if (typeof Promise !== "undefined" && result instanceof Promise) {
+        return result.then((data) => {
+          if (data) {
+            return true;
+          } else {
+            setError();
+            return false;
+          }
+        });
+      }
+      if (result) {
+        return true;
+      } else {
+        setError();
+        return false;
+      }
+    });
+  }
+  refinement(check, refinementData) {
+    return this._refinement((val, ctx) => {
+      if (check(val)) {
+        return true;
+      } else {
+        ctx.addIssue(typeof refinementData === "function" ? refinementData(val, ctx) : refinementData);
+        return false;
+      }
+    });
+  }
+  _refinement(refinement) {
+    return new ZodEffects({
+      schema: this,
+      typeName: ZodFirstPartyTypeKind.ZodEffects,
+      effect: { type: "refinement", refinement }
+    });
+  }
+  superRefine(refinement) {
+    return this._refinement(refinement);
+  }
+  constructor(def) {
+    this.spa = this.safeParseAsync;
+    this._def = def;
+    this.parse = this.parse.bind(this);
+    this.safeParse = this.safeParse.bind(this);
+    this.parseAsync = this.parseAsync.bind(this);
+    this.safeParseAsync = this.safeParseAsync.bind(this);
+    this.spa = this.spa.bind(this);
+    this.refine = this.refine.bind(this);
+    this.refinement = this.refinement.bind(this);
+    this.superRefine = this.superRefine.bind(this);
+    this.optional = this.optional.bind(this);
+    this.nullable = this.nullable.bind(this);
+    this.nullish = this.nullish.bind(this);
+    this.array = this.array.bind(this);
+    this.promise = this.promise.bind(this);
+    this.or = this.or.bind(this);
+    this.and = this.and.bind(this);
+    this.transform = this.transform.bind(this);
+    this.brand = this.brand.bind(this);
+    this.default = this.default.bind(this);
+    this.catch = this.catch.bind(this);
+    this.describe = this.describe.bind(this);
+    this.pipe = this.pipe.bind(this);
+    this.readonly = this.readonly.bind(this);
+    this.isNullable = this.isNullable.bind(this);
+    this.isOptional = this.isOptional.bind(this);
+    this["~standard"] = {
+      version: 1,
+      vendor: "zod",
+      validate: (data) => this["~validate"](data)
+    };
+  }
+  optional() {
+    return ZodOptional.create(this, this._def);
+  }
+  nullable() {
+    return ZodNullable.create(this, this._def);
+  }
+  nullish() {
+    return this.nullable().optional();
+  }
+  array() {
+    return ZodArray.create(this);
+  }
+  promise() {
+    return ZodPromise.create(this, this._def);
+  }
+  or(option) {
+    return ZodUnion.create([this, option], this._def);
+  }
+  and(incoming) {
+    return ZodIntersection.create(this, incoming, this._def);
+  }
+  transform(transform) {
+    return new ZodEffects({
+      ...processCreateParams(this._def),
+      schema: this,
+      typeName: ZodFirstPartyTypeKind.ZodEffects,
+      effect: { type: "transform", transform }
+    });
+  }
+  default(def) {
+    const defaultValueFunc = typeof def === "function" ? def : () => def;
+    return new ZodDefault({
+      ...processCreateParams(this._def),
+      innerType: this,
+      defaultValue: defaultValueFunc,
+      typeName: ZodFirstPartyTypeKind.ZodDefault
+    });
+  }
+  brand() {
+    return new ZodBranded({
+      typeName: ZodFirstPartyTypeKind.ZodBranded,
+      type: this,
+      ...processCreateParams(this._def)
+    });
+  }
+  catch(def) {
+    const catchValueFunc = typeof def === "function" ? def : () => def;
+    return new ZodCatch({
+      ...processCreateParams(this._def),
+      innerType: this,
+      catchValue: catchValueFunc,
+      typeName: ZodFirstPartyTypeKind.ZodCatch
+    });
+  }
+  describe(description) {
+    const This = this.constructor;
+    return new This({
+      ...this._def,
+      description
+    });
+  }
+  pipe(target) {
+    return ZodPipeline.create(this, target);
+  }
+  readonly() {
+    return ZodReadonly.create(this);
+  }
+  isOptional() {
+    return this.safeParse(undefined).success;
+  }
+  isNullable() {
+    return this.safeParse(null).success;
+  }
+}
+var cuidRegex = /^c[^\s-]{8,}$/i;
+var cuid2Regex = /^[0-9a-z]+$/;
+var ulidRegex = /^[0-9A-HJKMNP-TV-Z]{26}$/i;
+var uuidRegex = /^[0-9a-fA-F]{8}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{12}$/i;
+var nanoidRegex = /^[a-z0-9_-]{21}$/i;
+var jwtRegex = /^[A-Za-z0-9-_]+\.[A-Za-z0-9-_]+\.[A-Za-z0-9-_]*$/;
+var durationRegex = /^[-+]?P(?!$)(?:(?:[-+]?\d+Y)|(?:[-+]?\d+[.,]\d+Y$))?(?:(?:[-+]?\d+M)|(?:[-+]?\d+[.,]\d+M$))?(?:(?:[-+]?\d+W)|(?:[-+]?\d+[.,]\d+W$))?(?:(?:[-+]?\d+D)|(?:[-+]?\d+[.,]\d+D$))?(?:T(?=[\d+-])(?:(?:[-+]?\d+H)|(?:[-+]?\d+[.,]\d+H$))?(?:(?:[-+]?\d+M)|(?:[-+]?\d+[.,]\d+M$))?(?:[-+]?\d+(?:[.,]\d+)?S)?)??$/;
+var emailRegex = /^(?!\.)(?!.*\.\.)([A-Z0-9_'+\-.]*)[A-Z0-9_+-]@([A-Z0-9][A-Z0-9-]*\.)+[A-Z]{2,}$/i;
+var _emojiRegex = `^(\\p{Extended_Pictographic}|\\p{Emoji_Component})+$`;
+var emojiRegex;
+var ipv4Regex = /^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])$/;
+var ipv4CidrRegex = /^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])\/(3[0-2]|[12]?[0-9])$/;
+var ipv6Regex = /^(([0-9a-fA-F]{1,4}:){7,7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:)|fe80:(:[0-9a-fA-F]{0,4}){0,4}%[0-9a-zA-Z]{1,}|::(ffff(:0{1,4}){0,1}:){0,1}((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])|([0-9a-fA-F]{1,4}:){1,4}:((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9]))$/;
+var ipv6CidrRegex = /^(([0-9a-fA-F]{1,4}:){7,7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:)|fe80:(:[0-9a-fA-F]{0,4}){0,4}%[0-9a-zA-Z]{1,}|::(ffff(:0{1,4}){0,1}:){0,1}((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])|([0-9a-fA-F]{1,4}:){1,4}:((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9]))\/(12[0-8]|1[01][0-9]|[1-9]?[0-9])$/;
+var base64Regex = /^([0-9a-zA-Z+/]{4})*(([0-9a-zA-Z+/]{2}==)|([0-9a-zA-Z+/]{3}=))?$/;
+var base64urlRegex = /^([0-9a-zA-Z-_]{4})*(([0-9a-zA-Z-_]{2}(==)?)|([0-9a-zA-Z-_]{3}(=)?))?$/;
+var dateRegexSource = `((\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-((0[13578]|1[02])-(0[1-9]|[12]\\d|3[01])|(0[469]|11)-(0[1-9]|[12]\\d|30)|(02)-(0[1-9]|1\\d|2[0-8])))`;
+var dateRegex = new RegExp(`^${dateRegexSource}$`);
+function timeRegexSource(args) {
+  let secondsRegexSource = `[0-5]\\d`;
+  if (args.precision) {
+    secondsRegexSource = `${secondsRegexSource}\\.\\d{${args.precision}}`;
+  } else if (args.precision == null) {
+    secondsRegexSource = `${secondsRegexSource}(\\.\\d+)?`;
+  }
+  const secondsQuantifier = args.precision ? "+" : "?";
+  return `([01]\\d|2[0-3]):[0-5]\\d(:${secondsRegexSource})${secondsQuantifier}`;
+}
+function timeRegex(args) {
+  return new RegExp(`^${timeRegexSource(args)}$`);
+}
+function datetimeRegex(args) {
+  let regex = `${dateRegexSource}T${timeRegexSource(args)}`;
+  const opts = [];
+  opts.push(args.local ? `Z?` : `Z`);
+  if (args.offset)
+    opts.push(`([+-]\\d{2}:?\\d{2})`);
+  regex = `${regex}(${opts.join("|")})`;
+  return new RegExp(`^${regex}$`);
+}
+function isValidIP(ip, version) {
+  if ((version === "v4" || !version) && ipv4Regex.test(ip)) {
+    return true;
+  }
+  if ((version === "v6" || !version) && ipv6Regex.test(ip)) {
+    return true;
+  }
+  return false;
+}
+function isValidJWT(jwt, alg) {
+  if (!jwtRegex.test(jwt))
+    return false;
+  try {
+    const [header] = jwt.split(".");
+    if (!header)
+      return false;
+    const base64 = header.replace(/-/g, "+").replace(/_/g, "/").padEnd(header.length + (4 - header.length % 4) % 4, "=");
+    const decoded = JSON.parse(atob(base64));
+    if (typeof decoded !== "object" || decoded === null)
+      return false;
+    if ("typ" in decoded && decoded?.typ !== "JWT")
+      return false;
+    if (!decoded.alg)
+      return false;
+    if (alg && decoded.alg !== alg)
+      return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+function isValidCidr(ip, version) {
+  if ((version === "v4" || !version) && ipv4CidrRegex.test(ip)) {
+    return true;
+  }
+  if ((version === "v6" || !version) && ipv6CidrRegex.test(ip)) {
+    return true;
+  }
+  return false;
+}
+
+class ZodString extends ZodType {
+  _parse(input) {
+    if (this._def.coerce) {
+      input.data = String(input.data);
+    }
+    const parsedType = this._getType(input);
+    if (parsedType !== ZodParsedType.string) {
+      const ctx2 = this._getOrReturnCtx(input);
+      addIssueToContext(ctx2, {
+        code: ZodIssueCode.invalid_type,
+        expected: ZodParsedType.string,
+        received: ctx2.parsedType
+      });
+      return INVALID;
+    }
+    const status = new ParseStatus;
+    let ctx ;
+    for (const check of this._def.checks) {
+      if (check.kind === "min") {
+        if (input.data.length < check.value) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext(ctx, {
+            code: ZodIssueCode.too_small,
+            minimum: check.value,
+            type: "string",
+            inclusive: true,
+            exact: false,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "max") {
+        if (input.data.length > check.value) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext(ctx, {
+            code: ZodIssueCode.too_big,
+            maximum: check.value,
+            type: "string",
+            inclusive: true,
+            exact: false,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "length") {
+        const tooBig = input.data.length > check.value;
+        const tooSmall = input.data.length < check.value;
+        if (tooBig || tooSmall) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          if (tooBig) {
+            addIssueToContext(ctx, {
+              code: ZodIssueCode.too_big,
+              maximum: check.value,
+              type: "string",
+              inclusive: true,
+              exact: true,
+              message: check.message
+            });
+          } else if (tooSmall) {
+            addIssueToContext(ctx, {
+              code: ZodIssueCode.too_small,
+              minimum: check.value,
+              type: "string",
+              inclusive: true,
+              exact: true,
+              message: check.message
+            });
+          }
+          status.dirty();
+        }
+      } else if (check.kind === "email") {
+        if (!emailRegex.test(input.data)) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext(ctx, {
+            validation: "email",
+            code: ZodIssueCode.invalid_string,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "emoji") {
+        if (!emojiRegex) {
+          emojiRegex = new RegExp(_emojiRegex, "u");
+        }
+        if (!emojiRegex.test(input.data)) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext(ctx, {
+            validation: "emoji",
+            code: ZodIssueCode.invalid_string,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "uuid") {
+        if (!uuidRegex.test(input.data)) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext(ctx, {
+            validation: "uuid",
+            code: ZodIssueCode.invalid_string,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "nanoid") {
+        if (!nanoidRegex.test(input.data)) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext(ctx, {
+            validation: "nanoid",
+            code: ZodIssueCode.invalid_string,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "cuid") {
+        if (!cuidRegex.test(input.data)) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext(ctx, {
+            validation: "cuid",
+            code: ZodIssueCode.invalid_string,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "cuid2") {
+        if (!cuid2Regex.test(input.data)) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext(ctx, {
+            validation: "cuid2",
+            code: ZodIssueCode.invalid_string,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "ulid") {
+        if (!ulidRegex.test(input.data)) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext(ctx, {
+            validation: "ulid",
+            code: ZodIssueCode.invalid_string,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "url") {
+        try {
+          new URL(input.data);
+        } catch {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext(ctx, {
+            validation: "url",
+            code: ZodIssueCode.invalid_string,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "regex") {
+        check.regex.lastIndex = 0;
+        const testResult = check.regex.test(input.data);
+        if (!testResult) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext(ctx, {
+            validation: "regex",
+            code: ZodIssueCode.invalid_string,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "trim") {
+        input.data = input.data.trim();
+      } else if (check.kind === "includes") {
+        if (!input.data.includes(check.value, check.position)) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext(ctx, {
+            code: ZodIssueCode.invalid_string,
+            validation: { includes: check.value, position: check.position },
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "toLowerCase") {
+        input.data = input.data.toLowerCase();
+      } else if (check.kind === "toUpperCase") {
+        input.data = input.data.toUpperCase();
+      } else if (check.kind === "startsWith") {
+        if (!input.data.startsWith(check.value)) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext(ctx, {
+            code: ZodIssueCode.invalid_string,
+            validation: { startsWith: check.value },
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "endsWith") {
+        if (!input.data.endsWith(check.value)) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext(ctx, {
+            code: ZodIssueCode.invalid_string,
+            validation: { endsWith: check.value },
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "datetime") {
+        const regex = datetimeRegex(check);
+        if (!regex.test(input.data)) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext(ctx, {
+            code: ZodIssueCode.invalid_string,
+            validation: "datetime",
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "date") {
+        const regex = dateRegex;
+        if (!regex.test(input.data)) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext(ctx, {
+            code: ZodIssueCode.invalid_string,
+            validation: "date",
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "time") {
+        const regex = timeRegex(check);
+        if (!regex.test(input.data)) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext(ctx, {
+            code: ZodIssueCode.invalid_string,
+            validation: "time",
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "duration") {
+        if (!durationRegex.test(input.data)) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext(ctx, {
+            validation: "duration",
+            code: ZodIssueCode.invalid_string,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "ip") {
+        if (!isValidIP(input.data, check.version)) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext(ctx, {
+            validation: "ip",
+            code: ZodIssueCode.invalid_string,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "jwt") {
+        if (!isValidJWT(input.data, check.alg)) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext(ctx, {
+            validation: "jwt",
+            code: ZodIssueCode.invalid_string,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "cidr") {
+        if (!isValidCidr(input.data, check.version)) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext(ctx, {
+            validation: "cidr",
+            code: ZodIssueCode.invalid_string,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "base64") {
+        if (!base64Regex.test(input.data)) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext(ctx, {
+            validation: "base64",
+            code: ZodIssueCode.invalid_string,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "base64url") {
+        if (!base64urlRegex.test(input.data)) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext(ctx, {
+            validation: "base64url",
+            code: ZodIssueCode.invalid_string,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else {
+        util.assertNever(check);
+      }
+    }
+    return { status: status.value, value: input.data };
+  }
+  _regex(regex, validation, message) {
+    return this.refinement((data) => regex.test(data), {
+      validation,
+      code: ZodIssueCode.invalid_string,
+      ...errorUtil.errToObj(message)
+    });
+  }
+  _addCheck(check) {
+    return new ZodString({
+      ...this._def,
+      checks: [...this._def.checks, check]
+    });
+  }
+  email(message) {
+    return this._addCheck({ kind: "email", ...errorUtil.errToObj(message) });
+  }
+  url(message) {
+    return this._addCheck({ kind: "url", ...errorUtil.errToObj(message) });
+  }
+  emoji(message) {
+    return this._addCheck({ kind: "emoji", ...errorUtil.errToObj(message) });
+  }
+  uuid(message) {
+    return this._addCheck({ kind: "uuid", ...errorUtil.errToObj(message) });
+  }
+  nanoid(message) {
+    return this._addCheck({ kind: "nanoid", ...errorUtil.errToObj(message) });
+  }
+  cuid(message) {
+    return this._addCheck({ kind: "cuid", ...errorUtil.errToObj(message) });
+  }
+  cuid2(message) {
+    return this._addCheck({ kind: "cuid2", ...errorUtil.errToObj(message) });
+  }
+  ulid(message) {
+    return this._addCheck({ kind: "ulid", ...errorUtil.errToObj(message) });
+  }
+  base64(message) {
+    return this._addCheck({ kind: "base64", ...errorUtil.errToObj(message) });
+  }
+  base64url(message) {
+    return this._addCheck({
+      kind: "base64url",
+      ...errorUtil.errToObj(message)
+    });
+  }
+  jwt(options) {
+    return this._addCheck({ kind: "jwt", ...errorUtil.errToObj(options) });
+  }
+  ip(options) {
+    return this._addCheck({ kind: "ip", ...errorUtil.errToObj(options) });
+  }
+  cidr(options) {
+    return this._addCheck({ kind: "cidr", ...errorUtil.errToObj(options) });
+  }
+  datetime(options) {
+    if (typeof options === "string") {
+      return this._addCheck({
+        kind: "datetime",
+        precision: null,
+        offset: false,
+        local: false,
+        message: options
+      });
+    }
+    return this._addCheck({
+      kind: "datetime",
+      precision: typeof options?.precision === "undefined" ? null : options?.precision,
+      offset: options?.offset ?? false,
+      local: options?.local ?? false,
+      ...errorUtil.errToObj(options?.message)
+    });
+  }
+  date(message) {
+    return this._addCheck({ kind: "date", message });
+  }
+  time(options) {
+    if (typeof options === "string") {
+      return this._addCheck({
+        kind: "time",
+        precision: null,
+        message: options
+      });
+    }
+    return this._addCheck({
+      kind: "time",
+      precision: typeof options?.precision === "undefined" ? null : options?.precision,
+      ...errorUtil.errToObj(options?.message)
+    });
+  }
+  duration(message) {
+    return this._addCheck({ kind: "duration", ...errorUtil.errToObj(message) });
+  }
+  regex(regex, message) {
+    return this._addCheck({
+      kind: "regex",
+      regex,
+      ...errorUtil.errToObj(message)
+    });
+  }
+  includes(value, options) {
+    return this._addCheck({
+      kind: "includes",
+      value,
+      position: options?.position,
+      ...errorUtil.errToObj(options?.message)
+    });
+  }
+  startsWith(value, message) {
+    return this._addCheck({
+      kind: "startsWith",
+      value,
+      ...errorUtil.errToObj(message)
+    });
+  }
+  endsWith(value, message) {
+    return this._addCheck({
+      kind: "endsWith",
+      value,
+      ...errorUtil.errToObj(message)
+    });
+  }
+  min(minLength, message) {
+    return this._addCheck({
+      kind: "min",
+      value: minLength,
+      ...errorUtil.errToObj(message)
+    });
+  }
+  max(maxLength, message) {
+    return this._addCheck({
+      kind: "max",
+      value: maxLength,
+      ...errorUtil.errToObj(message)
+    });
+  }
+  length(len, message) {
+    return this._addCheck({
+      kind: "length",
+      value: len,
+      ...errorUtil.errToObj(message)
+    });
+  }
+  nonempty(message) {
+    return this.min(1, errorUtil.errToObj(message));
+  }
+  trim() {
+    return new ZodString({
+      ...this._def,
+      checks: [...this._def.checks, { kind: "trim" }]
+    });
+  }
+  toLowerCase() {
+    return new ZodString({
+      ...this._def,
+      checks: [...this._def.checks, { kind: "toLowerCase" }]
+    });
+  }
+  toUpperCase() {
+    return new ZodString({
+      ...this._def,
+      checks: [...this._def.checks, { kind: "toUpperCase" }]
+    });
+  }
+  get isDatetime() {
+    return !!this._def.checks.find((ch) => ch.kind === "datetime");
+  }
+  get isDate() {
+    return !!this._def.checks.find((ch) => ch.kind === "date");
+  }
+  get isTime() {
+    return !!this._def.checks.find((ch) => ch.kind === "time");
+  }
+  get isDuration() {
+    return !!this._def.checks.find((ch) => ch.kind === "duration");
+  }
+  get isEmail() {
+    return !!this._def.checks.find((ch) => ch.kind === "email");
+  }
+  get isURL() {
+    return !!this._def.checks.find((ch) => ch.kind === "url");
+  }
+  get isEmoji() {
+    return !!this._def.checks.find((ch) => ch.kind === "emoji");
+  }
+  get isUUID() {
+    return !!this._def.checks.find((ch) => ch.kind === "uuid");
+  }
+  get isNANOID() {
+    return !!this._def.checks.find((ch) => ch.kind === "nanoid");
+  }
+  get isCUID() {
+    return !!this._def.checks.find((ch) => ch.kind === "cuid");
+  }
+  get isCUID2() {
+    return !!this._def.checks.find((ch) => ch.kind === "cuid2");
+  }
+  get isULID() {
+    return !!this._def.checks.find((ch) => ch.kind === "ulid");
+  }
+  get isIP() {
+    return !!this._def.checks.find((ch) => ch.kind === "ip");
+  }
+  get isCIDR() {
+    return !!this._def.checks.find((ch) => ch.kind === "cidr");
+  }
+  get isBase64() {
+    return !!this._def.checks.find((ch) => ch.kind === "base64");
+  }
+  get isBase64url() {
+    return !!this._def.checks.find((ch) => ch.kind === "base64url");
+  }
+  get minLength() {
+    let min = null;
+    for (const ch of this._def.checks) {
+      if (ch.kind === "min") {
+        if (min === null || ch.value > min)
+          min = ch.value;
+      }
+    }
+    return min;
+  }
+  get maxLength() {
+    let max = null;
+    for (const ch of this._def.checks) {
+      if (ch.kind === "max") {
+        if (max === null || ch.value < max)
+          max = ch.value;
+      }
+    }
+    return max;
+  }
+}
+ZodString.create = (params) => {
+  return new ZodString({
+    checks: [],
+    typeName: ZodFirstPartyTypeKind.ZodString,
+    coerce: params?.coerce ?? false,
+    ...processCreateParams(params)
+  });
+};
+function floatSafeRemainder(val, step) {
+  const valDecCount = (val.toString().split(".")[1] || "").length;
+  const stepDecCount = (step.toString().split(".")[1] || "").length;
+  const decCount = valDecCount > stepDecCount ? valDecCount : stepDecCount;
+  const valInt = Number.parseInt(val.toFixed(decCount).replace(".", ""));
+  const stepInt = Number.parseInt(step.toFixed(decCount).replace(".", ""));
+  return valInt % stepInt / 10 ** decCount;
+}
+
+class ZodNumber extends ZodType {
+  constructor() {
+    super(...arguments);
+    this.min = this.gte;
+    this.max = this.lte;
+    this.step = this.multipleOf;
+  }
+  _parse(input) {
+    if (this._def.coerce) {
+      input.data = Number(input.data);
+    }
+    const parsedType = this._getType(input);
+    if (parsedType !== ZodParsedType.number) {
+      const ctx2 = this._getOrReturnCtx(input);
+      addIssueToContext(ctx2, {
+        code: ZodIssueCode.invalid_type,
+        expected: ZodParsedType.number,
+        received: ctx2.parsedType
+      });
+      return INVALID;
+    }
+    let ctx ;
+    const status = new ParseStatus;
+    for (const check of this._def.checks) {
+      if (check.kind === "int") {
+        if (!util.isInteger(input.data)) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext(ctx, {
+            code: ZodIssueCode.invalid_type,
+            expected: "integer",
+            received: "float",
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "min") {
+        const tooSmall = check.inclusive ? input.data < check.value : input.data <= check.value;
+        if (tooSmall) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext(ctx, {
+            code: ZodIssueCode.too_small,
+            minimum: check.value,
+            type: "number",
+            inclusive: check.inclusive,
+            exact: false,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "max") {
+        const tooBig = check.inclusive ? input.data > check.value : input.data >= check.value;
+        if (tooBig) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext(ctx, {
+            code: ZodIssueCode.too_big,
+            maximum: check.value,
+            type: "number",
+            inclusive: check.inclusive,
+            exact: false,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "multipleOf") {
+        if (floatSafeRemainder(input.data, check.value) !== 0) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext(ctx, {
+            code: ZodIssueCode.not_multiple_of,
+            multipleOf: check.value,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "finite") {
+        if (!Number.isFinite(input.data)) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext(ctx, {
+            code: ZodIssueCode.not_finite,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else {
+        util.assertNever(check);
+      }
+    }
+    return { status: status.value, value: input.data };
+  }
+  gte(value, message) {
+    return this.setLimit("min", value, true, errorUtil.toString(message));
+  }
+  gt(value, message) {
+    return this.setLimit("min", value, false, errorUtil.toString(message));
+  }
+  lte(value, message) {
+    return this.setLimit("max", value, true, errorUtil.toString(message));
+  }
+  lt(value, message) {
+    return this.setLimit("max", value, false, errorUtil.toString(message));
+  }
+  setLimit(kind, value, inclusive, message) {
+    return new ZodNumber({
+      ...this._def,
+      checks: [
+        ...this._def.checks,
+        {
+          kind,
+          value,
+          inclusive,
+          message: errorUtil.toString(message)
+        }
+      ]
+    });
+  }
+  _addCheck(check) {
+    return new ZodNumber({
+      ...this._def,
+      checks: [...this._def.checks, check]
+    });
+  }
+  int(message) {
+    return this._addCheck({
+      kind: "int",
+      message: errorUtil.toString(message)
+    });
+  }
+  positive(message) {
+    return this._addCheck({
+      kind: "min",
+      value: 0,
+      inclusive: false,
+      message: errorUtil.toString(message)
+    });
+  }
+  negative(message) {
+    return this._addCheck({
+      kind: "max",
+      value: 0,
+      inclusive: false,
+      message: errorUtil.toString(message)
+    });
+  }
+  nonpositive(message) {
+    return this._addCheck({
+      kind: "max",
+      value: 0,
+      inclusive: true,
+      message: errorUtil.toString(message)
+    });
+  }
+  nonnegative(message) {
+    return this._addCheck({
+      kind: "min",
+      value: 0,
+      inclusive: true,
+      message: errorUtil.toString(message)
+    });
+  }
+  multipleOf(value, message) {
+    return this._addCheck({
+      kind: "multipleOf",
+      value,
+      message: errorUtil.toString(message)
+    });
+  }
+  finite(message) {
+    return this._addCheck({
+      kind: "finite",
+      message: errorUtil.toString(message)
+    });
+  }
+  safe(message) {
+    return this._addCheck({
+      kind: "min",
+      inclusive: true,
+      value: Number.MIN_SAFE_INTEGER,
+      message: errorUtil.toString(message)
+    })._addCheck({
+      kind: "max",
+      inclusive: true,
+      value: Number.MAX_SAFE_INTEGER,
+      message: errorUtil.toString(message)
+    });
+  }
+  get minValue() {
+    let min = null;
+    for (const ch of this._def.checks) {
+      if (ch.kind === "min") {
+        if (min === null || ch.value > min)
+          min = ch.value;
+      }
+    }
+    return min;
+  }
+  get maxValue() {
+    let max = null;
+    for (const ch of this._def.checks) {
+      if (ch.kind === "max") {
+        if (max === null || ch.value < max)
+          max = ch.value;
+      }
+    }
+    return max;
+  }
+  get isInt() {
+    return !!this._def.checks.find((ch) => ch.kind === "int" || ch.kind === "multipleOf" && util.isInteger(ch.value));
+  }
+  get isFinite() {
+    let max = null;
+    let min = null;
+    for (const ch of this._def.checks) {
+      if (ch.kind === "finite" || ch.kind === "int" || ch.kind === "multipleOf") {
+        return true;
+      } else if (ch.kind === "min") {
+        if (min === null || ch.value > min)
+          min = ch.value;
+      } else if (ch.kind === "max") {
+        if (max === null || ch.value < max)
+          max = ch.value;
+      }
+    }
+    return Number.isFinite(min) && Number.isFinite(max);
+  }
+}
+ZodNumber.create = (params) => {
+  return new ZodNumber({
+    checks: [],
+    typeName: ZodFirstPartyTypeKind.ZodNumber,
+    coerce: params?.coerce || false,
+    ...processCreateParams(params)
+  });
+};
+
+class ZodBigInt extends ZodType {
+  constructor() {
+    super(...arguments);
+    this.min = this.gte;
+    this.max = this.lte;
+  }
+  _parse(input) {
+    if (this._def.coerce) {
+      try {
+        input.data = BigInt(input.data);
+      } catch {
+        return this._getInvalidInput(input);
+      }
+    }
+    const parsedType = this._getType(input);
+    if (parsedType !== ZodParsedType.bigint) {
+      return this._getInvalidInput(input);
+    }
+    let ctx ;
+    const status = new ParseStatus;
+    for (const check of this._def.checks) {
+      if (check.kind === "min") {
+        const tooSmall = check.inclusive ? input.data < check.value : input.data <= check.value;
+        if (tooSmall) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext(ctx, {
+            code: ZodIssueCode.too_small,
+            type: "bigint",
+            minimum: check.value,
+            inclusive: check.inclusive,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "max") {
+        const tooBig = check.inclusive ? input.data > check.value : input.data >= check.value;
+        if (tooBig) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext(ctx, {
+            code: ZodIssueCode.too_big,
+            type: "bigint",
+            maximum: check.value,
+            inclusive: check.inclusive,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "multipleOf") {
+        if (input.data % check.value !== BigInt(0)) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext(ctx, {
+            code: ZodIssueCode.not_multiple_of,
+            multipleOf: check.value,
+            message: check.message
+          });
+          status.dirty();
+        }
+      } else {
+        util.assertNever(check);
+      }
+    }
+    return { status: status.value, value: input.data };
+  }
+  _getInvalidInput(input) {
+    const ctx = this._getOrReturnCtx(input);
+    addIssueToContext(ctx, {
+      code: ZodIssueCode.invalid_type,
+      expected: ZodParsedType.bigint,
+      received: ctx.parsedType
+    });
+    return INVALID;
+  }
+  gte(value, message) {
+    return this.setLimit("min", value, true, errorUtil.toString(message));
+  }
+  gt(value, message) {
+    return this.setLimit("min", value, false, errorUtil.toString(message));
+  }
+  lte(value, message) {
+    return this.setLimit("max", value, true, errorUtil.toString(message));
+  }
+  lt(value, message) {
+    return this.setLimit("max", value, false, errorUtil.toString(message));
+  }
+  setLimit(kind, value, inclusive, message) {
+    return new ZodBigInt({
+      ...this._def,
+      checks: [
+        ...this._def.checks,
+        {
+          kind,
+          value,
+          inclusive,
+          message: errorUtil.toString(message)
+        }
+      ]
+    });
+  }
+  _addCheck(check) {
+    return new ZodBigInt({
+      ...this._def,
+      checks: [...this._def.checks, check]
+    });
+  }
+  positive(message) {
+    return this._addCheck({
+      kind: "min",
+      value: BigInt(0),
+      inclusive: false,
+      message: errorUtil.toString(message)
+    });
+  }
+  negative(message) {
+    return this._addCheck({
+      kind: "max",
+      value: BigInt(0),
+      inclusive: false,
+      message: errorUtil.toString(message)
+    });
+  }
+  nonpositive(message) {
+    return this._addCheck({
+      kind: "max",
+      value: BigInt(0),
+      inclusive: true,
+      message: errorUtil.toString(message)
+    });
+  }
+  nonnegative(message) {
+    return this._addCheck({
+      kind: "min",
+      value: BigInt(0),
+      inclusive: true,
+      message: errorUtil.toString(message)
+    });
+  }
+  multipleOf(value, message) {
+    return this._addCheck({
+      kind: "multipleOf",
+      value,
+      message: errorUtil.toString(message)
+    });
+  }
+  get minValue() {
+    let min = null;
+    for (const ch of this._def.checks) {
+      if (ch.kind === "min") {
+        if (min === null || ch.value > min)
+          min = ch.value;
+      }
+    }
+    return min;
+  }
+  get maxValue() {
+    let max = null;
+    for (const ch of this._def.checks) {
+      if (ch.kind === "max") {
+        if (max === null || ch.value < max)
+          max = ch.value;
+      }
+    }
+    return max;
+  }
+}
+ZodBigInt.create = (params) => {
+  return new ZodBigInt({
+    checks: [],
+    typeName: ZodFirstPartyTypeKind.ZodBigInt,
+    coerce: params?.coerce ?? false,
+    ...processCreateParams(params)
+  });
+};
+
+class ZodBoolean extends ZodType {
+  _parse(input) {
+    if (this._def.coerce) {
+      input.data = Boolean(input.data);
+    }
+    const parsedType = this._getType(input);
+    if (parsedType !== ZodParsedType.boolean) {
+      const ctx = this._getOrReturnCtx(input);
+      addIssueToContext(ctx, {
+        code: ZodIssueCode.invalid_type,
+        expected: ZodParsedType.boolean,
+        received: ctx.parsedType
+      });
+      return INVALID;
+    }
+    return OK(input.data);
+  }
+}
+ZodBoolean.create = (params) => {
+  return new ZodBoolean({
+    typeName: ZodFirstPartyTypeKind.ZodBoolean,
+    coerce: params?.coerce || false,
+    ...processCreateParams(params)
+  });
+};
+
+class ZodDate extends ZodType {
+  _parse(input) {
+    if (this._def.coerce) {
+      input.data = new Date(input.data);
+    }
+    const parsedType = this._getType(input);
+    if (parsedType !== ZodParsedType.date) {
+      const ctx2 = this._getOrReturnCtx(input);
+      addIssueToContext(ctx2, {
+        code: ZodIssueCode.invalid_type,
+        expected: ZodParsedType.date,
+        received: ctx2.parsedType
+      });
+      return INVALID;
+    }
+    if (Number.isNaN(input.data.getTime())) {
+      const ctx2 = this._getOrReturnCtx(input);
+      addIssueToContext(ctx2, {
+        code: ZodIssueCode.invalid_date
+      });
+      return INVALID;
+    }
+    const status = new ParseStatus;
+    let ctx ;
+    for (const check of this._def.checks) {
+      if (check.kind === "min") {
+        if (input.data.getTime() < check.value) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext(ctx, {
+            code: ZodIssueCode.too_small,
+            message: check.message,
+            inclusive: true,
+            exact: false,
+            minimum: check.value,
+            type: "date"
+          });
+          status.dirty();
+        }
+      } else if (check.kind === "max") {
+        if (input.data.getTime() > check.value) {
+          ctx = this._getOrReturnCtx(input, ctx);
+          addIssueToContext(ctx, {
+            code: ZodIssueCode.too_big,
+            message: check.message,
+            inclusive: true,
+            exact: false,
+            maximum: check.value,
+            type: "date"
+          });
+          status.dirty();
+        }
+      } else {
+        util.assertNever(check);
+      }
+    }
+    return {
+      status: status.value,
+      value: new Date(input.data.getTime())
+    };
+  }
+  _addCheck(check) {
+    return new ZodDate({
+      ...this._def,
+      checks: [...this._def.checks, check]
+    });
+  }
+  min(minDate, message) {
+    return this._addCheck({
+      kind: "min",
+      value: minDate.getTime(),
+      message: errorUtil.toString(message)
+    });
+  }
+  max(maxDate, message) {
+    return this._addCheck({
+      kind: "max",
+      value: maxDate.getTime(),
+      message: errorUtil.toString(message)
+    });
+  }
+  get minDate() {
+    let min = null;
+    for (const ch of this._def.checks) {
+      if (ch.kind === "min") {
+        if (min === null || ch.value > min)
+          min = ch.value;
+      }
+    }
+    return min == null ? null : new Date(min);
+  }
+  get maxDate() {
+    let max = null;
+    for (const ch of this._def.checks) {
+      if (ch.kind === "max") {
+        if (max === null || ch.value < max)
+          max = ch.value;
+      }
+    }
+    return max == null ? null : new Date(max);
+  }
+}
+ZodDate.create = (params) => {
+  return new ZodDate({
+    checks: [],
+    coerce: params?.coerce || false,
+    typeName: ZodFirstPartyTypeKind.ZodDate,
+    ...processCreateParams(params)
+  });
+};
+
+class ZodSymbol extends ZodType {
+  _parse(input) {
+    const parsedType = this._getType(input);
+    if (parsedType !== ZodParsedType.symbol) {
+      const ctx = this._getOrReturnCtx(input);
+      addIssueToContext(ctx, {
+        code: ZodIssueCode.invalid_type,
+        expected: ZodParsedType.symbol,
+        received: ctx.parsedType
+      });
+      return INVALID;
+    }
+    return OK(input.data);
+  }
+}
+ZodSymbol.create = (params) => {
+  return new ZodSymbol({
+    typeName: ZodFirstPartyTypeKind.ZodSymbol,
+    ...processCreateParams(params)
+  });
+};
+
+class ZodUndefined extends ZodType {
+  _parse(input) {
+    const parsedType = this._getType(input);
+    if (parsedType !== ZodParsedType.undefined) {
+      const ctx = this._getOrReturnCtx(input);
+      addIssueToContext(ctx, {
+        code: ZodIssueCode.invalid_type,
+        expected: ZodParsedType.undefined,
+        received: ctx.parsedType
+      });
+      return INVALID;
+    }
+    return OK(input.data);
+  }
+}
+ZodUndefined.create = (params) => {
+  return new ZodUndefined({
+    typeName: ZodFirstPartyTypeKind.ZodUndefined,
+    ...processCreateParams(params)
+  });
+};
+
+class ZodNull extends ZodType {
+  _parse(input) {
+    const parsedType = this._getType(input);
+    if (parsedType !== ZodParsedType.null) {
+      const ctx = this._getOrReturnCtx(input);
+      addIssueToContext(ctx, {
+        code: ZodIssueCode.invalid_type,
+        expected: ZodParsedType.null,
+        received: ctx.parsedType
+      });
+      return INVALID;
+    }
+    return OK(input.data);
+  }
+}
+ZodNull.create = (params) => {
+  return new ZodNull({
+    typeName: ZodFirstPartyTypeKind.ZodNull,
+    ...processCreateParams(params)
+  });
+};
+
+class ZodAny extends ZodType {
+  constructor() {
+    super(...arguments);
+    this._any = true;
+  }
+  _parse(input) {
+    return OK(input.data);
+  }
+}
+ZodAny.create = (params) => {
+  return new ZodAny({
+    typeName: ZodFirstPartyTypeKind.ZodAny,
+    ...processCreateParams(params)
+  });
+};
+
+class ZodUnknown extends ZodType {
+  constructor() {
+    super(...arguments);
+    this._unknown = true;
+  }
+  _parse(input) {
+    return OK(input.data);
+  }
+}
+ZodUnknown.create = (params) => {
+  return new ZodUnknown({
+    typeName: ZodFirstPartyTypeKind.ZodUnknown,
+    ...processCreateParams(params)
+  });
+};
+
+class ZodNever extends ZodType {
+  _parse(input) {
+    const ctx = this._getOrReturnCtx(input);
+    addIssueToContext(ctx, {
+      code: ZodIssueCode.invalid_type,
+      expected: ZodParsedType.never,
+      received: ctx.parsedType
+    });
+    return INVALID;
+  }
+}
+ZodNever.create = (params) => {
+  return new ZodNever({
+    typeName: ZodFirstPartyTypeKind.ZodNever,
+    ...processCreateParams(params)
+  });
+};
+
+class ZodVoid extends ZodType {
+  _parse(input) {
+    const parsedType = this._getType(input);
+    if (parsedType !== ZodParsedType.undefined) {
+      const ctx = this._getOrReturnCtx(input);
+      addIssueToContext(ctx, {
+        code: ZodIssueCode.invalid_type,
+        expected: ZodParsedType.void,
+        received: ctx.parsedType
+      });
+      return INVALID;
+    }
+    return OK(input.data);
+  }
+}
+ZodVoid.create = (params) => {
+  return new ZodVoid({
+    typeName: ZodFirstPartyTypeKind.ZodVoid,
+    ...processCreateParams(params)
+  });
+};
+
+class ZodArray extends ZodType {
+  _parse(input) {
+    const { ctx, status } = this._processInputParams(input);
+    const def = this._def;
+    if (ctx.parsedType !== ZodParsedType.array) {
+      addIssueToContext(ctx, {
+        code: ZodIssueCode.invalid_type,
+        expected: ZodParsedType.array,
+        received: ctx.parsedType
+      });
+      return INVALID;
+    }
+    if (def.exactLength !== null) {
+      const tooBig = ctx.data.length > def.exactLength.value;
+      const tooSmall = ctx.data.length < def.exactLength.value;
+      if (tooBig || tooSmall) {
+        addIssueToContext(ctx, {
+          code: tooBig ? ZodIssueCode.too_big : ZodIssueCode.too_small,
+          minimum: tooSmall ? def.exactLength.value : undefined,
+          maximum: tooBig ? def.exactLength.value : undefined,
+          type: "array",
+          inclusive: true,
+          exact: true,
+          message: def.exactLength.message
+        });
+        status.dirty();
+      }
+    }
+    if (def.minLength !== null) {
+      if (ctx.data.length < def.minLength.value) {
+        addIssueToContext(ctx, {
+          code: ZodIssueCode.too_small,
+          minimum: def.minLength.value,
+          type: "array",
+          inclusive: true,
+          exact: false,
+          message: def.minLength.message
+        });
+        status.dirty();
+      }
+    }
+    if (def.maxLength !== null) {
+      if (ctx.data.length > def.maxLength.value) {
+        addIssueToContext(ctx, {
+          code: ZodIssueCode.too_big,
+          maximum: def.maxLength.value,
+          type: "array",
+          inclusive: true,
+          exact: false,
+          message: def.maxLength.message
+        });
+        status.dirty();
+      }
+    }
+    if (ctx.common.async) {
+      return Promise.all([...ctx.data].map((item, i) => {
+        return def.type._parseAsync(new ParseInputLazyPath(ctx, item, ctx.path, i));
+      })).then((result2) => {
+        return ParseStatus.mergeArray(status, result2);
+      });
+    }
+    const result = [...ctx.data].map((item, i) => {
+      return def.type._parseSync(new ParseInputLazyPath(ctx, item, ctx.path, i));
+    });
+    return ParseStatus.mergeArray(status, result);
+  }
+  get element() {
+    return this._def.type;
+  }
+  min(minLength, message) {
+    return new ZodArray({
+      ...this._def,
+      minLength: { value: minLength, message: errorUtil.toString(message) }
+    });
+  }
+  max(maxLength, message) {
+    return new ZodArray({
+      ...this._def,
+      maxLength: { value: maxLength, message: errorUtil.toString(message) }
+    });
+  }
+  length(len, message) {
+    return new ZodArray({
+      ...this._def,
+      exactLength: { value: len, message: errorUtil.toString(message) }
+    });
+  }
+  nonempty(message) {
+    return this.min(1, message);
+  }
+}
+ZodArray.create = (schema, params) => {
+  return new ZodArray({
+    type: schema,
+    minLength: null,
+    maxLength: null,
+    exactLength: null,
+    typeName: ZodFirstPartyTypeKind.ZodArray,
+    ...processCreateParams(params)
+  });
+};
+function deepPartialify(schema) {
+  if (schema instanceof ZodObject) {
+    const newShape = {};
+    for (const key in schema.shape) {
+      const fieldSchema = schema.shape[key];
+      newShape[key] = ZodOptional.create(deepPartialify(fieldSchema));
+    }
+    return new ZodObject({
+      ...schema._def,
+      shape: () => newShape
+    });
+  } else if (schema instanceof ZodArray) {
+    return new ZodArray({
+      ...schema._def,
+      type: deepPartialify(schema.element)
+    });
+  } else if (schema instanceof ZodOptional) {
+    return ZodOptional.create(deepPartialify(schema.unwrap()));
+  } else if (schema instanceof ZodNullable) {
+    return ZodNullable.create(deepPartialify(schema.unwrap()));
+  } else if (schema instanceof ZodTuple) {
+    return ZodTuple.create(schema.items.map((item) => deepPartialify(item)));
+  } else {
+    return schema;
+  }
+}
+
+class ZodObject extends ZodType {
+  constructor() {
+    super(...arguments);
+    this._cached = null;
+    this.nonstrict = this.passthrough;
+    this.augment = this.extend;
+  }
+  _getCached() {
+    if (this._cached !== null)
+      return this._cached;
+    const shape = this._def.shape();
+    const keys = util.objectKeys(shape);
+    this._cached = { shape, keys };
+    return this._cached;
+  }
+  _parse(input) {
+    const parsedType = this._getType(input);
+    if (parsedType !== ZodParsedType.object) {
+      const ctx2 = this._getOrReturnCtx(input);
+      addIssueToContext(ctx2, {
+        code: ZodIssueCode.invalid_type,
+        expected: ZodParsedType.object,
+        received: ctx2.parsedType
+      });
+      return INVALID;
+    }
+    const { status, ctx } = this._processInputParams(input);
+    const { shape, keys: shapeKeys } = this._getCached();
+    const extraKeys = [];
+    if (!(this._def.catchall instanceof ZodNever && this._def.unknownKeys === "strip")) {
+      for (const key in ctx.data) {
+        if (!shapeKeys.includes(key)) {
+          extraKeys.push(key);
+        }
+      }
+    }
+    const pairs = [];
+    for (const key of shapeKeys) {
+      const keyValidator = shape[key];
+      const value = ctx.data[key];
+      pairs.push({
+        key: { status: "valid", value: key },
+        value: keyValidator._parse(new ParseInputLazyPath(ctx, value, ctx.path, key)),
+        alwaysSet: key in ctx.data
+      });
+    }
+    if (this._def.catchall instanceof ZodNever) {
+      const unknownKeys = this._def.unknownKeys;
+      if (unknownKeys === "passthrough") {
+        for (const key of extraKeys) {
+          pairs.push({
+            key: { status: "valid", value: key },
+            value: { status: "valid", value: ctx.data[key] }
+          });
+        }
+      } else if (unknownKeys === "strict") {
+        if (extraKeys.length > 0) {
+          addIssueToContext(ctx, {
+            code: ZodIssueCode.unrecognized_keys,
+            keys: extraKeys
+          });
+          status.dirty();
+        }
+      } else if (unknownKeys === "strip") {} else {
+        throw new Error(`Internal ZodObject error: invalid unknownKeys value.`);
+      }
+    } else {
+      const catchall = this._def.catchall;
+      for (const key of extraKeys) {
+        const value = ctx.data[key];
+        pairs.push({
+          key: { status: "valid", value: key },
+          value: catchall._parse(new ParseInputLazyPath(ctx, value, ctx.path, key)),
+          alwaysSet: key in ctx.data
+        });
+      }
+    }
+    if (ctx.common.async) {
+      return Promise.resolve().then(async () => {
+        const syncPairs = [];
+        for (const pair of pairs) {
+          const key = await pair.key;
+          const value = await pair.value;
+          syncPairs.push({
+            key,
+            value,
+            alwaysSet: pair.alwaysSet
+          });
+        }
+        return syncPairs;
+      }).then((syncPairs) => {
+        return ParseStatus.mergeObjectSync(status, syncPairs);
+      });
+    } else {
+      return ParseStatus.mergeObjectSync(status, pairs);
+    }
+  }
+  get shape() {
+    return this._def.shape();
+  }
+  strict(message) {
+    errorUtil.errToObj;
+    return new ZodObject({
+      ...this._def,
+      unknownKeys: "strict",
+      ...message === undefined ? {} : {
+        errorMap: (issue, ctx) => {
+          const defaultError = this._def.errorMap?.(issue, ctx).message ?? ctx.defaultError;
+          if (issue.code === "unrecognized_keys")
+            return {
+              message: errorUtil.errToObj(message).message ?? defaultError
+            };
+          return {
+            message: defaultError
+          };
+        }
+      }
+    });
+  }
+  strip() {
+    return new ZodObject({
+      ...this._def,
+      unknownKeys: "strip"
+    });
+  }
+  passthrough() {
+    return new ZodObject({
+      ...this._def,
+      unknownKeys: "passthrough"
+    });
+  }
+  extend(augmentation) {
+    return new ZodObject({
+      ...this._def,
+      shape: () => ({
+        ...this._def.shape(),
+        ...augmentation
+      })
+    });
+  }
+  merge(merging) {
+    const merged = new ZodObject({
+      unknownKeys: merging._def.unknownKeys,
+      catchall: merging._def.catchall,
+      shape: () => ({
+        ...this._def.shape(),
+        ...merging._def.shape()
+      }),
+      typeName: ZodFirstPartyTypeKind.ZodObject
+    });
+    return merged;
+  }
+  setKey(key, schema) {
+    return this.augment({ [key]: schema });
+  }
+  catchall(index) {
+    return new ZodObject({
+      ...this._def,
+      catchall: index
+    });
+  }
+  pick(mask) {
+    const shape = {};
+    for (const key of util.objectKeys(mask)) {
+      if (mask[key] && this.shape[key]) {
+        shape[key] = this.shape[key];
+      }
+    }
+    return new ZodObject({
+      ...this._def,
+      shape: () => shape
+    });
+  }
+  omit(mask) {
+    const shape = {};
+    for (const key of util.objectKeys(this.shape)) {
+      if (!mask[key]) {
+        shape[key] = this.shape[key];
+      }
+    }
+    return new ZodObject({
+      ...this._def,
+      shape: () => shape
+    });
+  }
+  deepPartial() {
+    return deepPartialify(this);
+  }
+  partial(mask) {
+    const newShape = {};
+    for (const key of util.objectKeys(this.shape)) {
+      const fieldSchema = this.shape[key];
+      if (mask && !mask[key]) {
+        newShape[key] = fieldSchema;
+      } else {
+        newShape[key] = fieldSchema.optional();
+      }
+    }
+    return new ZodObject({
+      ...this._def,
+      shape: () => newShape
+    });
+  }
+  required(mask) {
+    const newShape = {};
+    for (const key of util.objectKeys(this.shape)) {
+      if (mask && !mask[key]) {
+        newShape[key] = this.shape[key];
+      } else {
+        const fieldSchema = this.shape[key];
+        let newField = fieldSchema;
+        while (newField instanceof ZodOptional) {
+          newField = newField._def.innerType;
+        }
+        newShape[key] = newField;
+      }
+    }
+    return new ZodObject({
+      ...this._def,
+      shape: () => newShape
+    });
+  }
+  keyof() {
+    return createZodEnum(util.objectKeys(this.shape));
+  }
+}
+ZodObject.create = (shape, params) => {
+  return new ZodObject({
+    shape: () => shape,
+    unknownKeys: "strip",
+    catchall: ZodNever.create(),
+    typeName: ZodFirstPartyTypeKind.ZodObject,
+    ...processCreateParams(params)
+  });
+};
+ZodObject.strictCreate = (shape, params) => {
+  return new ZodObject({
+    shape: () => shape,
+    unknownKeys: "strict",
+    catchall: ZodNever.create(),
+    typeName: ZodFirstPartyTypeKind.ZodObject,
+    ...processCreateParams(params)
+  });
+};
+ZodObject.lazycreate = (shape, params) => {
+  return new ZodObject({
+    shape,
+    unknownKeys: "strip",
+    catchall: ZodNever.create(),
+    typeName: ZodFirstPartyTypeKind.ZodObject,
+    ...processCreateParams(params)
+  });
+};
+
+class ZodUnion extends ZodType {
+  _parse(input) {
+    const { ctx } = this._processInputParams(input);
+    const options = this._def.options;
+    function handleResults(results) {
+      for (const result of results) {
+        if (result.result.status === "valid") {
+          return result.result;
+        }
+      }
+      for (const result of results) {
+        if (result.result.status === "dirty") {
+          ctx.common.issues.push(...result.ctx.common.issues);
+          return result.result;
+        }
+      }
+      const unionErrors = results.map((result) => new ZodError(result.ctx.common.issues));
+      addIssueToContext(ctx, {
+        code: ZodIssueCode.invalid_union,
+        unionErrors
+      });
+      return INVALID;
+    }
+    if (ctx.common.async) {
+      return Promise.all(options.map(async (option) => {
+        const childCtx = {
+          ...ctx,
+          common: {
+            ...ctx.common,
+            issues: []
+          },
+          parent: null
+        };
+        return {
+          result: await option._parseAsync({
+            data: ctx.data,
+            path: ctx.path,
+            parent: childCtx
+          }),
+          ctx: childCtx
+        };
+      })).then(handleResults);
+    } else {
+      let dirty ;
+      const issues = [];
+      for (const option of options) {
+        const childCtx = {
+          ...ctx,
+          common: {
+            ...ctx.common,
+            issues: []
+          },
+          parent: null
+        };
+        const result = option._parseSync({
+          data: ctx.data,
+          path: ctx.path,
+          parent: childCtx
+        });
+        if (result.status === "valid") {
+          return result;
+        } else if (result.status === "dirty" && !dirty) {
+          dirty = { result, ctx: childCtx };
+        }
+        if (childCtx.common.issues.length) {
+          issues.push(childCtx.common.issues);
+        }
+      }
+      if (dirty) {
+        ctx.common.issues.push(...dirty.ctx.common.issues);
+        return dirty.result;
+      }
+      const unionErrors = issues.map((issues2) => new ZodError(issues2));
+      addIssueToContext(ctx, {
+        code: ZodIssueCode.invalid_union,
+        unionErrors
+      });
+      return INVALID;
+    }
+  }
+  get options() {
+    return this._def.options;
+  }
+}
+ZodUnion.create = (types, params) => {
+  return new ZodUnion({
+    options: types,
+    typeName: ZodFirstPartyTypeKind.ZodUnion,
+    ...processCreateParams(params)
+  });
+};
+var getDiscriminator = (type) => {
+  if (type instanceof ZodLazy) {
+    return getDiscriminator(type.schema);
+  } else if (type instanceof ZodEffects) {
+    return getDiscriminator(type.innerType());
+  } else if (type instanceof ZodLiteral) {
+    return [type.value];
+  } else if (type instanceof ZodEnum) {
+    return type.options;
+  } else if (type instanceof ZodNativeEnum) {
+    return util.objectValues(type.enum);
+  } else if (type instanceof ZodDefault) {
+    return getDiscriminator(type._def.innerType);
+  } else if (type instanceof ZodUndefined) {
+    return [undefined];
+  } else if (type instanceof ZodNull) {
+    return [null];
+  } else if (type instanceof ZodOptional) {
+    return [undefined, ...getDiscriminator(type.unwrap())];
+  } else if (type instanceof ZodNullable) {
+    return [null, ...getDiscriminator(type.unwrap())];
+  } else if (type instanceof ZodBranded) {
+    return getDiscriminator(type.unwrap());
+  } else if (type instanceof ZodReadonly) {
+    return getDiscriminator(type.unwrap());
+  } else if (type instanceof ZodCatch) {
+    return getDiscriminator(type._def.innerType);
+  } else {
+    return [];
+  }
+};
+
+class ZodDiscriminatedUnion extends ZodType {
+  _parse(input) {
+    const { ctx } = this._processInputParams(input);
+    if (ctx.parsedType !== ZodParsedType.object) {
+      addIssueToContext(ctx, {
+        code: ZodIssueCode.invalid_type,
+        expected: ZodParsedType.object,
+        received: ctx.parsedType
+      });
+      return INVALID;
+    }
+    const discriminator = this.discriminator;
+    const discriminatorValue = ctx.data[discriminator];
+    const option = this.optionsMap.get(discriminatorValue);
+    if (!option) {
+      addIssueToContext(ctx, {
+        code: ZodIssueCode.invalid_union_discriminator,
+        options: Array.from(this.optionsMap.keys()),
+        path: [discriminator]
+      });
+      return INVALID;
+    }
+    if (ctx.common.async) {
+      return option._parseAsync({
+        data: ctx.data,
+        path: ctx.path,
+        parent: ctx
+      });
+    } else {
+      return option._parseSync({
+        data: ctx.data,
+        path: ctx.path,
+        parent: ctx
+      });
+    }
+  }
+  get discriminator() {
+    return this._def.discriminator;
+  }
+  get options() {
+    return this._def.options;
+  }
+  get optionsMap() {
+    return this._def.optionsMap;
+  }
+  static create(discriminator, options, params) {
+    const optionsMap = new Map;
+    for (const type of options) {
+      const discriminatorValues = getDiscriminator(type.shape[discriminator]);
+      if (!discriminatorValues.length) {
+        throw new Error(`A discriminator value for key \`${discriminator}\` could not be extracted from all schema options`);
+      }
+      for (const value of discriminatorValues) {
+        if (optionsMap.has(value)) {
+          throw new Error(`Discriminator property ${String(discriminator)} has duplicate value ${String(value)}`);
+        }
+        optionsMap.set(value, type);
+      }
+    }
+    return new ZodDiscriminatedUnion({
+      typeName: ZodFirstPartyTypeKind.ZodDiscriminatedUnion,
+      discriminator,
+      options,
+      optionsMap,
+      ...processCreateParams(params)
+    });
+  }
+}
+function mergeValues(a, b) {
+  const aType = getParsedType(a);
+  const bType = getParsedType(b);
+  if (a === b) {
+    return { valid: true, data: a };
+  } else if (aType === ZodParsedType.object && bType === ZodParsedType.object) {
+    const bKeys = util.objectKeys(b);
+    const sharedKeys = util.objectKeys(a).filter((key) => bKeys.indexOf(key) !== -1);
+    const newObj = { ...a, ...b };
+    for (const key of sharedKeys) {
+      const sharedValue = mergeValues(a[key], b[key]);
+      if (!sharedValue.valid) {
+        return { valid: false };
+      }
+      newObj[key] = sharedValue.data;
+    }
+    return { valid: true, data: newObj };
+  } else if (aType === ZodParsedType.array && bType === ZodParsedType.array) {
+    if (a.length !== b.length) {
+      return { valid: false };
+    }
+    const newArray = [];
+    for (let index = 0;index < a.length; index++) {
+      const itemA = a[index];
+      const itemB = b[index];
+      const sharedValue = mergeValues(itemA, itemB);
+      if (!sharedValue.valid) {
+        return { valid: false };
+      }
+      newArray.push(sharedValue.data);
+    }
+    return { valid: true, data: newArray };
+  } else if (aType === ZodParsedType.date && bType === ZodParsedType.date && +a === +b) {
+    return { valid: true, data: a };
+  } else {
+    return { valid: false };
+  }
+}
+
+class ZodIntersection extends ZodType {
+  _parse(input) {
+    const { status, ctx } = this._processInputParams(input);
+    const handleParsed = (parsedLeft, parsedRight) => {
+      if (isAborted(parsedLeft) || isAborted(parsedRight)) {
+        return INVALID;
+      }
+      const merged = mergeValues(parsedLeft.value, parsedRight.value);
+      if (!merged.valid) {
+        addIssueToContext(ctx, {
+          code: ZodIssueCode.invalid_intersection_types
+        });
+        return INVALID;
+      }
+      if (isDirty(parsedLeft) || isDirty(parsedRight)) {
+        status.dirty();
+      }
+      return { status: status.value, value: merged.data };
+    };
+    if (ctx.common.async) {
+      return Promise.all([
+        this._def.left._parseAsync({
+          data: ctx.data,
+          path: ctx.path,
+          parent: ctx
+        }),
+        this._def.right._parseAsync({
+          data: ctx.data,
+          path: ctx.path,
+          parent: ctx
+        })
+      ]).then(([left, right]) => handleParsed(left, right));
+    } else {
+      return handleParsed(this._def.left._parseSync({
+        data: ctx.data,
+        path: ctx.path,
+        parent: ctx
+      }), this._def.right._parseSync({
+        data: ctx.data,
+        path: ctx.path,
+        parent: ctx
+      }));
+    }
+  }
+}
+ZodIntersection.create = (left, right, params) => {
+  return new ZodIntersection({
+    left,
+    right,
+    typeName: ZodFirstPartyTypeKind.ZodIntersection,
+    ...processCreateParams(params)
+  });
+};
+
+class ZodTuple extends ZodType {
+  _parse(input) {
+    const { status, ctx } = this._processInputParams(input);
+    if (ctx.parsedType !== ZodParsedType.array) {
+      addIssueToContext(ctx, {
+        code: ZodIssueCode.invalid_type,
+        expected: ZodParsedType.array,
+        received: ctx.parsedType
+      });
+      return INVALID;
+    }
+    if (ctx.data.length < this._def.items.length) {
+      addIssueToContext(ctx, {
+        code: ZodIssueCode.too_small,
+        minimum: this._def.items.length,
+        inclusive: true,
+        exact: false,
+        type: "array"
+      });
+      return INVALID;
+    }
+    const rest = this._def.rest;
+    if (!rest && ctx.data.length > this._def.items.length) {
+      addIssueToContext(ctx, {
+        code: ZodIssueCode.too_big,
+        maximum: this._def.items.length,
+        inclusive: true,
+        exact: false,
+        type: "array"
+      });
+      status.dirty();
+    }
+    const items = [...ctx.data].map((item, itemIndex) => {
+      const schema = this._def.items[itemIndex] || this._def.rest;
+      if (!schema)
+        return null;
+      return schema._parse(new ParseInputLazyPath(ctx, item, ctx.path, itemIndex));
+    }).filter((x) => !!x);
+    if (ctx.common.async) {
+      return Promise.all(items).then((results) => {
+        return ParseStatus.mergeArray(status, results);
+      });
+    } else {
+      return ParseStatus.mergeArray(status, items);
+    }
+  }
+  get items() {
+    return this._def.items;
+  }
+  rest(rest) {
+    return new ZodTuple({
+      ...this._def,
+      rest
+    });
+  }
+}
+ZodTuple.create = (schemas, params) => {
+  if (!Array.isArray(schemas)) {
+    throw new Error("You must pass an array of schemas to z.tuple([ ... ])");
+  }
+  return new ZodTuple({
+    items: schemas,
+    typeName: ZodFirstPartyTypeKind.ZodTuple,
+    rest: null,
+    ...processCreateParams(params)
+  });
+};
+
+class ZodRecord extends ZodType {
+  get keySchema() {
+    return this._def.keyType;
+  }
+  get valueSchema() {
+    return this._def.valueType;
+  }
+  _parse(input) {
+    const { status, ctx } = this._processInputParams(input);
+    if (ctx.parsedType !== ZodParsedType.object) {
+      addIssueToContext(ctx, {
+        code: ZodIssueCode.invalid_type,
+        expected: ZodParsedType.object,
+        received: ctx.parsedType
+      });
+      return INVALID;
+    }
+    const pairs = [];
+    const keyType = this._def.keyType;
+    const valueType = this._def.valueType;
+    for (const key in ctx.data) {
+      pairs.push({
+        key: keyType._parse(new ParseInputLazyPath(ctx, key, ctx.path, key)),
+        value: valueType._parse(new ParseInputLazyPath(ctx, ctx.data[key], ctx.path, key)),
+        alwaysSet: key in ctx.data
+      });
+    }
+    if (ctx.common.async) {
+      return ParseStatus.mergeObjectAsync(status, pairs);
+    } else {
+      return ParseStatus.mergeObjectSync(status, pairs);
+    }
+  }
+  get element() {
+    return this._def.valueType;
+  }
+  static create(first, second, third) {
+    if (second instanceof ZodType) {
+      return new ZodRecord({
+        keyType: first,
+        valueType: second,
+        typeName: ZodFirstPartyTypeKind.ZodRecord,
+        ...processCreateParams(third)
+      });
+    }
+    return new ZodRecord({
+      keyType: ZodString.create(),
+      valueType: first,
+      typeName: ZodFirstPartyTypeKind.ZodRecord,
+      ...processCreateParams(second)
+    });
+  }
+}
+
+class ZodMap extends ZodType {
+  get keySchema() {
+    return this._def.keyType;
+  }
+  get valueSchema() {
+    return this._def.valueType;
+  }
+  _parse(input) {
+    const { status, ctx } = this._processInputParams(input);
+    if (ctx.parsedType !== ZodParsedType.map) {
+      addIssueToContext(ctx, {
+        code: ZodIssueCode.invalid_type,
+        expected: ZodParsedType.map,
+        received: ctx.parsedType
+      });
+      return INVALID;
+    }
+    const keyType = this._def.keyType;
+    const valueType = this._def.valueType;
+    const pairs = [...ctx.data.entries()].map(([key, value], index) => {
+      return {
+        key: keyType._parse(new ParseInputLazyPath(ctx, key, ctx.path, [index, "key"])),
+        value: valueType._parse(new ParseInputLazyPath(ctx, value, ctx.path, [index, "value"]))
+      };
+    });
+    if (ctx.common.async) {
+      const finalMap = new Map;
+      return Promise.resolve().then(async () => {
+        for (const pair of pairs) {
+          const key = await pair.key;
+          const value = await pair.value;
+          if (key.status === "aborted" || value.status === "aborted") {
+            return INVALID;
+          }
+          if (key.status === "dirty" || value.status === "dirty") {
+            status.dirty();
+          }
+          finalMap.set(key.value, value.value);
+        }
+        return { status: status.value, value: finalMap };
+      });
+    } else {
+      const finalMap = new Map;
+      for (const pair of pairs) {
+        const key = pair.key;
+        const value = pair.value;
+        if (key.status === "aborted" || value.status === "aborted") {
+          return INVALID;
+        }
+        if (key.status === "dirty" || value.status === "dirty") {
+          status.dirty();
+        }
+        finalMap.set(key.value, value.value);
+      }
+      return { status: status.value, value: finalMap };
+    }
+  }
+}
+ZodMap.create = (keyType, valueType, params) => {
+  return new ZodMap({
+    valueType,
+    keyType,
+    typeName: ZodFirstPartyTypeKind.ZodMap,
+    ...processCreateParams(params)
+  });
+};
+
+class ZodSet extends ZodType {
+  _parse(input) {
+    const { status, ctx } = this._processInputParams(input);
+    if (ctx.parsedType !== ZodParsedType.set) {
+      addIssueToContext(ctx, {
+        code: ZodIssueCode.invalid_type,
+        expected: ZodParsedType.set,
+        received: ctx.parsedType
+      });
+      return INVALID;
+    }
+    const def = this._def;
+    if (def.minSize !== null) {
+      if (ctx.data.size < def.minSize.value) {
+        addIssueToContext(ctx, {
+          code: ZodIssueCode.too_small,
+          minimum: def.minSize.value,
+          type: "set",
+          inclusive: true,
+          exact: false,
+          message: def.minSize.message
+        });
+        status.dirty();
+      }
+    }
+    if (def.maxSize !== null) {
+      if (ctx.data.size > def.maxSize.value) {
+        addIssueToContext(ctx, {
+          code: ZodIssueCode.too_big,
+          maximum: def.maxSize.value,
+          type: "set",
+          inclusive: true,
+          exact: false,
+          message: def.maxSize.message
+        });
+        status.dirty();
+      }
+    }
+    const valueType = this._def.valueType;
+    function finalizeSet(elements2) {
+      const parsedSet = new Set;
+      for (const element of elements2) {
+        if (element.status === "aborted")
+          return INVALID;
+        if (element.status === "dirty")
+          status.dirty();
+        parsedSet.add(element.value);
+      }
+      return { status: status.value, value: parsedSet };
+    }
+    const elements = [...ctx.data.values()].map((item, i) => valueType._parse(new ParseInputLazyPath(ctx, item, ctx.path, i)));
+    if (ctx.common.async) {
+      return Promise.all(elements).then((elements2) => finalizeSet(elements2));
+    } else {
+      return finalizeSet(elements);
+    }
+  }
+  min(minSize, message) {
+    return new ZodSet({
+      ...this._def,
+      minSize: { value: minSize, message: errorUtil.toString(message) }
+    });
+  }
+  max(maxSize, message) {
+    return new ZodSet({
+      ...this._def,
+      maxSize: { value: maxSize, message: errorUtil.toString(message) }
+    });
+  }
+  size(size, message) {
+    return this.min(size, message).max(size, message);
+  }
+  nonempty(message) {
+    return this.min(1, message);
+  }
+}
+ZodSet.create = (valueType, params) => {
+  return new ZodSet({
+    valueType,
+    minSize: null,
+    maxSize: null,
+    typeName: ZodFirstPartyTypeKind.ZodSet,
+    ...processCreateParams(params)
+  });
+};
+
+class ZodFunction extends ZodType {
+  constructor() {
+    super(...arguments);
+    this.validate = this.implement;
+  }
+  _parse(input) {
+    const { ctx } = this._processInputParams(input);
+    if (ctx.parsedType !== ZodParsedType.function) {
+      addIssueToContext(ctx, {
+        code: ZodIssueCode.invalid_type,
+        expected: ZodParsedType.function,
+        received: ctx.parsedType
+      });
+      return INVALID;
+    }
+    function makeArgsIssue(args, error) {
+      return makeIssue({
+        data: args,
+        path: ctx.path,
+        errorMaps: [ctx.common.contextualErrorMap, ctx.schemaErrorMap, getErrorMap(), en_default].filter((x) => !!x),
+        issueData: {
+          code: ZodIssueCode.invalid_arguments,
+          argumentsError: error
+        }
+      });
+    }
+    function makeReturnsIssue(returns, error) {
+      return makeIssue({
+        data: returns,
+        path: ctx.path,
+        errorMaps: [ctx.common.contextualErrorMap, ctx.schemaErrorMap, getErrorMap(), en_default].filter((x) => !!x),
+        issueData: {
+          code: ZodIssueCode.invalid_return_type,
+          returnTypeError: error
+        }
+      });
+    }
+    const params = { errorMap: ctx.common.contextualErrorMap };
+    const fn = ctx.data;
+    if (this._def.returns instanceof ZodPromise) {
+      const me = this;
+      return OK(async function(...args) {
+        const error = new ZodError([]);
+        const parsedArgs = await me._def.args.parseAsync(args, params).catch((e) => {
+          error.addIssue(makeArgsIssue(args, e));
+          throw error;
+        });
+        const result = await Reflect.apply(fn, this, parsedArgs);
+        const parsedReturns = await me._def.returns._def.type.parseAsync(result, params).catch((e) => {
+          error.addIssue(makeReturnsIssue(result, e));
+          throw error;
+        });
+        return parsedReturns;
+      });
+    } else {
+      const me = this;
+      return OK(function(...args) {
+        const parsedArgs = me._def.args.safeParse(args, params);
+        if (!parsedArgs.success) {
+          throw new ZodError([makeArgsIssue(args, parsedArgs.error)]);
+        }
+        const result = Reflect.apply(fn, this, parsedArgs.data);
+        const parsedReturns = me._def.returns.safeParse(result, params);
+        if (!parsedReturns.success) {
+          throw new ZodError([makeReturnsIssue(result, parsedReturns.error)]);
+        }
+        return parsedReturns.data;
+      });
+    }
+  }
+  parameters() {
+    return this._def.args;
+  }
+  returnType() {
+    return this._def.returns;
+  }
+  args(...items) {
+    return new ZodFunction({
+      ...this._def,
+      args: ZodTuple.create(items).rest(ZodUnknown.create())
+    });
+  }
+  returns(returnType) {
+    return new ZodFunction({
+      ...this._def,
+      returns: returnType
+    });
+  }
+  implement(func) {
+    const validatedFunc = this.parse(func);
+    return validatedFunc;
+  }
+  strictImplement(func) {
+    const validatedFunc = this.parse(func);
+    return validatedFunc;
+  }
+  static create(args, returns, params) {
+    return new ZodFunction({
+      args: args ? args : ZodTuple.create([]).rest(ZodUnknown.create()),
+      returns: returns || ZodUnknown.create(),
+      typeName: ZodFirstPartyTypeKind.ZodFunction,
+      ...processCreateParams(params)
+    });
+  }
+}
+
+class ZodLazy extends ZodType {
+  get schema() {
+    return this._def.getter();
+  }
+  _parse(input) {
+    const { ctx } = this._processInputParams(input);
+    const lazySchema = this._def.getter();
+    return lazySchema._parse({ data: ctx.data, path: ctx.path, parent: ctx });
+  }
+}
+ZodLazy.create = (getter, params) => {
+  return new ZodLazy({
+    getter,
+    typeName: ZodFirstPartyTypeKind.ZodLazy,
+    ...processCreateParams(params)
+  });
+};
+
+class ZodLiteral extends ZodType {
+  _parse(input) {
+    if (input.data !== this._def.value) {
+      const ctx = this._getOrReturnCtx(input);
+      addIssueToContext(ctx, {
+        received: ctx.data,
+        code: ZodIssueCode.invalid_literal,
+        expected: this._def.value
+      });
+      return INVALID;
+    }
+    return { status: "valid", value: input.data };
+  }
+  get value() {
+    return this._def.value;
+  }
+}
+ZodLiteral.create = (value, params) => {
+  return new ZodLiteral({
+    value,
+    typeName: ZodFirstPartyTypeKind.ZodLiteral,
+    ...processCreateParams(params)
+  });
+};
+function createZodEnum(values, params) {
+  return new ZodEnum({
+    values,
+    typeName: ZodFirstPartyTypeKind.ZodEnum,
+    ...processCreateParams(params)
+  });
+}
+
+class ZodEnum extends ZodType {
+  _parse(input) {
+    if (typeof input.data !== "string") {
+      const ctx = this._getOrReturnCtx(input);
+      const expectedValues = this._def.values;
+      addIssueToContext(ctx, {
+        expected: util.joinValues(expectedValues),
+        received: ctx.parsedType,
+        code: ZodIssueCode.invalid_type
+      });
+      return INVALID;
+    }
+    if (!this._cache) {
+      this._cache = new Set(this._def.values);
+    }
+    if (!this._cache.has(input.data)) {
+      const ctx = this._getOrReturnCtx(input);
+      const expectedValues = this._def.values;
+      addIssueToContext(ctx, {
+        received: ctx.data,
+        code: ZodIssueCode.invalid_enum_value,
+        options: expectedValues
+      });
+      return INVALID;
+    }
+    return OK(input.data);
+  }
+  get options() {
+    return this._def.values;
+  }
+  get enum() {
+    const enumValues = {};
+    for (const val of this._def.values) {
+      enumValues[val] = val;
+    }
+    return enumValues;
+  }
+  get Values() {
+    const enumValues = {};
+    for (const val of this._def.values) {
+      enumValues[val] = val;
+    }
+    return enumValues;
+  }
+  get Enum() {
+    const enumValues = {};
+    for (const val of this._def.values) {
+      enumValues[val] = val;
+    }
+    return enumValues;
+  }
+  extract(values, newDef = this._def) {
+    return ZodEnum.create(values, {
+      ...this._def,
+      ...newDef
+    });
+  }
+  exclude(values, newDef = this._def) {
+    return ZodEnum.create(this.options.filter((opt) => !values.includes(opt)), {
+      ...this._def,
+      ...newDef
+    });
+  }
+}
+ZodEnum.create = createZodEnum;
+
+class ZodNativeEnum extends ZodType {
+  _parse(input) {
+    const nativeEnumValues = util.getValidEnumValues(this._def.values);
+    const ctx = this._getOrReturnCtx(input);
+    if (ctx.parsedType !== ZodParsedType.string && ctx.parsedType !== ZodParsedType.number) {
+      const expectedValues = util.objectValues(nativeEnumValues);
+      addIssueToContext(ctx, {
+        expected: util.joinValues(expectedValues),
+        received: ctx.parsedType,
+        code: ZodIssueCode.invalid_type
+      });
+      return INVALID;
+    }
+    if (!this._cache) {
+      this._cache = new Set(util.getValidEnumValues(this._def.values));
+    }
+    if (!this._cache.has(input.data)) {
+      const expectedValues = util.objectValues(nativeEnumValues);
+      addIssueToContext(ctx, {
+        received: ctx.data,
+        code: ZodIssueCode.invalid_enum_value,
+        options: expectedValues
+      });
+      return INVALID;
+    }
+    return OK(input.data);
+  }
+  get enum() {
+    return this._def.values;
+  }
+}
+ZodNativeEnum.create = (values, params) => {
+  return new ZodNativeEnum({
+    values,
+    typeName: ZodFirstPartyTypeKind.ZodNativeEnum,
+    ...processCreateParams(params)
+  });
+};
+
+class ZodPromise extends ZodType {
+  unwrap() {
+    return this._def.type;
+  }
+  _parse(input) {
+    const { ctx } = this._processInputParams(input);
+    if (ctx.parsedType !== ZodParsedType.promise && ctx.common.async === false) {
+      addIssueToContext(ctx, {
+        code: ZodIssueCode.invalid_type,
+        expected: ZodParsedType.promise,
+        received: ctx.parsedType
+      });
+      return INVALID;
+    }
+    const promisified = ctx.parsedType === ZodParsedType.promise ? ctx.data : Promise.resolve(ctx.data);
+    return OK(promisified.then((data) => {
+      return this._def.type.parseAsync(data, {
+        path: ctx.path,
+        errorMap: ctx.common.contextualErrorMap
+      });
+    }));
+  }
+}
+ZodPromise.create = (schema, params) => {
+  return new ZodPromise({
+    type: schema,
+    typeName: ZodFirstPartyTypeKind.ZodPromise,
+    ...processCreateParams(params)
+  });
+};
+
+class ZodEffects extends ZodType {
+  innerType() {
+    return this._def.schema;
+  }
+  sourceType() {
+    return this._def.schema._def.typeName === ZodFirstPartyTypeKind.ZodEffects ? this._def.schema.sourceType() : this._def.schema;
+  }
+  _parse(input) {
+    const { status, ctx } = this._processInputParams(input);
+    const effect = this._def.effect || null;
+    const checkCtx = {
+      addIssue: (arg) => {
+        addIssueToContext(ctx, arg);
+        if (arg.fatal) {
+          status.abort();
+        } else {
+          status.dirty();
+        }
+      },
+      get path() {
+        return ctx.path;
+      }
+    };
+    checkCtx.addIssue = checkCtx.addIssue.bind(checkCtx);
+    if (effect.type === "preprocess") {
+      const processed = effect.transform(ctx.data, checkCtx);
+      if (ctx.common.async) {
+        return Promise.resolve(processed).then(async (processed2) => {
+          if (status.value === "aborted")
+            return INVALID;
+          const result = await this._def.schema._parseAsync({
+            data: processed2,
+            path: ctx.path,
+            parent: ctx
+          });
+          if (result.status === "aborted")
+            return INVALID;
+          if (result.status === "dirty")
+            return DIRTY(result.value);
+          if (status.value === "dirty")
+            return DIRTY(result.value);
+          return result;
+        });
+      } else {
+        if (status.value === "aborted")
+          return INVALID;
+        const result = this._def.schema._parseSync({
+          data: processed,
+          path: ctx.path,
+          parent: ctx
+        });
+        if (result.status === "aborted")
+          return INVALID;
+        if (result.status === "dirty")
+          return DIRTY(result.value);
+        if (status.value === "dirty")
+          return DIRTY(result.value);
+        return result;
+      }
+    }
+    if (effect.type === "refinement") {
+      const executeRefinement = (acc) => {
+        const result = effect.refinement(acc, checkCtx);
+        if (ctx.common.async) {
+          return Promise.resolve(result);
+        }
+        if (result instanceof Promise) {
+          throw new Error("Async refinement encountered during synchronous parse operation. Use .parseAsync instead.");
+        }
+        return acc;
+      };
+      if (ctx.common.async === false) {
+        const inner = this._def.schema._parseSync({
+          data: ctx.data,
+          path: ctx.path,
+          parent: ctx
+        });
+        if (inner.status === "aborted")
+          return INVALID;
+        if (inner.status === "dirty")
+          status.dirty();
+        executeRefinement(inner.value);
+        return { status: status.value, value: inner.value };
+      } else {
+        return this._def.schema._parseAsync({ data: ctx.data, path: ctx.path, parent: ctx }).then((inner) => {
+          if (inner.status === "aborted")
+            return INVALID;
+          if (inner.status === "dirty")
+            status.dirty();
+          return executeRefinement(inner.value).then(() => {
+            return { status: status.value, value: inner.value };
+          });
+        });
+      }
+    }
+    if (effect.type === "transform") {
+      if (ctx.common.async === false) {
+        const base = this._def.schema._parseSync({
+          data: ctx.data,
+          path: ctx.path,
+          parent: ctx
+        });
+        if (!isValid(base))
+          return INVALID;
+        const result = effect.transform(base.value, checkCtx);
+        if (result instanceof Promise) {
+          throw new Error(`Asynchronous transform encountered during synchronous parse operation. Use .parseAsync instead.`);
+        }
+        return { status: status.value, value: result };
+      } else {
+        return this._def.schema._parseAsync({ data: ctx.data, path: ctx.path, parent: ctx }).then((base) => {
+          if (!isValid(base))
+            return INVALID;
+          return Promise.resolve(effect.transform(base.value, checkCtx)).then((result) => ({
+            status: status.value,
+            value: result
+          }));
+        });
+      }
+    }
+    util.assertNever(effect);
+  }
+}
+ZodEffects.create = (schema, effect, params) => {
+  return new ZodEffects({
+    schema,
+    typeName: ZodFirstPartyTypeKind.ZodEffects,
+    effect,
+    ...processCreateParams(params)
+  });
+};
+ZodEffects.createWithPreprocess = (preprocess, schema, params) => {
+  return new ZodEffects({
+    schema,
+    effect: { type: "preprocess", transform: preprocess },
+    typeName: ZodFirstPartyTypeKind.ZodEffects,
+    ...processCreateParams(params)
+  });
+};
+class ZodOptional extends ZodType {
+  _parse(input) {
+    const parsedType = this._getType(input);
+    if (parsedType === ZodParsedType.undefined) {
+      return OK(undefined);
+    }
+    return this._def.innerType._parse(input);
+  }
+  unwrap() {
+    return this._def.innerType;
+  }
+}
+ZodOptional.create = (type, params) => {
+  return new ZodOptional({
+    innerType: type,
+    typeName: ZodFirstPartyTypeKind.ZodOptional,
+    ...processCreateParams(params)
+  });
+};
+
+class ZodNullable extends ZodType {
+  _parse(input) {
+    const parsedType = this._getType(input);
+    if (parsedType === ZodParsedType.null) {
+      return OK(null);
+    }
+    return this._def.innerType._parse(input);
+  }
+  unwrap() {
+    return this._def.innerType;
+  }
+}
+ZodNullable.create = (type, params) => {
+  return new ZodNullable({
+    innerType: type,
+    typeName: ZodFirstPartyTypeKind.ZodNullable,
+    ...processCreateParams(params)
+  });
+};
+
+class ZodDefault extends ZodType {
+  _parse(input) {
+    const { ctx } = this._processInputParams(input);
+    let data = ctx.data;
+    if (ctx.parsedType === ZodParsedType.undefined) {
+      data = this._def.defaultValue();
+    }
+    return this._def.innerType._parse({
+      data,
+      path: ctx.path,
+      parent: ctx
+    });
+  }
+  removeDefault() {
+    return this._def.innerType;
+  }
+}
+ZodDefault.create = (type, params) => {
+  return new ZodDefault({
+    innerType: type,
+    typeName: ZodFirstPartyTypeKind.ZodDefault,
+    defaultValue: typeof params.default === "function" ? params.default : () => params.default,
+    ...processCreateParams(params)
+  });
+};
+
+class ZodCatch extends ZodType {
+  _parse(input) {
+    const { ctx } = this._processInputParams(input);
+    const newCtx = {
+      ...ctx,
+      common: {
+        ...ctx.common,
+        issues: []
+      }
+    };
+    const result = this._def.innerType._parse({
+      data: newCtx.data,
+      path: newCtx.path,
+      parent: {
+        ...newCtx
+      }
+    });
+    if (isAsync(result)) {
+      return result.then((result2) => {
+        return {
+          status: "valid",
+          value: result2.status === "valid" ? result2.value : this._def.catchValue({
+            get error() {
+              return new ZodError(newCtx.common.issues);
+            },
+            input: newCtx.data
+          })
+        };
+      });
+    } else {
+      return {
+        status: "valid",
+        value: result.status === "valid" ? result.value : this._def.catchValue({
+          get error() {
+            return new ZodError(newCtx.common.issues);
+          },
+          input: newCtx.data
+        })
+      };
+    }
+  }
+  removeCatch() {
+    return this._def.innerType;
+  }
+}
+ZodCatch.create = (type, params) => {
+  return new ZodCatch({
+    innerType: type,
+    typeName: ZodFirstPartyTypeKind.ZodCatch,
+    catchValue: typeof params.catch === "function" ? params.catch : () => params.catch,
+    ...processCreateParams(params)
+  });
+};
+
+class ZodNaN extends ZodType {
+  _parse(input) {
+    const parsedType = this._getType(input);
+    if (parsedType !== ZodParsedType.nan) {
+      const ctx = this._getOrReturnCtx(input);
+      addIssueToContext(ctx, {
+        code: ZodIssueCode.invalid_type,
+        expected: ZodParsedType.nan,
+        received: ctx.parsedType
+      });
+      return INVALID;
+    }
+    return { status: "valid", value: input.data };
+  }
+}
+ZodNaN.create = (params) => {
+  return new ZodNaN({
+    typeName: ZodFirstPartyTypeKind.ZodNaN,
+    ...processCreateParams(params)
+  });
+};
+var BRAND = Symbol("zod_brand");
+
+class ZodBranded extends ZodType {
+  _parse(input) {
+    const { ctx } = this._processInputParams(input);
+    const data = ctx.data;
+    return this._def.type._parse({
+      data,
+      path: ctx.path,
+      parent: ctx
+    });
+  }
+  unwrap() {
+    return this._def.type;
+  }
+}
+
+class ZodPipeline extends ZodType {
+  _parse(input) {
+    const { status, ctx } = this._processInputParams(input);
+    if (ctx.common.async) {
+      const handleAsync = async () => {
+        const inResult = await this._def.in._parseAsync({
+          data: ctx.data,
+          path: ctx.path,
+          parent: ctx
+        });
+        if (inResult.status === "aborted")
+          return INVALID;
+        if (inResult.status === "dirty") {
+          status.dirty();
+          return DIRTY(inResult.value);
+        } else {
+          return this._def.out._parseAsync({
+            data: inResult.value,
+            path: ctx.path,
+            parent: ctx
+          });
+        }
+      };
+      return handleAsync();
+    } else {
+      const inResult = this._def.in._parseSync({
+        data: ctx.data,
+        path: ctx.path,
+        parent: ctx
+      });
+      if (inResult.status === "aborted")
+        return INVALID;
+      if (inResult.status === "dirty") {
+        status.dirty();
+        return {
+          status: "dirty",
+          value: inResult.value
+        };
+      } else {
+        return this._def.out._parseSync({
+          data: inResult.value,
+          path: ctx.path,
+          parent: ctx
+        });
+      }
+    }
+  }
+  static create(a, b) {
+    return new ZodPipeline({
+      in: a,
+      out: b,
+      typeName: ZodFirstPartyTypeKind.ZodPipeline
+    });
+  }
+}
+
+class ZodReadonly extends ZodType {
+  _parse(input) {
+    const result = this._def.innerType._parse(input);
+    const freeze = (data) => {
+      if (isValid(data)) {
+        data.value = Object.freeze(data.value);
+      }
+      return data;
+    };
+    return isAsync(result) ? result.then((data) => freeze(data)) : freeze(result);
+  }
+  unwrap() {
+    return this._def.innerType;
+  }
+}
+ZodReadonly.create = (type, params) => {
+  return new ZodReadonly({
+    innerType: type,
+    typeName: ZodFirstPartyTypeKind.ZodReadonly,
+    ...processCreateParams(params)
+  });
+};
+function cleanParams(params, data) {
+  const p = typeof params === "function" ? params(data) : typeof params === "string" ? { message: params } : params;
+  const p2 = typeof p === "string" ? { message: p } : p;
+  return p2;
+}
+function custom(check, _params = {}, fatal) {
+  if (check)
+    return ZodAny.create().superRefine((data, ctx) => {
+      const r = check(data);
+      if (r instanceof Promise) {
+        return r.then((r2) => {
+          if (!r2) {
+            const params = cleanParams(_params, data);
+            const _fatal = params.fatal ?? fatal ?? true;
+            ctx.addIssue({ code: "custom", ...params, fatal: _fatal });
+          }
+        });
+      }
+      if (!r) {
+        const params = cleanParams(_params, data);
+        const _fatal = params.fatal ?? fatal ?? true;
+        ctx.addIssue({ code: "custom", ...params, fatal: _fatal });
+      }
+      return;
+    });
+  return ZodAny.create();
+}
+var late = {
+  object: ZodObject.lazycreate
+};
+var ZodFirstPartyTypeKind;
+((ZodFirstPartyTypeKind2) => {
+  ZodFirstPartyTypeKind2["ZodString"] = "ZodString";
+  ZodFirstPartyTypeKind2["ZodNumber"] = "ZodNumber";
+  ZodFirstPartyTypeKind2["ZodNaN"] = "ZodNaN";
+  ZodFirstPartyTypeKind2["ZodBigInt"] = "ZodBigInt";
+  ZodFirstPartyTypeKind2["ZodBoolean"] = "ZodBoolean";
+  ZodFirstPartyTypeKind2["ZodDate"] = "ZodDate";
+  ZodFirstPartyTypeKind2["ZodSymbol"] = "ZodSymbol";
+  ZodFirstPartyTypeKind2["ZodUndefined"] = "ZodUndefined";
+  ZodFirstPartyTypeKind2["ZodNull"] = "ZodNull";
+  ZodFirstPartyTypeKind2["ZodAny"] = "ZodAny";
+  ZodFirstPartyTypeKind2["ZodUnknown"] = "ZodUnknown";
+  ZodFirstPartyTypeKind2["ZodNever"] = "ZodNever";
+  ZodFirstPartyTypeKind2["ZodVoid"] = "ZodVoid";
+  ZodFirstPartyTypeKind2["ZodArray"] = "ZodArray";
+  ZodFirstPartyTypeKind2["ZodObject"] = "ZodObject";
+  ZodFirstPartyTypeKind2["ZodUnion"] = "ZodUnion";
+  ZodFirstPartyTypeKind2["ZodDiscriminatedUnion"] = "ZodDiscriminatedUnion";
+  ZodFirstPartyTypeKind2["ZodIntersection"] = "ZodIntersection";
+  ZodFirstPartyTypeKind2["ZodTuple"] = "ZodTuple";
+  ZodFirstPartyTypeKind2["ZodRecord"] = "ZodRecord";
+  ZodFirstPartyTypeKind2["ZodMap"] = "ZodMap";
+  ZodFirstPartyTypeKind2["ZodSet"] = "ZodSet";
+  ZodFirstPartyTypeKind2["ZodFunction"] = "ZodFunction";
+  ZodFirstPartyTypeKind2["ZodLazy"] = "ZodLazy";
+  ZodFirstPartyTypeKind2["ZodLiteral"] = "ZodLiteral";
+  ZodFirstPartyTypeKind2["ZodEnum"] = "ZodEnum";
+  ZodFirstPartyTypeKind2["ZodEffects"] = "ZodEffects";
+  ZodFirstPartyTypeKind2["ZodNativeEnum"] = "ZodNativeEnum";
+  ZodFirstPartyTypeKind2["ZodOptional"] = "ZodOptional";
+  ZodFirstPartyTypeKind2["ZodNullable"] = "ZodNullable";
+  ZodFirstPartyTypeKind2["ZodDefault"] = "ZodDefault";
+  ZodFirstPartyTypeKind2["ZodCatch"] = "ZodCatch";
+  ZodFirstPartyTypeKind2["ZodPromise"] = "ZodPromise";
+  ZodFirstPartyTypeKind2["ZodBranded"] = "ZodBranded";
+  ZodFirstPartyTypeKind2["ZodPipeline"] = "ZodPipeline";
+  ZodFirstPartyTypeKind2["ZodReadonly"] = "ZodReadonly";
+})(ZodFirstPartyTypeKind || (ZodFirstPartyTypeKind = {}));
+var instanceOfType = (cls, params = {
+  message: `Input not instance of ${cls.name}`
+}) => custom((data) => data instanceof cls, params);
+var stringType = ZodString.create;
+var numberType = ZodNumber.create;
+var nanType = ZodNaN.create;
+var bigIntType = ZodBigInt.create;
+var booleanType = ZodBoolean.create;
+var dateType = ZodDate.create;
+var symbolType = ZodSymbol.create;
+var undefinedType = ZodUndefined.create;
+var nullType = ZodNull.create;
+var anyType = ZodAny.create;
+var unknownType = ZodUnknown.create;
+var neverType = ZodNever.create;
+var voidType = ZodVoid.create;
+var arrayType = ZodArray.create;
+var objectType = ZodObject.create;
+var strictObjectType = ZodObject.strictCreate;
+var unionType = ZodUnion.create;
+var discriminatedUnionType = ZodDiscriminatedUnion.create;
+var intersectionType = ZodIntersection.create;
+var tupleType = ZodTuple.create;
+var recordType = ZodRecord.create;
+var mapType = ZodMap.create;
+var setType = ZodSet.create;
+var functionType = ZodFunction.create;
+var lazyType = ZodLazy.create;
+var literalType = ZodLiteral.create;
+var enumType = ZodEnum.create;
+var nativeEnumType = ZodNativeEnum.create;
+var promiseType = ZodPromise.create;
+var effectsType = ZodEffects.create;
+var optionalType = ZodOptional.create;
+var nullableType = ZodNullable.create;
+var preprocessType = ZodEffects.createWithPreprocess;
+var pipelineType = ZodPipeline.create;
+var ostring = () => stringType().optional();
+var onumber = () => numberType().optional();
+var oboolean = () => booleanType().optional();
+var coerce = {
+  string: (arg) => ZodString.create({ ...arg, coerce: true }),
+  number: (arg) => ZodNumber.create({ ...arg, coerce: true }),
+  boolean: (arg) => ZodBoolean.create({
+    ...arg,
+    coerce: true
+  }),
+  bigint: (arg) => ZodBigInt.create({ ...arg, coerce: true }),
+  date: (arg) => ZodDate.create({ ...arg, coerce: true })
+};
+var NEVER = INVALID;
+// src/shared/schema.ts
+var clientMetadataSchema = exports_external.object({
+  pid: exports_external.number().int().positive(),
+  projectRoot: exports_external.string().min(1),
+  sessionSource: exports_external.string().min(1).optional()
+}).strict();
+var sessionStatusSchema = exports_external.enum(["active", "paused", "closed"]);
+var busyStateSchema = exports_external.enum(["busy", "idle"]);
+var sessionHostSchema = exports_external.enum(["opencode", "pi", "claude"]);
+var premindConfigSchema = exports_external.object({
+  idleDeliveryThresholdMs: exports_external.number().int().min(5000).default(PREMIND_IDLE_DELIVERY_THRESHOLD_MS)
+}).strict();
+var registerClientPayloadSchema = exports_external.object({
+  clientId: exports_external.string().min(1),
+  metadata: clientMetadataSchema
+}).strict();
+var heartbeatClientPayloadSchema = exports_external.object({
+  clientId: exports_external.string().min(1)
+}).strict();
+var releaseClientPayloadSchema = exports_external.object({
+  clientId: exports_external.string().min(1)
+}).strict();
+var registerSessionPayloadSchema = exports_external.object({
+  clientId: exports_external.string().min(1),
+  sessionId: exports_external.string().min(1),
+  repo: exports_external.string().min(1),
+  branch: exports_external.string().min(1),
+  isPrimary: exports_external.boolean().default(true),
+  host: sessionHostSchema.optional(),
+  hostSessionId: exports_external.string().min(1).optional(),
+  status: sessionStatusSchema.default("active"),
+  busyState: busyStateSchema.default("idle")
+}).strict();
+var updateSessionStatePayloadSchema = exports_external.object({
+  sessionId: exports_external.string().min(1),
+  status: sessionStatusSchema.optional(),
+  busyState: busyStateSchema.optional(),
+  branch: exports_external.string().min(1).optional(),
+  repo: exports_external.string().min(1).optional()
+}).strict().refine((value) => Object.keys(value).length > 1, {
+  message: "At least one field besides sessionId must be provided"
+});
+var unregisterSessionPayloadSchema = exports_external.object({
+  sessionId: exports_external.string().min(1)
+}).strict();
+var ensureSessionControlPayloadSchema = exports_external.object({
+  clientId: exports_external.string().min(1),
+  sessionId: exports_external.string().min(1),
+  repo: exports_external.string().min(1),
+  branch: exports_external.string().min(1),
+  isPrimary: exports_external.boolean().default(true),
+  host: sessionHostSchema.optional(),
+  hostSessionId: exports_external.string().min(1).optional(),
+  busyState: busyStateSchema.default("idle"),
+  paused: exports_external.boolean()
+}).strict();
+var sessionControlPayloadSchema = exports_external.object({
+  sessionId: exports_external.string().min(1)
+}).strict();
+var suspendClaudeSessionPayloadSchema = sessionControlPayloadSchema;
+var claudeSessionPayloadSchema = exports_external.object({
+  sessionId: exports_external.string().min(1),
+  hostSessionId: exports_external.string().min(1).optional(),
+  repo: exports_external.string().min(1),
+  branch: exports_external.string().min(1),
+  busyState: busyStateSchema.default("idle")
+}).strict();
+var activateWorktreePayloadSchema = exports_external.object({
+  sessionId: exports_external.string().min(1),
+  path: exports_external.string().min(1)
+}).strict();
+var subscriptionControlPayloadSchema = exports_external.object({
+  sessionId: exports_external.string().min(1),
+  prNumber: exports_external.number().int().positive(),
+  repo: exports_external.string().min(1).optional()
+}).strict();
+var subscribePayloadSchema = subscriptionControlPayloadSchema;
+var unsubscribePayloadSchema = subscriptionControlPayloadSchema;
+var reminderEventSchema = exports_external.object({
+  eventId: exports_external.string().min(1),
+  kind: exports_external.string().min(1),
+  priority: exports_external.enum(["high", "medium", "low"]),
+  summary: exports_external.string().min(1),
+  referenceLink: exports_external.string().min(1).optional()
+}).passthrough();
+var reminderBatchSchema = exports_external.object({
+  batchId: exports_external.string().min(1),
+  sessionId: exports_external.string().min(1),
+  repo: exports_external.string().min(1).optional(),
+  prNumber: exports_external.number().int().positive().optional(),
+  subscriptionId: exports_external.string().min(1).optional(),
+  source: exports_external.enum(["automatic", "manual"]).optional(),
+  reminderText: exports_external.string().min(1),
+  events: exports_external.array(reminderEventSchema)
+}).strict();
+var getPendingReminderPayloadSchema = exports_external.object({
+  sessionId: exports_external.string().min(1)
+}).strict();
+var ackReminderPayloadSchema = exports_external.object({
+  batchId: exports_external.string().min(1),
+  sessionId: exports_external.string().min(1),
+  state: exports_external.enum(["handed_off", "confirmed", "failed"]),
+  error: exports_external.string().min(1).optional()
+}).strict();
+var confirmClaudeHandoffPayloadSchema = sessionControlPayloadSchema;
+var setGlobalDisabledPayloadSchema = exports_external.object({
+  disabled: exports_external.boolean()
+}).strict();
+var getGlobalDisabledPayloadSchema = exports_external.object({}).strict();
+var debugStatusPayloadSchema = exports_external.object({}).strict();
+var daemonInfoSchema = exports_external.object({
+  protocolVersion: exports_external.literal(PREMIND_PROTOCOL_VERSION),
+  heartbeatMs: exports_external.literal(PREMIND_CLIENT_HEARTBEAT_MS),
+  leaseTtlMs: exports_external.literal(PREMIND_CLIENT_LEASE_TTL_MS),
+  idleShutdownGraceMs: exports_external.literal(PREMIND_IDLE_SHUTDOWN_GRACE_MS),
+  operations: exports_external.array(exports_external.string().min(1)).optional()
+}).strict();
+var debugStatusResponseSchema = exports_external.object({
+  daemon: daemonInfoSchema,
+  globallyDisabled: exports_external.boolean().default(false),
+  activeClients: exports_external.number().int().nonnegative(),
+  activeSessions: exports_external.number().int().nonnegative(),
+  closedSessions: exports_external.number().int().nonnegative().default(0),
+  activeWatchers: exports_external.number().int().nonnegative(),
+  lastReapAt: exports_external.number().int().nullable(),
+  lastReapCount: exports_external.number().int().nonnegative(),
+  sessions: exports_external.array(exports_external.object({
+    sessionId: exports_external.string().min(1),
+    host: sessionHostSchema,
+    repo: exports_external.string().min(1),
+    branch: exports_external.string().min(1),
+    prNumber: exports_external.number().int().nullable(),
+    status: sessionStatusSchema,
+    busyState: busyStateSchema,
+    pendingReminderCount: exports_external.number().int().nonnegative(),
+    worktreeBinding: exports_external.object({
+      root: exports_external.string().min(1),
+      gitDir: exports_external.string().min(1),
+      repo: exports_external.string().min(1),
+      branch: exports_external.string().min(1).nullable(),
+      headSha: exports_external.string().min(1),
+      state: exports_external.string().min(1),
+      updatedAt: exports_external.number().int()
+    }).strict().nullable().optional(),
+    subscriptions: exports_external.array(exports_external.object({
+      repo: exports_external.string().min(1),
+      prNumber: exports_external.number().int().positive(),
+      source: exports_external.enum(["automatic", "manual"]),
+      state: exports_external.enum(["active", "unsubscribed"]),
+      pendingEventCount: exports_external.number().int().nonnegative()
+    }).strict()).optional()
+  }).strict())
+}).strict();
+
+// src/shared/ipc.ts
+var requestSchema = exports_external.discriminatedUnion("type", [
+  exports_external.object({
+    type: exports_external.literal("registerClient"),
+    protocolVersion: exports_external.literal(PREMIND_PROTOCOL_VERSION),
+    payload: registerClientPayloadSchema
+  }),
+  exports_external.object({
+    type: exports_external.literal("heartbeatClient"),
+    protocolVersion: exports_external.literal(PREMIND_PROTOCOL_VERSION),
+    payload: heartbeatClientPayloadSchema
+  }),
+  exports_external.object({
+    type: exports_external.literal("releaseClient"),
+    protocolVersion: exports_external.literal(PREMIND_PROTOCOL_VERSION),
+    payload: releaseClientPayloadSchema
+  }),
+  exports_external.object({
+    type: exports_external.literal("registerSession"),
+    protocolVersion: exports_external.literal(PREMIND_PROTOCOL_VERSION),
+    payload: registerSessionPayloadSchema
+  }),
+  exports_external.object({
+    type: exports_external.literal("ensureSessionControl"),
+    protocolVersion: exports_external.literal(PREMIND_PROTOCOL_VERSION),
+    payload: ensureSessionControlPayloadSchema
+  }),
+  exports_external.object({
+    type: exports_external.literal("registerClaudeSession"),
+    protocolVersion: exports_external.literal(PREMIND_PROTOCOL_VERSION),
+    payload: claudeSessionPayloadSchema
+  }),
+  exports_external.object({
+    type: exports_external.literal("touchClaudeSession"),
+    protocolVersion: exports_external.literal(PREMIND_PROTOCOL_VERSION),
+    payload: claudeSessionPayloadSchema.pick({
+      sessionId: true,
+      busyState: true
+    })
+  }),
+  exports_external.object({
+    type: exports_external.literal("claimClaudeReminder"),
+    protocolVersion: exports_external.literal(PREMIND_PROTOCOL_VERSION),
+    payload: claudeSessionPayloadSchema.pick({ sessionId: true })
+  }),
+  exports_external.object({
+    type: exports_external.literal("confirmClaudeHandoff"),
+    protocolVersion: exports_external.literal(PREMIND_PROTOCOL_VERSION),
+    payload: confirmClaudeHandoffPayloadSchema
+  }),
+  exports_external.object({
+    type: exports_external.literal("suspendClaudeSession"),
+    protocolVersion: exports_external.literal(PREMIND_PROTOCOL_VERSION),
+    payload: suspendClaudeSessionPayloadSchema
+  }),
+  exports_external.object({
+    type: exports_external.literal("updateSessionState"),
+    protocolVersion: exports_external.literal(PREMIND_PROTOCOL_VERSION),
+    payload: updateSessionStatePayloadSchema
+  }),
+  exports_external.object({
+    type: exports_external.literal("unregisterSession"),
+    protocolVersion: exports_external.literal(PREMIND_PROTOCOL_VERSION),
+    payload: unregisterSessionPayloadSchema
+  }),
+  exports_external.object({
+    type: exports_external.literal("pauseSession"),
+    protocolVersion: exports_external.literal(PREMIND_PROTOCOL_VERSION),
+    payload: sessionControlPayloadSchema
+  }),
+  exports_external.object({
+    type: exports_external.literal("resumeSession"),
+    protocolVersion: exports_external.literal(PREMIND_PROTOCOL_VERSION),
+    payload: sessionControlPayloadSchema
+  }),
+  exports_external.object({
+    type: exports_external.literal("activateWorktree"),
+    protocolVersion: exports_external.literal(PREMIND_PROTOCOL_VERSION),
+    payload: activateWorktreePayloadSchema
+  }),
+  exports_external.object({
+    type: exports_external.literal("subscribe"),
+    protocolVersion: exports_external.literal(PREMIND_PROTOCOL_VERSION),
+    payload: subscribePayloadSchema
+  }),
+  exports_external.object({
+    type: exports_external.literal("unsubscribe"),
+    protocolVersion: exports_external.literal(PREMIND_PROTOCOL_VERSION),
+    payload: unsubscribePayloadSchema
+  }),
+  exports_external.object({
+    type: exports_external.literal("getPendingReminder"),
+    protocolVersion: exports_external.literal(PREMIND_PROTOCOL_VERSION),
+    payload: getPendingReminderPayloadSchema
+  }),
+  exports_external.object({
+    type: exports_external.literal("ackReminder"),
+    protocolVersion: exports_external.literal(PREMIND_PROTOCOL_VERSION),
+    payload: ackReminderPayloadSchema
+  }),
+  exports_external.object({
+    type: exports_external.literal("setGlobalDisabled"),
+    protocolVersion: exports_external.literal(PREMIND_PROTOCOL_VERSION),
+    payload: setGlobalDisabledPayloadSchema
+  }),
+  exports_external.object({
+    type: exports_external.literal("getGlobalDisabled"),
+    protocolVersion: exports_external.literal(PREMIND_PROTOCOL_VERSION),
+    payload: getGlobalDisabledPayloadSchema
+  }),
+  exports_external.object({
+    type: exports_external.literal("debugStatus"),
+    protocolVersion: exports_external.literal(PREMIND_PROTOCOL_VERSION),
+    payload: debugStatusPayloadSchema
+  }),
+  exports_external.object({
+    type: exports_external.literal("pruneClosedSessions"),
+    protocolVersion: exports_external.literal(PREMIND_PROTOCOL_VERSION),
+    payload: debugStatusPayloadSchema
+  })
+]);
+var successResponseSchema = exports_external.object({
+  ok: exports_external.literal(true),
+  protocolVersion: exports_external.literal(PREMIND_PROTOCOL_VERSION),
+  result: exports_external.unknown()
+});
+var errorResponseSchema = exports_external.object({
+  ok: exports_external.literal(false),
+  protocolVersion: exports_external.literal(PREMIND_PROTOCOL_VERSION),
+  error: exports_external.object({
+    code: exports_external.string().min(1),
+    message: exports_external.string().min(1)
+  })
+});
+var responseSchema = exports_external.union([
+  successResponseSchema,
+  errorResponseSchema
+]);
+var registerClientResponseSchema = exports_external.object({
+  heartbeatMs: exports_external.literal(PREMIND_CLIENT_HEARTBEAT_MS),
+  leaseTtlMs: exports_external.literal(PREMIND_CLIENT_LEASE_TTL_MS),
+  idleShutdownGraceMs: exports_external.literal(PREMIND_IDLE_SHUTDOWN_GRACE_MS)
+});
+var getPendingReminderResponseSchema = exports_external.object({
+  batch: reminderBatchSchema.nullable()
+});
+var globalDisabledResponseSchema = exports_external.object({
+  disabled: exports_external.boolean()
+});
+var worktreeBindingResponseSchema = exports_external.object({
+  sessionId: exports_external.string().min(1),
+  root: exports_external.string().min(1),
+  gitDir: exports_external.string().min(1),
+  repo: exports_external.string().min(1),
+  branch: exports_external.string().min(1).nullable(),
+  headSha: exports_external.string().min(1),
+  state: exports_external.string().min(1),
+  updatedAt: exports_external.number().int()
+}).strict();
+var subscriptionResponseSchema = exports_external.object({
+  subscriptionId: exports_external.string().min(1),
+  sessionId: exports_external.string().min(1),
+  repo: exports_external.string().min(1),
+  prNumber: exports_external.number().int().positive(),
+  source: exports_external.enum(["automatic", "manual"]),
+  state: exports_external.enum(["active", "unsubscribed"]),
+  lastDeliveredEventSeq: exports_external.number().int().nonnegative(),
+  updatedAt: exports_external.number().int()
+}).strict();
+var activateWorktreeResponseSchema = exports_external.object({ binding: worktreeBindingResponseSchema, watching: exports_external.boolean() }).strict();
+var subscribeResponseSchema = exports_external.object({ subscription: subscriptionResponseSchema }).strict();
+var unsubscribeResponseSchema = exports_external.object({ unsubscribed: exports_external.boolean(), automaticOptOutRecorded: exports_external.boolean() }).strict();
+
+// src/shared/daemon-startup.ts
+import net from "node:net";
+var DEFAULT_PROBE_TIMEOUT_MS = 250;
+var CLAUDE_REQUIRED_DAEMON_OPERATIONS = [
+  "registerClaudeSession",
+  "touchClaudeSession",
+  "claimClaudeReminder",
+  "confirmClaudeHandoff",
+  "suspendClaudeSession"
+];
+var isSocketReachable = (socketPath = PREMIND_SOCKET_PATH, timeoutMs = DEFAULT_PROBE_TIMEOUT_MS) => new Promise((resolve) => {
+  const connection = net.createConnection(socketPath);
+  const done = (reachable) => {
+    clearTimeout(timer);
+    connection.destroy();
+    resolve(reachable);
+  };
+  const timer = setTimeout(() => done(false), timeoutMs);
+  connection.once("connect", () => done(true));
+  connection.once("error", () => done(false));
+});
+
+// node_modules/xstate/dist/xstate.development.cjs.mjs
+var import_xstate_development_cjs = __toESM(require_xstate_development_cjs(), 1);
+
+// src/daemon/reminders/reminder-handoff-machine.ts
+var reminderHandoffMachine = import_xstate_development_cjs.setup({
+  types: {
+    events: {}
+  }
+}).createMachine({
+  id: "reminderHandoff",
+  initial: "built",
+  states: {
+    built: {
+      on: {
+        HAND_OFF: "handed_off"
+      }
+    },
+    handed_off: {
+      on: {
+        CONFIRM: "confirmed",
+        FAIL: "failed"
+      }
+    },
+    failed: {
+      on: {
+        RETRY: "built"
+      }
+    },
+    confirmed: {
+      type: "final"
+    }
+  }
+});
+var eventForReminderState = (state) => {
+  switch (state) {
+    case "handed_off":
+      return { type: "HAND_OFF" };
+    case "failed":
+      return { type: "FAIL" };
+    case "confirmed":
+      return { type: "CONFIRM" };
+  }
+};
+var createReminderHandoffActor = (state = "built") => {
+  const actor = import_xstate_development_cjs.createActor(reminderHandoffMachine);
+  actor.start();
+  if (state === "built")
+    return actor;
+  actor.send({ type: "HAND_OFF" });
+  if (state === "failed")
+    actor.send({ type: "FAIL" });
+  else if (state === "confirmed")
+    actor.send({ type: "CONFIRM" });
+  return actor;
+};
+
+// src/daemon/reminders/reminder-handoff-registry.ts
+class ReminderHandoffRegistry {
+  store;
+  actors = new Map;
+  constructor(store) {
+    this.store = store;
+    for (const record of store.listPendingReminderBatchRecords()) {
+      this.actors.set(record.batchId, createReminderHandoffActor(record.state));
+    }
+  }
+  getPendingReminder(sessionId, now = Date.now()) {
+    this.store.expireStaleHandoffs(undefined, now);
+    let record = this.store.getPendingReminderRecord(sessionId);
+    if (!record) {
+      const built = this.store.buildReminderBatch(sessionId, now);
+      if (!built)
+        return null;
+      record = this.store.getReminderBatchRecord(built.batchId, sessionId);
+      if (!record)
+        return null;
+    }
+    if (record.state === "failed") {
+      if (!this.retry(record, now))
+        return null;
+    }
+    return this.store.getPendingReminder(sessionId);
+  }
+  claimClaudeReminder(sessionId, now = Date.now()) {
+    return this.store.claimClaudeReminder(sessionId, now);
+  }
+  confirmClaudeHandoff(sessionId, now = Date.now()) {
+    return this.store.confirmClaudeHandoff(sessionId, now);
+  }
+  acknowledge(payload, now = Date.now()) {
+    const record = this.store.getReminderBatchRecord(payload.batchId, payload.sessionId);
+    if (!record) {
+      return {
+        acknowledged: false,
+        code: "BATCH_NOT_FOUND",
+        message: "Reminder batch is missing or already confirmed"
+      };
+    }
+    const actor = this.actorFor(record);
+    actor.send(eventForReminderState(payload.state));
+    if (actor.getSnapshot().value !== payload.state) {
+      return {
+        acknowledged: false,
+        code: "INVALID_HANDOFF_TRANSITION",
+        message: `Cannot transition reminder batch from ${record.state} to ${payload.state}`
+      };
+    }
+    try {
+      const persisted = this.store.ackReminder(payload, now);
+      if (!persisted) {
+        this.discard(payload.batchId);
+        return {
+          acknowledged: false,
+          code: "HANDOFF_CONFLICT",
+          message: "Reminder batch changed concurrently"
+        };
+      }
+      if (payload.state === "confirmed")
+        this.discard(payload.batchId);
+      return {
+        acknowledged: true,
+        retryable: payload.state === "failed"
+      };
+    } catch (error) {
+      this.discard(payload.batchId);
+      throw error;
+    }
+  }
+  close() {
+    for (const actor of this.actors.values())
+      actor.stop();
+    this.actors.clear();
+  }
+  retry(record, now) {
+    const actor = this.actorFor(record);
+    actor.send({ type: "RETRY" });
+    if (actor.getSnapshot().value !== "built")
+      return false;
+    const persisted = this.store.transitionReminderBatchState(record.batchId, record.sessionId, "failed", "built", now);
+    if (!persisted)
+      this.discard(record.batchId);
+    return persisted;
+  }
+  actorFor(record) {
+    const existing = this.actors.get(record.batchId);
+    if (existing && existing.getSnapshot().value === record.state)
+      return existing;
+    if (existing)
+      existing.stop();
+    const actor = createReminderHandoffActor(record.state);
+    this.actors.set(record.batchId, actor);
+    return actor;
+  }
+  discard(batchId) {
+    this.actors.get(batchId)?.stop();
+    this.actors.delete(batchId);
+  }
+}
+
+// src/daemon/worktrees/git-resolver.ts
+import { execFile as execFileCallback } from "node:child_process";
+import path2 from "node:path";
+import { promisify } from "node:util";
+var execFile = promisify(execFileCallback);
+var runCommand = async (command, args, cwd) => {
+  const { stdout } = await execFile(command, args, { cwd });
+  return stdout.trim();
+};
+var parseRepoFromRemote = (remote) => {
+  const match = remote.trim().match(/[:/]([^/:]+\/[^/]+?)(?:\.git)?$/);
+  return match?.[1];
+};
+async function resolveGitWorktree(requestedPath, run = runCommand) {
+  const root = await run("git", ["rev-parse", "--show-toplevel"], requestedPath);
+  const gitDirValue = await run("git", ["rev-parse", "--git-dir"], root);
+  const [branchValue, headSha] = await Promise.all([
+    run("git", ["rev-parse", "--abbrev-ref", "HEAD"], root),
+    run("git", ["rev-parse", "HEAD"], root)
+  ]);
+  const repo = await run("gh", ["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"], root).catch(async () => parseRepoFromRemote(await run("git", ["remote", "get-url", "origin"], root)));
+  if (!repo)
+    throw new Error(`Unable to determine GitHub repository for worktree: ${root}`);
+  return {
+    root,
+    gitDir: path2.isAbsolute(gitDirValue) ? gitDirValue : path2.resolve(root, gitDirValue),
+    repo,
+    branch: branchValue === "HEAD" ? null : branchValue,
+    headSha
+  };
+}
+
+// src/daemon/worktrees/worktree-binding.ts
+var emptyContext = () => ({
+  requestedPath: null,
+  worktree: null,
+  automaticPullRequest: null
+});
+var worktreeBindingMachine = import_xstate_development_cjs.setup({
+  types: {
+    context: {},
+    events: {}
+  },
+  guards: {
+    isDetachedHead: ({ event }) => event.type === "WORKTREE_RESOLVED" && event.worktree.branch === null,
+    isCurrentAutomaticPullRequest: ({ context, event }) => event.type === "UNSUBSCRIBE_AUTOMATIC" && context.automaticPullRequest?.repo === event.pullRequest.repo && context.automaticPullRequest?.prNumber === event.pullRequest.prNumber
+  }
+}).createMachine({
+  id: "worktreeBinding",
+  initial: "unbound",
+  context: emptyContext(),
+  on: {
+    SESSION_CLOSED: {
+      target: ".closed",
+      actions: import_xstate_development_cjs.assign({
+        requestedPath: null,
+        worktree: null,
+        automaticPullRequest: null
+      })
+    }
+  },
+  states: {
+    unbound: {
+      on: {
+        ACTIVATE_WORKTREE: {
+          target: "resolving_worktree",
+          actions: import_xstate_development_cjs.assign({
+            requestedPath: ({ event }) => event.path,
+            worktree: null,
+            automaticPullRequest: null
+          })
+        }
+      }
+    },
+    resolving_worktree: {
+      on: {
+        WORKTREE_RESOLVED: [
+          {
+            guard: "isDetachedHead",
+            target: "detached_head",
+            actions: import_xstate_development_cjs.assign({
+              worktree: ({ event }) => event.worktree,
+              automaticPullRequest: null
+            })
+          },
+          {
+            target: "waiting_for_pr",
+            actions: import_xstate_development_cjs.assign({
+              worktree: ({ event }) => event.worktree,
+              automaticPullRequest: null
+            })
+          }
+        ],
+        WORKTREE_RESOLUTION_FAILED: {
+          target: "unbound",
+          actions: import_xstate_development_cjs.assign(emptyContext)
+        },
+        ACTIVATE_WORKTREE: {
+          actions: import_xstate_development_cjs.assign({ requestedPath: ({ event }) => event.path })
+        }
+      }
+    },
+    waiting_for_pr: {
+      on: {
+        PR_FOUND: {
+          target: "following_automatic_pr",
+          actions: import_xstate_development_cjs.assign({
+            automaticPullRequest: ({ event }) => event.pullRequest
+          })
+        },
+        PR_NOT_OWNED: {
+          target: "foreign_pr",
+          actions: import_xstate_development_cjs.assign({
+            automaticPullRequest: ({ event }) => event.pullRequest
+          })
+        },
+        PR_NOT_FOUND: {},
+        ACTIVATE_WORKTREE: {
+          target: "resolving_worktree",
+          actions: import_xstate_development_cjs.assign({
+            requestedPath: ({ event }) => event.path,
+            worktree: null,
+            automaticPullRequest: null
+          })
+        }
+      }
+    },
+    following_automatic_pr: {
+      on: {
+        PR_FOUND: {
+          actions: import_xstate_development_cjs.assign({
+            automaticPullRequest: ({ event }) => event.pullRequest
+          })
+        },
+        PR_NOT_OWNED: {
+          target: "foreign_pr",
+          actions: import_xstate_development_cjs.assign({
+            automaticPullRequest: ({ event }) => event.pullRequest
+          })
+        },
+        UNSUBSCRIBE_AUTOMATIC: {
+          guard: "isCurrentAutomaticPullRequest",
+          target: "automatic_pr_unsubscribed"
+        },
+        ACTIVATE_WORKTREE: {
+          target: "resolving_worktree",
+          actions: import_xstate_development_cjs.assign({
+            requestedPath: ({ event }) => event.path,
+            worktree: null,
+            automaticPullRequest: null
+          })
+        }
+      }
+    },
+    foreign_pr: {
+      on: {
+        PR_FOUND: {
+          target: "following_automatic_pr",
+          actions: import_xstate_development_cjs.assign({
+            automaticPullRequest: ({ event }) => event.pullRequest
+          })
+        },
+        PR_NOT_OWNED: {
+          actions: import_xstate_development_cjs.assign({
+            automaticPullRequest: ({ event }) => event.pullRequest
+          })
+        },
+        PR_NOT_FOUND: {
+          target: "waiting_for_pr",
+          actions: import_xstate_development_cjs.assign({ automaticPullRequest: null })
+        },
+        ACTIVATE_WORKTREE: {
+          target: "resolving_worktree",
+          actions: import_xstate_development_cjs.assign({
+            requestedPath: ({ event }) => event.path,
+            worktree: null,
+            automaticPullRequest: null
+          })
+        }
+      }
+    },
+    automatic_pr_unsubscribed: {
+      on: {
+        PR_FOUND: {},
+        ACTIVATE_WORKTREE: {
+          target: "resolving_worktree",
+          actions: import_xstate_development_cjs.assign({
+            requestedPath: ({ event }) => event.path,
+            worktree: null,
+            automaticPullRequest: null
+          })
+        }
+      }
+    },
+    detached_head: {
+      on: {
+        ACTIVATE_WORKTREE: {
+          target: "resolving_worktree",
+          actions: import_xstate_development_cjs.assign({
+            requestedPath: ({ event }) => event.path,
+            worktree: null,
+            automaticPullRequest: null
+          })
+        }
+      }
+    },
+    closed: {
+      type: "final"
+    }
+  }
+});
+var createWorktreeBindingActor = () => import_xstate_development_cjs.createActor(worktreeBindingMachine);
+
+// src/daemon/worktrees/worktree-binding-registry.ts
+var durableBindingStates = new Set([
+  "waiting_for_pr",
+  "following_automatic_pr",
+  "automatic_pr_unsubscribed",
+  "foreign_pr",
+  "detached_head"
+]);
+var samePullRequest = (left, right) => left?.repo === right.repo && left.prNumber === right.prNumber;
+
+class WorktreeBindingRegistry {
+  store;
+  actors = new Map;
+  constructor(store) {
+    this.store = store;
+  }
+  has(sessionId) {
+    return this.actors.has(sessionId);
+  }
+  get size() {
+    return this.actors.size;
+  }
+  getSnapshot(sessionId) {
+    return this.getOrCreate(sessionId).getSnapshot();
+  }
+  async activateWorktree(sessionId, requestedPath, resolveWorktree) {
+    const actor = this.getOrCreate(sessionId);
+    actor.send({ type: "ACTIVATE_WORKTREE", path: requestedPath });
+    let worktree;
+    try {
+      worktree = await resolveWorktree(requestedPath);
+    } catch (error) {
+      actor.send({ type: "WORKTREE_RESOLUTION_FAILED" });
+      this.discard(sessionId);
+      throw error;
+    }
+    actor.send({ type: "WORKTREE_RESOLVED", worktree });
+    return this.persist(sessionId, () => {
+      const binding = this.bindingFromActor(sessionId, actor);
+      return this.store.activateWorktree(binding);
+    });
+  }
+  pullRequestFound(sessionId, pullRequest, now = Date.now()) {
+    const durableBinding = this.store.getWorktreeBinding(sessionId);
+    if (!durableBinding)
+      return null;
+    const optedOut = durableBinding.branch !== null && durableBinding.repo === pullRequest.repo && this.store.hasAutomaticSubscriptionOptOut({
+      sessionId,
+      gitDir: durableBinding.gitDir,
+      repo: durableBinding.repo,
+      branch: durableBinding.branch,
+      prNumber: pullRequest.prNumber
+    });
+    const actor = this.getOrCreate(sessionId);
+    if (actor.getSnapshot().value === "resolving_worktree")
+      return null;
+    const previousPullRequest = actor.getSnapshot().context.automaticPullRequest;
+    actor.send({ type: "PR_FOUND", pullRequest });
+    if (optedOut) {
+      actor.send({ type: "UNSUBSCRIBE_AUTOMATIC", pullRequest });
+    }
+    return this.persist(sessionId, () => this.store.transaction(() => {
+      const binding = this.store.upsertWorktreeBinding(this.bindingFromActor(sessionId, actor), now);
+      if (binding.state === "following_automatic_pr") {
+        if (!samePullRequest(previousPullRequest, pullRequest)) {
+          this.store.deactivateAutomaticSubscriptions(sessionId, now);
+        }
+        this.store.baselineAutomaticSubscription({ sessionId, repo: pullRequest.repo, prNumber: pullRequest.prNumber }, now);
+      }
+      return binding;
+    }));
+  }
+  pullRequestNotOwned(sessionId, pullRequest, now = Date.now()) {
+    if (!this.store.getWorktreeBinding(sessionId))
+      return null;
+    const actor = this.getOrCreate(sessionId);
+    if (actor.getSnapshot().value === "resolving_worktree")
+      return null;
+    actor.send({ type: "PR_NOT_OWNED", pullRequest });
+    return this.persist(sessionId, () => this.store.transaction(() => {
+      this.store.rejectAutomaticPullRequest(sessionId, pullRequest.repo, pullRequest.prNumber, now);
+      return this.store.upsertWorktreeBinding(this.bindingFromActor(sessionId, actor), now);
+    }));
+  }
+  pullRequestNotFound(sessionId, now = Date.now()) {
+    if (!this.store.getWorktreeBinding(sessionId))
+      return null;
+    const actor = this.getOrCreate(sessionId);
+    if (actor.getSnapshot().value === "resolving_worktree")
+      return null;
+    actor.send({ type: "PR_NOT_FOUND" });
+    return this.persist(sessionId, () => this.store.upsertWorktreeBinding(this.bindingFromActor(sessionId, actor), now));
+  }
+  unsubscribeAutomatic(sessionId, pullRequest, now = Date.now()) {
+    const subscription = this.store.getSubscription(sessionId, pullRequest.repo, pullRequest.prNumber);
+    if (subscription?.source !== "automatic" || subscription.state !== "active") {
+      return { unsubscribed: false, automaticOptOutRecorded: false };
+    }
+    let actor = this.getOrCreate(sessionId);
+    if (!samePullRequest(actor.getSnapshot().context.automaticPullRequest, pullRequest)) {
+      this.discard(sessionId);
+      actor = this.getOrCreate(sessionId);
+    }
+    actor.send({ type: "UNSUBSCRIBE_AUTOMATIC", pullRequest });
+    return this.persist(sessionId, () => this.store.transaction(() => {
+      const unsubscribed = this.store.unsubscribe(sessionId, pullRequest.repo, pullRequest.prNumber, now);
+      const binding = this.bindingFromActor(sessionId, actor);
+      let automaticOptOutRecorded = false;
+      if (unsubscribed && binding.state === "automatic_pr_unsubscribed" && binding.repo === pullRequest.repo && binding.branch !== null) {
+        this.store.recordAutomaticSubscriptionOptOut({
+          sessionId,
+          gitDir: binding.gitDir,
+          repo: binding.repo,
+          branch: binding.branch,
+          prNumber: pullRequest.prNumber
+        }, now);
+        automaticOptOutRecorded = true;
+      }
+      this.store.upsertWorktreeBinding(binding, now);
+      return { unsubscribed, automaticOptOutRecorded };
+    }));
+  }
+  closeSession(sessionId) {
+    const actor = this.actors.get(sessionId);
+    if (!actor)
+      return;
+    actor.send({ type: "SESSION_CLOSED" });
+    actor.stop();
+    this.actors.delete(sessionId);
+  }
+  closeSessions(sessionIds) {
+    for (const sessionId of sessionIds)
+      this.closeSession(sessionId);
+  }
+  closeInactiveSessions() {
+    for (const sessionId of this.actors.keys()) {
+      if (this.store.getSession(sessionId)?.status === "closed") {
+        this.closeSession(sessionId);
+      }
+    }
+  }
+  close() {
+    this.closeSessions([...this.actors.keys()]);
+  }
+  getOrCreate(sessionId) {
+    const existing = this.actors.get(sessionId);
+    if (existing)
+      return existing;
+    const actor = createWorktreeBindingActor();
+    actor.start();
+    try {
+      this.restoreFromStore(sessionId, actor);
+      this.actors.set(sessionId, actor);
+      return actor;
+    } catch (error) {
+      actor.stop();
+      throw error;
+    }
+  }
+  restoreFromStore(sessionId, actor) {
+    const binding = this.store.getWorktreeBinding(sessionId);
+    if (!binding)
+      return;
+    actor.send({ type: "ACTIVATE_WORKTREE", path: binding.root });
+    actor.send({
+      type: "WORKTREE_RESOLVED",
+      worktree: {
+        root: binding.root,
+        gitDir: binding.gitDir,
+        repo: binding.repo,
+        branch: binding.branch,
+        headSha: binding.headSha
+      }
+    });
+    if (binding.branch === null)
+      return;
+    const automaticSubscription = this.store.listSessionSubscriptions(sessionId, "active").filter((subscription) => subscription.source === "automatic" && subscription.repo === binding.repo).at(-1);
+    if (automaticSubscription) {
+      actor.send({
+        type: "PR_FOUND",
+        pullRequest: {
+          repo: automaticSubscription.repo,
+          prNumber: automaticSubscription.prNumber
+        }
+      });
+      return;
+    }
+    const optOut = this.store.getAutomaticSubscriptionOptOutForBinding({
+      sessionId,
+      gitDir: binding.gitDir,
+      repo: binding.repo,
+      branch: binding.branch
+    });
+    if (!optOut)
+      return;
+    const pullRequest = { repo: binding.repo, prNumber: optOut.prNumber };
+    actor.send({ type: "PR_FOUND", pullRequest });
+    actor.send({ type: "UNSUBSCRIBE_AUTOMATIC", pullRequest });
+  }
+  bindingFromActor(sessionId, actor) {
+    const snapshot = actor.getSnapshot();
+    const state = snapshot.value;
+    const worktree = snapshot.context.worktree;
+    if (!durableBindingStates.has(state) || !worktree) {
+      throw new Error(`Worktree binding actor for ${sessionId} is not in a durable bound state`);
+    }
+    return { sessionId, ...worktree, state };
+  }
+  persist(sessionId, operation) {
+    try {
+      return operation();
+    } catch (error) {
+      this.discard(sessionId);
+      throw error;
+    }
+  }
+  discard(sessionId) {
+    const actor = this.actors.get(sessionId);
+    actor?.stop();
+    this.actors.delete(sessionId);
+  }
+}
+
+// src/daemon/ipc/router.ts
+class Router {
+  store;
+  resolveWorktree;
+  worktreeBindings;
+  reminderHandoffs;
+  onDemandChanged;
+  logger = createLogger("daemon.ipc");
+  constructor(store, resolveWorktree = resolveGitWorktree, worktreeBindings = new WorktreeBindingRegistry(store), reminderHandoffs = new ReminderHandoffRegistry(store), onDemandChanged = () => {}) {
+    this.store = store;
+    this.resolveWorktree = resolveWorktree;
+    this.worktreeBindings = worktreeBindings;
+    this.reminderHandoffs = reminderHandoffs;
+    this.onDemandChanged = onDemandChanged;
+  }
+  async handle(request) {
+    try {
+      switch (request.type) {
+        case "registerClient":
+          return this.ok(this.handleRegisterClient(request.payload));
+        case "heartbeatClient": {
+          const renewed = this.store.heartbeatClient(request.payload.clientId);
+          if (!renewed)
+            return this.fail("CLIENT_NOT_FOUND", `Unknown client: ${request.payload.clientId}`);
+          return this.ok({ renewed: true });
+        }
+        case "releaseClient":
+          this.store.releaseClient(request.payload.clientId);
+          return this.ok({ released: true });
+        case "registerSession": {
+          const { created, superseded } = this.store.registerSession(request.payload);
+          this.logger.info(created ? "session registered" : "session re-registered", {
+            sessionId: request.payload.sessionId,
+            repo: request.payload.repo,
+            branch: request.payload.branch,
+            reattach: !created,
+            ...superseded > 0 ? { superseded } : {}
+          });
+          return this.ok({ registered: true, created });
+        }
+        case "ensureSessionControl": {
+          if (!this.store.hasActiveClient(request.payload.clientId)) {
+            return this.fail("CLIENT_NOT_FOUND", `Unknown client: ${request.payload.clientId}`);
+          }
+          const { created, superseded } = this.store.ensureSessionControl(request.payload);
+          this.logger.info(created ? "session control attached" : "session control refreshed", {
+            sessionId: request.payload.sessionId,
+            repo: request.payload.repo,
+            branch: request.payload.branch,
+            paused: request.payload.paused,
+            ...superseded > 0 ? { superseded } : {}
+          });
+          return this.ok({ attached: true, created, superseded });
+        }
+        case "registerClaudeSession": {
+          const { created } = this.store.registerSession({
+            ...request.payload,
+            host: "claude",
+            hostSessionId: request.payload.hostSessionId ?? request.payload.sessionId,
+            clientId: `claude:${request.payload.sessionId}`,
+            isPrimary: true,
+            status: "active"
+          });
+          return this.ok({ registered: true, created });
+        }
+        case "touchClaudeSession": {
+          const result = this.store.updateSessionState(request.payload);
+          if (!result.updated)
+            return this.fail("SESSION_NOT_FOUND", `Unknown session: ${request.payload.sessionId}`);
+          return this.ok({ updated: true, revived: result.revived });
+        }
+        case "claimClaudeReminder":
+          return this.ok({
+            batch: this.reminderHandoffs.claimClaudeReminder(request.payload.sessionId)
+          });
+        case "confirmClaudeHandoff":
+          return this.ok({
+            confirmed: this.reminderHandoffs.confirmClaudeHandoff(request.payload.sessionId)
+          });
+        case "suspendClaudeSession": {
+          const suspended = this.store.suspendClaudeSession(request.payload.sessionId);
+          if (!suspended)
+            return this.fail("SESSION_NOT_FOUND", `Unknown Claude session: ${request.payload.sessionId}`);
+          this.worktreeBindings.closeSession(request.payload.sessionId);
+          return this.ok({ suspended: true });
+        }
+        case "updateSessionState": {
+          const result = this.store.updateSessionState(request.payload);
+          if (!result.updated)
+            return this.fail("SESSION_NOT_FOUND", `Unknown session: ${request.payload.sessionId}`);
+          if (result.revived) {
+            this.logger.info("session revived from closed to active", {
+              sessionId: request.payload.sessionId,
+              trigger: request.payload.busyState
+            });
+          } else if (request.payload.busyState) {
+            this.logger.info("session state updated", {
+              sessionId: request.payload.sessionId,
+              busyState: request.payload.busyState
+            });
+          }
+          return this.ok({ updated: true, revived: result.revived });
+        }
+        case "unregisterSession":
+          this.worktreeBindings.closeSession(request.payload.sessionId);
+          this.store.unregisterSession(request.payload.sessionId);
+          return this.ok({ unregistered: true });
+        case "pauseSession": {
+          const paused = this.store.setSessionPaused(request.payload.sessionId, true);
+          if (!paused)
+            return this.fail("SESSION_NOT_FOUND", `Unknown session: ${request.payload.sessionId}`);
+          return this.ok({ paused: true });
+        }
+        case "resumeSession": {
+          const resumed = this.store.setSessionPaused(request.payload.sessionId, false);
+          if (!resumed)
+            return this.fail("SESSION_NOT_FOUND", `Unknown session: ${request.payload.sessionId}`);
+          return this.ok({ resumed: true });
+        }
+        case "activateWorktree":
+          return await this.handleActivateWorktree(request.payload);
+        case "subscribe":
+          return this.handleSubscribe(request.payload);
+        case "unsubscribe":
+          return this.handleUnsubscribe(request.payload);
+        case "getPendingReminder":
+          return this.ok({
+            batch: this.reminderHandoffs.getPendingReminder(request.payload.sessionId)
+          });
+        case "ackReminder":
+          return this.handleAckReminder(request.payload);
+        case "setGlobalDisabled":
+          this.store.setGloballyDisabled(request.payload.disabled);
+          return this.ok({ disabled: request.payload.disabled });
+        case "getGlobalDisabled":
+          return this.ok({ disabled: this.store.isGloballyDisabled() });
+        case "debugStatus":
+          return this.ok(debugStatusResponseSchema.parse({
+            daemon: {
+              protocolVersion: 1,
+              heartbeatMs: PREMIND_CLIENT_HEARTBEAT_MS,
+              leaseTtlMs: PREMIND_CLIENT_LEASE_TTL_MS,
+              idleShutdownGraceMs: PREMIND_IDLE_SHUTDOWN_GRACE_MS,
+              operations: [...CLAUDE_REQUIRED_DAEMON_OPERATIONS]
+            },
+            globallyDisabled: this.store.isGloballyDisabled(),
+            activeClients: this.store.countActiveClients(),
+            activeSessions: this.store.countActiveSessions(),
+            closedSessions: this.store.countClosedSessions(),
+            activeWatchers: this.store.countActiveWatchers(),
+            lastReapAt: this.store.getLastReapAt(),
+            lastReapCount: this.store.getLastReapCount(),
+            sessions: this.store.listSessionSummaries()
+          }));
+        case "pruneClosedSessions":
+          return this.ok(this.store.pruneClosedOrOrphanedSessions());
+      }
+    } finally {
+      this.onDemandChanged();
+    }
+  }
+  hasActiveLeases() {
+    return this.store.countActiveClients() > 0;
+  }
+  hasActiveSessions() {
+    return this.store.countActiveSessions() > 0;
+  }
+  hasDaemonDemand(now = Date.now()) {
+    return this.store.hasDaemonDemand(now);
+  }
+  async handleActivateWorktree(payload) {
+    if (!this.store.getSession(payload.sessionId)) {
+      return this.fail("SESSION_NOT_FOUND", `Unknown session: ${payload.sessionId}`);
+    }
+    try {
+      const binding = await this.worktreeBindings.activateWorktree(payload.sessionId, payload.path, this.resolveWorktree);
+      return this.ok({ binding, watching: binding.branch !== null });
+    } catch (error) {
+      return this.fail("WORKTREE_RESOLUTION_FAILED", error instanceof Error ? error.message : "Unable to resolve Git worktree");
+    }
+  }
+  handleSubscribe(payload) {
+    if (!this.store.getSession(payload.sessionId)) {
+      return this.fail("SESSION_NOT_FOUND", `Unknown session: ${payload.sessionId}`);
+    }
+    const binding = this.store.getWorktreeBinding(payload.sessionId);
+    const repo = payload.repo ?? binding?.repo;
+    if (!repo) {
+      return this.fail("WORKTREE_NOT_ACTIVE", "An active worktree is required when repo is omitted");
+    }
+    return this.ok({
+      subscription: this.store.upsertSubscription({
+        sessionId: payload.sessionId,
+        repo,
+        prNumber: payload.prNumber,
+        source: "manual"
+      })
+    });
+  }
+  handleUnsubscribe(payload) {
+    if (!this.store.getSession(payload.sessionId)) {
+      return this.fail("SESSION_NOT_FOUND", `Unknown session: ${payload.sessionId}`);
+    }
+    const binding = this.store.getWorktreeBinding(payload.sessionId);
+    const repo = payload.repo ?? binding?.repo;
+    if (!repo) {
+      return this.fail("WORKTREE_NOT_ACTIVE", "An active worktree is required when repo is omitted");
+    }
+    const subscription = this.store.getSubscription(payload.sessionId, repo, payload.prNumber);
+    if (subscription?.source === "automatic" && binding?.repo === repo && binding.branch !== null) {
+      return this.ok(this.worktreeBindings.unsubscribeAutomatic(payload.sessionId, {
+        repo,
+        prNumber: payload.prNumber
+      }));
+    }
+    const unsubscribed = this.store.unsubscribe(payload.sessionId, repo, payload.prNumber);
+    return this.ok({ unsubscribed, automaticOptOutRecorded: false });
+  }
+  handleRegisterClient(payload) {
+    this.store.registerClient(payload.clientId, payload.metadata);
+    return {
+      heartbeatMs: PREMIND_CLIENT_HEARTBEAT_MS,
+      leaseTtlMs: PREMIND_CLIENT_LEASE_TTL_MS,
+      idleShutdownGraceMs: PREMIND_IDLE_SHUTDOWN_GRACE_MS
+    };
+  }
+  handleAckReminder(payload) {
+    const result = this.reminderHandoffs.acknowledge(payload);
+    if (!result.acknowledged) {
+      return this.fail(result.code, result.message);
+    }
+    return this.ok(result);
+  }
+  ok(result) {
+    return { ok: true, protocolVersion: 1, result };
+  }
+  fail(code, message) {
+    return { ok: false, protocolVersion: 1, error: { code, message } };
+  }
+}
+
+// src/daemon/persistence/store.ts
+import fs3 from "node:fs";
+import path4 from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { randomUUID } from "node:crypto";
+
+// src/daemon/reminders/detail-files.ts
+import fs2 from "node:fs";
+import path3 from "node:path";
+var sanitize = (value) => value.replace(/[^a-zA-Z0-9._-]+/g, "-");
+var DEFAULT_TTL_MS = 14 * 24 * 60 * 60 * 1000;
+var shouldWriteDetailFile = (kind) => {
+  if (kind.startsWith("issue_comment."))
+    return true;
+  if (kind.startsWith("review_comment."))
+    return true;
+  if (kind.startsWith("review."))
+    return true;
+  return false;
+};
+
+class DetailFileWriter {
+  baseDir;
+  logger = createLogger("daemon.detail-files");
+  constructor(baseDir = PREMIND_EVENT_DETAIL_DIR) {
+    this.baseDir = baseDir;
+    fs2.mkdirSync(this.baseDir, { recursive: true });
+  }
+  cleanup(ttlMs = DEFAULT_TTL_MS, now = Date.now()) {
+    let removed = 0;
+    const cutoff = now - ttlMs;
+    try {
+      removed = this.cleanDir(this.baseDir, cutoff);
+    } catch (error) {
+      this.logger.warn("detail file cleanup failed", {
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+    return removed;
+  }
+  cleanDir(dirPath, cutoff) {
+    if (!fs2.existsSync(dirPath))
+      return 0;
+    let removed = 0;
+    const entries = fs2.readdirSync(dirPath, { withFileTypes: true });
+    for (const entry of entries) {
+      const entryPath = path3.join(dirPath, entry.name);
+      if (entry.isDirectory()) {
+        removed += this.cleanDir(entryPath, cutoff);
+        const remaining = fs2.readdirSync(entryPath);
+        if (remaining.length === 0) {
+          fs2.rmdirSync(entryPath);
+        }
+        continue;
+      }
+      try {
+        const stat = fs2.statSync(entryPath);
+        if (stat.mtimeMs < cutoff) {
+          fs2.unlinkSync(entryPath);
+          removed++;
+        }
+      } catch {}
+    }
+    return removed;
+  }
+  write(repo, prNumber, event) {
+    if (!shouldWriteDetailFile(event.kind))
+      return null;
+    const repoDir = path3.join(this.baseDir, sanitize(repo), String(prNumber));
+    fs2.mkdirSync(repoDir, { recursive: true });
+    const filePath = path3.join(repoDir, `${sanitize(event.dedupeKey)}.json`);
+    const payload = this.render(repo, prNumber, event);
+    fs2.writeFileSync(filePath, `${JSON.stringify(payload, null, 2)}
+`, "utf8");
+    return filePath;
+  }
+  render(repo, prNumber, event) {
+    const payload = event.payload;
+    const common = {
+      repo,
+      prNumber,
+      kind: event.kind,
+      priority: event.priority,
+      summary: event.summary,
+      referenceLink: event.referenceLink ?? null,
+      generatedAt: new Date().toISOString()
+    };
+    if (event.kind.startsWith("issue_comment.")) {
+      return {
+        ...common,
+        type: "issue_comment",
+        commentId: payload.commentId ?? null,
+        author: payload.user ?? null,
+        body: payload.body ?? null,
+        previousBody: payload.previousBody ?? null,
+        updatedAt: payload.updatedAt ?? null
+      };
+    }
+    if (event.kind.startsWith("review_comment.")) {
+      return {
+        ...common,
+        type: "review_comment",
+        commentId: payload.commentId ?? null,
+        author: payload.user ?? null,
+        file: payload.path ?? null,
+        line: payload.line ?? null,
+        body: payload.body ?? null,
+        previousBody: payload.previousBody ?? null,
+        updatedAt: payload.updatedAt ?? null
+      };
+    }
+    if (event.kind.startsWith("review.")) {
+      return {
+        ...common,
+        type: "review",
+        reviewId: payload.reviewId ?? null,
+        author: payload.user ?? null,
+        state: payload.state ?? null,
+        body: payload.body ?? null
+      };
+    }
+    if (event.kind.startsWith("check.")) {
+      return {
+        ...common,
+        type: "check",
+        name: payload.name ?? null,
+        state: payload.state ?? null,
+        workflow: payload.workflow ?? null,
+        event: payload.event ?? null
+      };
+    }
+    return {
+      ...common,
+      type: "generic",
+      payload
+    };
+  }
+}
+
+// src/daemon/reminders/render-reminder.ts
+var shortSha = (sha) => sha.slice(0, 7);
+var priorityRank = { high: 0, medium: 1, low: 2 };
+var checkKinds = new Set(["check.failed", "check.cancelled"]);
+var object = (value) => value !== null && typeof value === "object" && !Array.isArray(value) ? value : {};
+var parsePayload = (json) => {
+  try {
+    return object(JSON.parse(json));
+  } catch {
+    return {};
+  }
+};
+var checkState = (check) => {
+  const state = (check.state ?? "").toLowerCase();
+  if (["pass", "success", "succeeded"].includes(state))
+    return "passed";
+  if (["fail", "failed", "failure"].includes(state))
+    return "failed";
+  if (["cancelled", "canceled"].includes(state))
+    return "cancelled";
+  if (["pending", "queued", "running", "in_progress", "waiting", "requested"].includes(state))
+    return "active";
+  return "unverified";
+};
+var currentCheckState = (payload, checks) => {
+  if (typeof payload.name !== "string")
+    return "unverified";
+  const matches = checks.filter((check) => check.name === payload.name && (typeof payload.workflow !== "string" || check.workflow === payload.workflow) && (typeof payload.event !== "string" || check.event === payload.event));
+  if (!matches.length)
+    return "unverified";
+  const identities = new Set(matches.map((check) => JSON.stringify([check.workflow ?? null, check.event ?? null])));
+  if (identities.size > 1)
+    return "unverified";
+  const states = new Set(matches.map(checkState));
+  if (states.has("active"))
+    return "active";
+  return states.size === 1 ? states.values().next().value : "unverified";
+};
+var mergeState = (snapshot) => {
+  const state = (snapshot.core.mergeStateStatus ?? "UNKNOWN").toUpperCase();
+  return state === "UNKNOWN" ? (snapshot.core.lastStableMergeStateStatus ?? "UNKNOWN").toUpperCase() : state;
+};
+var terminal = (snapshot) => ["CLOSED", "MERGED"].includes(snapshot.core.state.toUpperCase());
+var informational = (event, kind, summary) => ({
+  event: { ...event, kind, priority: "low", summary }
+});
+var unverified = (event, kind = event.kind) => ({
+  ...informational(event, kind, `UNVERIFIED history: ${event.summary}. Verify current status before acting.`),
+  unverified: true
+});
+var reconcileInitial = (event, snapshot) => {
+  if (!snapshot)
+    return unverified(event);
+  const base = `Started tracking ${snapshot.core.number}: ${snapshot.core.title}`;
+  if (terminal(snapshot))
+    return informational(event, event.kind, `${base} — PR ${snapshot.core.state.toUpperCase()}; historical blockers are not actionable`);
+  const blockers = [];
+  const state = mergeState(snapshot);
+  if (state === "DIRTY")
+    blockers.push("merge conflicts present");
+  const failingChecks = snapshot.checks.filter((check) => currentCheckState({ name: check.name, workflow: check.workflow, event: check.event }, snapshot.checks) === "failed");
+  const names = [...new Set(failingChecks.map((check) => check.name || "unnamed check"))];
+  if (names.length)
+    blockers.push(`${names.length} check${names.length === 1 ? "" : "s"} failing (${names.join(", ")})`);
+  if (snapshot.core.reviewDecision === "CHANGES_REQUESTED")
+    blockers.push("changes requested");
+  const uncertainChecks = snapshot.checks.some((check) => currentCheckState({ name: check.name, workflow: check.workflow, event: check.event }, snapshot.checks) === "unverified");
+  const uncertain = !["DIRTY", "CLEAN"].includes(state) || uncertainChecks;
+  if (uncertain)
+    blockers.push("UNVERIFIED blocker status; verify current status before acting");
+  return {
+    event: {
+      ...event,
+      summary: blockers.length ? `${base} — ${blockers.join("; ")}` : base,
+      priority: state === "DIRTY" || names.length > 0 || snapshot.core.reviewDecision === "CHANGES_REQUESTED" ? "high" : "low"
+    },
+    actionable: state === "DIRTY" || names.length > 0,
+    reviewAction: snapshot.core.reviewDecision === "CHANGES_REQUESTED",
+    unverified: uncertain
+  };
+};
+var reviewKinds = new Set(["review.changes_requested", "pr.review_decision.changes_requested"]);
+var reconcileReview = ({ event, payload }, snapshot) => {
+  if (!snapshot)
+    return unverified(event, "review.unverified");
+  if (terminal(snapshot))
+    return informational(event, "review.historical", `Historical review feedback — PR ${snapshot.core.state.toUpperCase()}; no review action required`);
+  const decision = snapshot.core.reviewDecision?.toUpperCase();
+  const resolved = () => informational(event, "review.resolved", `No longer requesting changes: ${event.summary}`);
+  if (decision === "APPROVED")
+    return resolved();
+  if (event.kind === "pr.review_decision.changes_requested") {
+    if (decision === "CHANGES_REQUESTED")
+      return { event, reviewAction: true };
+    if (decision === "REVIEW_REQUIRED")
+      return resolved();
+    return unverified(event, "review.unverified");
+  }
+  const review = snapshot.reviews.find((candidate) => candidate.id === payload.reviewId);
+  if (!review)
+    return unverified(event, "review.unverified");
+  if (["APPROVED", "DISMISSED"].includes((review.state ?? "").toUpperCase()))
+    return resolved();
+  const login = review.user?.login?.toLowerCase();
+  const submitted = Date.parse(review.submitted_at ?? "");
+  const newer = login && Number.isFinite(submitted) ? snapshot.reviews.filter((candidate) => candidate.user?.login?.toLowerCase() === login && Date.parse(candidate.submitted_at ?? "") > submitted && ["APPROVED", "CHANGES_REQUESTED"].includes((candidate.state ?? "").toUpperCase())) : [];
+  const latest = newer.sort((left, right) => Date.parse(right.submitted_at) - Date.parse(left.submitted_at))[0];
+  if (latest?.state?.toUpperCase() === "APPROVED")
+    return resolved();
+  if ((review.state ?? "").toUpperCase() === "CHANGES_REQUESTED")
+    return { event, reviewAction: true };
+  return unverified(event, "review.unverified");
+};
+var reconcile = ({ event, payload }, snapshot) => {
+  if (event.kind === "pr.snapshot.initialized")
+    return reconcileInitial(event, snapshot);
+  if (reviewKinds.has(event.kind))
+    return reconcileReview({ event, payload }, snapshot);
+  if (!checkKinds.has(event.kind) && event.kind !== "merge_conflict.detected")
+    return { event };
+  if (snapshot && terminal(snapshot))
+    return informational(event, `${event.kind.split(".")[0]}.historical`, `Historical: ${event.summary} — PR ${snapshot.core.state.toUpperCase()}; no blocker action required`);
+  if (event.kind === "merge_conflict.detected") {
+    if (!snapshot)
+      return unverified(event, "merge_conflict.unverified");
+    const state2 = mergeState(snapshot);
+    if (state2 === "DIRTY")
+      return { event, actionable: true };
+    if (state2 === "CLEAN")
+      return informational(event, "merge_conflict.resolved", "Previously detected merge conflicts are now cleared (CLEAN)");
+    return unverified(event, "merge_conflict.unverified");
+  }
+  const head = payload.headSha;
+  if (snapshot?.core.headRefOid && typeof head === "string" && head && head !== snapshot.core.headRefOid) {
+    return { event, supersededHead: head };
+  }
+  if (!snapshot || typeof head !== "string" || !head || !snapshot.core.headRefOid)
+    return unverified(event, "check.unverified");
+  const state = currentCheckState(payload, snapshot.checks);
+  if (state === "unverified")
+    return unverified(event, "check.unverified");
+  if (state === "failed")
+    return {
+      event: { ...event, kind: "check.failed", priority: "high", summary: `Check failed: ${payload.name || "unnamed check"}` },
+      actionable: true
+    };
+  return informational(event, state === "active" ? "check.rerunning" : "check.resolved", `Previously ${event.kind === "check.failed" ? "failed" : "cancelled"} check ${payload.name || "unnamed check"}: ${state === "active" ? "active rerun; wait for its result" : `now ${state}`}`);
+};
+var expand = (row) => {
+  const payload = parsePayload(row.payload_json);
+  const event = {
+    eventId: String(row.seq),
+    sourceEventIds: [String(row.seq)],
+    kind: row.kind,
+    priority: row.priority,
+    summary: row.summary,
+    ...row.reference_link ? { referenceLink: row.reference_link } : {}
+  };
+  if ((checkKinds.has(row.kind) || reviewKinds.has(row.kind)) && Array.isArray(payload.events) && payload.events.length) {
+    return payload.events.map((child) => {
+      const nested = object(child);
+      return {
+        event: { ...event, summary: typeof nested.summary === "string" ? nested.summary : row.summary },
+        payload: { ...payload, ...object(nested.payload) }
+      };
+    });
+  }
+  return [{ event, payload }];
+};
+var sourceIds = (events) => [...new Set(events.flatMap((event) => event.sourceEventIds ?? [event.eventId]))];
+function renderReminder(rows, snapshot, target) {
+  const reconciled = rows.flatMap(expand).map((candidate) => reconcile(candidate, snapshot));
+  const live = reconciled.filter((item) => !item.supersededHead);
+  const grouped = new Map;
+  for (const { event } of live) {
+    const key = event.priority === "high" ? `${event.eventId}:${grouped.size}` : `${event.priority}:${event.kind}`;
+    const bucket = grouped.get(key);
+    if (bucket)
+      bucket.push(event);
+    else
+      grouped.set(key, [event]);
+  }
+  const condensedLive = [...grouped.values()].map((bucket) => bucket.length === 1 ? bucket[0] : {
+    ...bucket[0],
+    sourceEventIds: sourceIds(bucket),
+    count: bucket.length,
+    samples: bucket.slice(0, 2).map((event) => event.summary),
+    summary: `${bucket.length} ${bucket[0].kind.replaceAll("_", " ")} events (${bucket.slice(0, 2).map((event) => event.summary).join("; ")})`
+  }).sort((left, right) => priorityRank[left.priority] - priorityRank[right.priority] || Number(left.eventId) - Number(right.eventId));
+  const superseded = new Map;
+  for (const { event, supersededHead } of reconciled) {
+    if (!supersededHead)
+      continue;
+    const bucket = superseded.get(supersededHead);
+    if (bucket)
+      bucket.push(event);
+    else
+      superseded.set(supersededHead, [event]);
+  }
+  const supersededSummaries = [...superseded].map(([head, bucket]) => {
+    const failed = bucket.filter((event) => event.kind === "check.failed").length;
+    const cancelled = bucket.length - failed;
+    const parts = [...failed ? [`${failed} failed`] : [], ...cancelled ? [`${cancelled} cancelled`] : []];
+    return {
+      eventId: bucket.at(-1).eventId,
+      sourceEventIds: sourceIds(bucket),
+      kind: "check.superseded",
+      priority: "low",
+      summary: `${parts.join(", ")} on ${shortSha(head)} (superseded by ${shortSha(snapshot.core.headRefOid)})`,
+      count: bucket.length
+    };
+  });
+  const renderEvent = (event, index) => `${index + 1}. ${event.kind} - ${event.summary}${event.referenceLink ? ` (${event.referenceLink})` : ""}`;
+  const qualified = target.prNumber ? `${target.repo}#${target.prNumber}` : target.repo;
+  const reminderText = [
+    "<system-reminder>",
+    `PR update for ${qualified}${snapshot?.core.headRefOid ? ` (HEAD: ${shortSha(snapshot.core.headRefOid)})` : ""}:`,
+    ...target.source === "manual" ? ["", "This PR is manually subscribed. Do not make changes unless the user explicitly asks you to."] : [],
+    ...condensedLive.length ? ["", "Changes:", ...condensedLive.map(renderEvent)] : [],
+    ...supersededSummaries.length ? ["", "Superseded:", ...supersededSummaries.map(renderEvent)] : [],
+    ...live.some((item) => item.actionable) ? ["", target.source === "manual" ? "Action required: report the failing check(s)/merge conflict(s) above and wait for authorization before making changes." : "Action required: resolve the failing check(s)/merge conflict(s) on HEAD before continuing. If you can't, explain why."] : [],
+    ...live.some((item) => item.reviewAction) ? ["", target.source === "manual" ? "Review action required: report the requested changes and wait for authorization before making changes." : "Review action required: assess the requested changes, address actionable feedback, and explain anything you decline or cannot resolve."] : [],
+    ...live.some((item) => item.unverified) ? ["", "Verify current status before acting on UNVERIFIED history; it is not a confirmed current blocker."] : [],
+    "",
+    "Incorporate only the above into your reasoning and continue.",
+    "</system-reminder>"
+  ].join(`
+`);
+  return { reminderText, events: [...condensedLive, ...supersededSummaries] };
+}
+
+// src/daemon/persistence/store.ts
+class StateStore {
+  db;
+  detailFiles = new DetailFileWriter;
+  lastReapAt = null;
+  lastReapCount = 0;
+  constructor(dbPath = PREMIND_DB_PATH) {
+    fs3.mkdirSync(path4.dirname(dbPath), { recursive: true });
+    fs3.mkdirSync(PREMIND_STATE_DIR, { recursive: true });
+    this.db = new DatabaseSync(dbPath);
+    this.db.exec("PRAGMA journal_mode = WAL");
+    this.db.exec("PRAGMA foreign_keys = ON");
+    this.migrate();
+  }
+  close() {
+    this.db.close();
+  }
+  transaction(operation) {
+    this.db.exec("SAVEPOINT premind_transaction");
+    try {
+      const result = operation();
+      this.db.exec("RELEASE premind_transaction");
+      return result;
+    } catch (error) {
+      this.db.exec("ROLLBACK TO premind_transaction");
+      this.db.exec("RELEASE premind_transaction");
+      throw error;
+    }
+  }
+  registerClient(clientId, metadata, now = Date.now()) {
+    const expiresAt = now + PREMIND_CLIENT_LEASE_TTL_MS;
+    this.db.prepare(`
+          INSERT INTO client_leases (client_id, pid, project_root, session_source, expires_at, created_at, updated_at)
+          VALUES (:clientId, :pid, :projectRoot, :sessionSource, :expiresAt, :now, :now)
+          ON CONFLICT(client_id) DO UPDATE SET
+            pid = excluded.pid,
+            project_root = excluded.project_root,
+            session_source = excluded.session_source,
+            expires_at = excluded.expires_at,
+            updated_at = excluded.updated_at
+        `).run({
+      clientId,
+      pid: metadata.pid,
+      projectRoot: metadata.projectRoot,
+      sessionSource: metadata.sessionSource ?? null,
+      expiresAt,
+      now
+    });
+  }
+  recoverFromRestart(now = Date.now()) {
+    const deletedClients = this.db.prepare(`DELETE FROM client_leases`).run();
+    const resetBatches = this.db.prepare(`UPDATE reminder_batches SET state = 'failed', updated_at = :now
+				 WHERE state = 'handed_off'`).run({ now });
+    const sessions = this.countActiveSessions();
+    const branchWatchers = this.db.prepare(`SELECT COUNT(*) AS count FROM branch_watchers WHERE active_session_count > 0`).get().count;
+    const prWatchers = this.countActiveWatchers();
+    return {
+      prunedClients: deletedClients.changes,
+      resetBatches: resetBatches.changes,
+      dedupedSessions: 0,
+      recoveredSessions: sessions,
+      recoveredBranchWatchers: branchWatchers,
+      recoveredPrWatchers: prWatchers
+    };
+  }
+  heartbeatClient(clientId, now = Date.now()) {
+    const result = this.db.prepare(`UPDATE client_leases SET expires_at = :expiresAt, updated_at = :now WHERE client_id = :clientId`).run({ clientId, expiresAt: now + PREMIND_CLIENT_LEASE_TTL_MS, now });
+    return result.changes > 0;
+  }
+  hasActiveClient(clientId, now = Date.now()) {
+    this.pruneExpiredClients(now);
+    return this.db.prepare(`SELECT 1 FROM client_leases WHERE client_id = ?`).get(clientId) !== undefined;
+  }
+  releaseClient(clientId) {
+    this.db.prepare(`DELETE FROM client_leases WHERE client_id = ?`).run(clientId);
+  }
+  pruneExpiredClients(now = Date.now()) {
+    this.db.prepare(`DELETE FROM client_leases WHERE expires_at <= ?`).run(now);
+  }
+  registerSession(payload, now = Date.now()) {
+    return this.transaction(() => {
+      const existing = this.getSession(payload.sessionId);
+      this.db.prepare(`
+          INSERT INTO sessions (session_id, host, host_session_id, client_id, repo, branch, pr_number, is_primary, status, busy_state, last_delivered_event_seq, last_activity_at, created_at, updated_at)
+          VALUES (:sessionId, :host, :hostSessionId, :clientId, :repo, :branch, NULL, :isPrimary, :status, :busyState, 0, :now, :now, :now)
+          ON CONFLICT(session_id) DO UPDATE SET
+            host = excluded.host,
+            host_session_id = excluded.host_session_id,
+            client_id = excluded.client_id,
+            repo = excluded.repo,
+            branch = excluded.branch,
+            is_primary = excluded.is_primary,
+            status = excluded.status,
+            busy_state = excluded.busy_state,
+            last_activity_at = excluded.last_activity_at,
+            updated_at = excluded.updated_at
+        `).run({
+        ...payload,
+        host: payload.host ?? "opencode",
+        hostSessionId: payload.hostSessionId ?? payload.sessionId,
+        isPrimary: payload.isPrimary ? 1 : 0,
+        now
+      });
+      this.touchBranchWatcher(payload.repo, payload.branch, now);
+      return { created: !existing, superseded: 0 };
+    });
+  }
+  ensureSessionControl(payload, now = Date.now()) {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const existing = this.getSession(payload.sessionId);
+      const status = payload.paused ? "paused" : "active";
+      const contextChanged = existing !== undefined && (existing.repo !== payload.repo || existing.branch !== payload.branch);
+      const watcher = this.db.prepare(`SELECT pr_number FROM branch_watchers WHERE repo = :repo AND branch = :branch`).get({ repo: payload.repo, branch: payload.branch });
+      const attachedPrNumber = watcher?.pr_number ?? null;
+      const highWaterCursor = attachedPrNumber === null ? 0 : this.db.prepare(`SELECT MAX(seq) AS maxSeq FROM pr_events WHERE repo = :repo AND pr_number = :prNumber`).get({
+        repo: payload.repo,
+        prNumber: attachedPrNumber
+      }).maxSeq ?? 0;
+      const prNumber = existing && !contextChanged ? existing.pr_number : attachedPrNumber;
+      const cursor = existing && !contextChanged ? existing.last_delivered_event_seq : highWaterCursor;
+      if (existing) {
+        if (contextChanged) {
+          this.db.prepare(`DELETE FROM reminder_batches WHERE session_id = ?`).run(payload.sessionId);
+          this.deactivateAutomaticSubscriptions(payload.sessionId, now);
+        }
+        this.db.prepare(`UPDATE sessions
+						 SET host = :host,
+						     host_session_id = :hostSessionId,
+						     client_id = :clientId,
+						     repo = :repo,
+						     branch = :branch,
+						     pr_number = :prNumber,
+						     is_primary = :isPrimary,
+						     status = :status,
+						     busy_state = :busyState,
+						     last_delivered_event_seq = :cursor,
+						     last_activity_at = :now,
+						     updated_at = :now
+						 WHERE session_id = :sessionId`).run({
+          clientId: payload.clientId,
+          host: payload.host ?? "opencode",
+          hostSessionId: payload.hostSessionId ?? payload.sessionId,
+          sessionId: payload.sessionId,
+          repo: payload.repo,
+          branch: payload.branch,
+          prNumber,
+          busyState: payload.busyState,
+          isPrimary: payload.isPrimary ? 1 : 0,
+          status,
+          cursor,
+          now
+        });
+      } else {
+        this.db.prepare(`INSERT INTO sessions (session_id, host, host_session_id, client_id, repo, branch, pr_number, is_primary, status, busy_state, last_delivered_event_seq, last_activity_at, created_at, updated_at)
+						 VALUES (:sessionId, :host, :hostSessionId, :clientId, :repo, :branch, :prNumber, :isPrimary, :status, :busyState, :cursor, :now, :now, :now)`).run({
+          clientId: payload.clientId,
+          host: payload.host ?? "opencode",
+          hostSessionId: payload.hostSessionId ?? payload.sessionId,
+          sessionId: payload.sessionId,
+          repo: payload.repo,
+          branch: payload.branch,
+          prNumber,
+          busyState: payload.busyState,
+          isPrimary: payload.isPrimary ? 1 : 0,
+          status,
+          cursor,
+          now
+        });
+      }
+      this.touchBranchWatcher(payload.repo, payload.branch, now);
+      this.db.exec("COMMIT");
+      return { created: !existing, superseded: 0 };
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+  updateSessionState(payload, now = Date.now()) {
+    const current = this.getSession(payload.sessionId);
+    if (!current)
+      return { updated: false, revived: false };
+    const revived = current.status === "closed" && !!payload.busyState;
+    const next = {
+      repo: payload.repo ?? current.repo,
+      branch: payload.branch ?? current.branch,
+      busyState: payload.busyState ?? current.busy_state,
+      status: revived ? "active" : payload.status ?? current.status
+    };
+    this.db.prepare(`
+          UPDATE sessions
+          SET repo = :repo,
+              branch = :branch,
+              status = :status,
+              busy_state = :busyState,
+              last_activity_at = :now,
+              updated_at = :now
+          WHERE session_id = :sessionId
+        `).run({
+      sessionId: payload.sessionId,
+      ...next,
+      now
+    });
+    if (revived)
+      this.refreshWatcherCounts(now);
+    this.touchBranchWatcher(next.repo, next.branch, now);
+    return { updated: true, revived };
+  }
+  suspendClaudeSession(sessionId, now = Date.now()) {
+    const session = this.getSession(sessionId);
+    if (!session || session.host !== "claude")
+      return false;
+    this.db.prepare(`UPDATE sessions
+				 SET status = 'closed', busy_state = 'idle', updated_at = :now
+				 WHERE session_id = :sessionId`).run({ sessionId, now });
+    this.refreshWatcherCounts(now);
+    return true;
+  }
+  unregisterSession(sessionId) {
+    this.db.prepare(`DELETE FROM sessions WHERE session_id = ?`).run(sessionId);
+    this.db.prepare(`DELETE FROM reminder_batches WHERE session_id = ?`).run(sessionId);
+  }
+  upsertWorktreeBinding(binding, now = Date.now()) {
+    if (!this.getSession(binding.sessionId)) {
+      throw new Error(`Unknown session: ${binding.sessionId}`);
+    }
+    this.db.prepare(`
+				INSERT INTO worktree_bindings (session_id, root, git_dir, repo, branch, head_sha, state, created_at, updated_at)
+				VALUES (:sessionId, :root, :gitDir, :repo, :branch, :headSha, :state, :now, :now)
+				ON CONFLICT(session_id) DO UPDATE SET
+					root = excluded.root,
+					git_dir = excluded.git_dir,
+					repo = excluded.repo,
+					branch = excluded.branch,
+					head_sha = excluded.head_sha,
+					state = excluded.state,
+					updated_at = excluded.updated_at
+				`).run({ ...binding, now });
+    this.refreshWatcherCounts(now);
+    return this.getWorktreeBinding(binding.sessionId);
+  }
+  getWorktreeBinding(sessionId) {
+    const row = this.db.prepare(`SELECT * FROM worktree_bindings WHERE session_id = ?`).get(sessionId);
+    if (!row)
+      return null;
+    return {
+      sessionId: row.session_id,
+      root: row.root,
+      gitDir: row.git_dir,
+      repo: row.repo,
+      branch: row.branch,
+      headSha: row.head_sha,
+      state: row.state,
+      updatedAt: row.updated_at
+    };
+  }
+  activateWorktree(binding, now = Date.now()) {
+    return this.transaction(() => {
+      const activeBinding = this.upsertWorktreeBinding(binding, now);
+      this.deactivateAutomaticSubscriptions(binding.sessionId, now);
+      if (binding.branch)
+        this.ensureBranchWatcher(binding.repo, binding.branch, now);
+      return activeBinding;
+    });
+  }
+  upsertSubscription(input, now = Date.now()) {
+    return this.transaction(() => {
+      if (!this.getSession(input.sessionId)) {
+        throw new Error(`Unknown session: ${input.sessionId}`);
+      }
+      this.db.prepare(`
+					INSERT INTO session_subscriptions (subscription_id, session_id, repo, pr_number, source, state, last_delivered_event_seq, created_at, updated_at)
+					VALUES (:subscriptionId, :sessionId, :repo, :prNumber, :source, 'active', 0, :now, :now)
+					ON CONFLICT(session_id, repo, pr_number) DO UPDATE SET
+						source = CASE WHEN session_subscriptions.source = 'manual' OR excluded.source = 'manual' THEN 'manual' ELSE 'automatic' END,
+						state = 'active',
+						updated_at = excluded.updated_at
+					`).run({ ...input, subscriptionId: randomUUID(), now });
+      this.touchPrWatcher(input.repo, input.prNumber, now);
+      return this.getSubscription(input.sessionId, input.repo, input.prNumber);
+    });
+  }
+  getSubscription(sessionId, repo, prNumber) {
+    const row = this.db.prepare(`SELECT * FROM session_subscriptions WHERE session_id = ? AND repo = ? AND pr_number = ?`).get(sessionId, repo, prNumber);
+    return row ? this.toSubscription(row) : null;
+  }
+  getSubscriptionById(subscriptionId) {
+    const row = this.db.prepare(`SELECT * FROM session_subscriptions WHERE subscription_id = ?`).get(subscriptionId);
+    return row ? this.toSubscription(row) : null;
+  }
+  toSubscription(row) {
+    return {
+      subscriptionId: row.subscription_id,
+      sessionId: row.session_id,
+      repo: row.repo,
+      prNumber: row.pr_number,
+      source: row.source,
+      state: row.state,
+      lastDeliveredEventSeq: row.last_delivered_event_seq,
+      updatedAt: row.updated_at
+    };
+  }
+  listSessionSubscriptions(sessionId, state) {
+    const statement = state ? this.db.prepare(`SELECT * FROM session_subscriptions WHERE session_id = :sessionId AND state = :state ORDER BY created_at ASC`) : this.db.prepare(`SELECT * FROM session_subscriptions WHERE session_id = :sessionId ORDER BY created_at ASC`);
+    const rows = state ? statement.all({ sessionId, state }) : statement.all({ sessionId });
+    return rows.map((row) => ({
+      subscriptionId: row.subscription_id,
+      sessionId: row.session_id,
+      repo: row.repo,
+      prNumber: row.pr_number,
+      source: row.source,
+      state: row.state,
+      lastDeliveredEventSeq: row.last_delivered_event_seq,
+      updatedAt: row.updated_at
+    }));
+  }
+  listActiveSubscriptionsForPr(repo, prNumber) {
+    const rows = this.db.prepare(`SELECT session_subscriptions.*
+				 FROM session_subscriptions
+				 INNER JOIN sessions ON sessions.session_id = session_subscriptions.session_id
+				 WHERE session_subscriptions.repo = :repo
+				   AND session_subscriptions.pr_number = :prNumber
+				   AND session_subscriptions.state = 'active'
+				   AND sessions.status != 'closed'
+				 ORDER BY session_subscriptions.created_at ASC`).all({ repo, prNumber });
+    return rows.map((row) => ({
+      subscriptionId: row.subscription_id,
+      sessionId: row.session_id,
+      repo: row.repo,
+      prNumber: row.pr_number,
+      source: row.source,
+      state: row.state,
+      lastDeliveredEventSeq: row.last_delivered_event_seq,
+      updatedAt: row.updated_at
+    }));
+  }
+  baselineAutomaticSubscription(input, now = Date.now()) {
+    return this.transaction(() => {
+      const existing = this.getSubscription(input.sessionId, input.repo, input.prNumber);
+      if (existing?.source === "manual" || existing?.state === "active")
+        return existing;
+      const row = this.db.prepare(`SELECT MAX(seq) AS max_seq FROM pr_events WHERE repo = :repo AND pr_number = :prNumber`).get({ repo: input.repo, prNumber: input.prNumber });
+      const cursor = existing ? existing.lastDeliveredEventSeq : row?.max_seq ?? 0;
+      const subscriptionId = existing?.subscriptionId ?? randomUUID();
+      this.db.prepare(`INSERT INTO session_subscriptions (subscription_id, session_id, repo, pr_number, source, state, last_delivered_event_seq, created_at, updated_at)
+					 VALUES (:subscriptionId, :sessionId, :repo, :prNumber, 'automatic', 'active', :cursor, :now, :now)
+					 ON CONFLICT(session_id, repo, pr_number) DO UPDATE SET
+					   state = 'active',
+					   last_delivered_event_seq = :cursor,
+					   updated_at = :now`).run({ ...input, subscriptionId, cursor, now });
+      this.touchPrWatcher(input.repo, input.prNumber, now);
+      return this.getSubscription(input.sessionId, input.repo, input.prNumber);
+    });
+  }
+  unsubscribe(sessionId, repo, prNumber, now = Date.now()) {
+    return this.transaction(() => {
+      const input = { sessionId, repo, prNumber, now };
+      this.db.prepare(`DELETE FROM reminder_batches
+					 WHERE subscription_id IN (
+					   SELECT subscription_id FROM session_subscriptions
+					   WHERE session_id = :sessionId AND repo = :repo AND pr_number = :prNumber
+					 )`).run({ sessionId, repo, prNumber });
+      const result = this.db.prepare(`UPDATE session_subscriptions SET state = 'unsubscribed', updated_at = :now WHERE session_id = :sessionId AND repo = :repo AND pr_number = :prNumber AND state = 'active'`).run(input);
+      if (result.changes > 0)
+        this.refreshWatcherCounts(now);
+      return result.changes > 0;
+    });
+  }
+  deactivateAutomaticSubscriptions(sessionId, now = Date.now()) {
+    return this.transaction(() => {
+      this.db.prepare(`DELETE FROM reminder_batches
+					 WHERE subscription_id IN (
+					   SELECT subscription_id FROM session_subscriptions
+					   WHERE session_id = :sessionId AND source = 'automatic'
+					 )`).run({ sessionId });
+      const result = this.db.prepare(`UPDATE session_subscriptions SET state = 'unsubscribed', updated_at = :now WHERE session_id = :sessionId AND source = 'automatic' AND state = 'active'`).run({ sessionId, now });
+      if (result.changes > 0)
+        this.refreshWatcherCounts(now);
+      return result.changes;
+    });
+  }
+  rejectAutomaticPullRequest(sessionId, repo, prNumber, now = Date.now()) {
+    return this.transaction(() => {
+      this.db.prepare(`DELETE FROM reminder_batches
+					 WHERE session_id = :sessionId AND subscription_id IS NULL`).run({ sessionId });
+      this.db.prepare(`UPDATE sessions
+					 SET pr_number = NULL, last_delivered_event_seq = 0, updated_at = :now
+					 WHERE session_id = :sessionId AND repo = :repo AND pr_number = :prNumber`).run({ sessionId, repo, prNumber, now });
+      this.db.prepare(`UPDATE branch_watchers
+					 SET pr_number = NULL, updated_at = :now
+					 WHERE repo = :repo AND pr_number = :prNumber
+					   AND branch = (SELECT branch FROM sessions WHERE session_id = :sessionId)`).run({ sessionId, repo, prNumber, now });
+      return this.deactivateAutomaticSubscriptions(sessionId, now);
+    });
+  }
+  suspendAutomaticSubscriptions(now = Date.now()) {
+    const subscriptions = this.db.prepare(`SELECT session_id, repo, pr_number
+				 FROM session_subscriptions
+				 WHERE source = 'automatic' AND state = 'active'`).all();
+    for (const subscription of subscriptions) {
+      this.rejectAutomaticPullRequest(subscription.session_id, subscription.repo, subscription.pr_number, now);
+    }
+    this.db.prepare(`UPDATE branch_watchers SET pr_number = NULL, updated_at = :now WHERE pr_number IS NOT NULL`).run({ now });
+    return subscriptions.length;
+  }
+  recordAutomaticSubscriptionOptOut(input, now = Date.now()) {
+    this.db.prepare(`INSERT OR IGNORE INTO automatic_subscription_opt_outs (session_id, git_dir, repo, branch, pr_number, created_at)
+				 VALUES (:sessionId, :gitDir, :repo, :branch, :prNumber, :now)`).run({ ...input, now });
+  }
+  hasAutomaticSubscriptionOptOut(input) {
+    return Boolean(this.db.prepare(`SELECT 1 FROM automatic_subscription_opt_outs WHERE session_id = :sessionId AND git_dir = :gitDir AND repo = :repo AND branch = :branch AND pr_number = :prNumber`).get(input));
+  }
+  getAutomaticSubscriptionOptOutForBinding(input) {
+    const row = this.db.prepare(`SELECT pr_number, created_at
+				 FROM automatic_subscription_opt_outs
+				 WHERE session_id = :sessionId
+				   AND git_dir = :gitDir
+				   AND repo = :repo
+				   AND branch = :branch
+				 ORDER BY created_at DESC, pr_number DESC
+				 LIMIT 1`).get(input);
+    return row ? { prNumber: row.pr_number, createdAt: row.created_at } : null;
+  }
+  reapStaleSessions(thresholdMs, now = Date.now()) {
+    const cutoff = now - thresholdMs;
+    const result = this.db.prepare(`UPDATE sessions SET status = 'closed', updated_at = :now WHERE status != 'closed' AND last_activity_at < :cutoff`).run({ now, cutoff });
+    const reaped = result.changes;
+    if (reaped > 0)
+      this.refreshWatcherCounts(now);
+    const oldestRow = this.db.prepare(`SELECT MIN(last_activity_at) AS oldest FROM sessions WHERE status != 'closed'`).get();
+    const oldestAgeMs = oldestRow.oldest === null ? null : now - oldestRow.oldest;
+    this.lastReapAt = now;
+    this.lastReapCount = reaped;
+    return { reaped, oldestAgeMs };
+  }
+  getLastReapAt() {
+    return this.lastReapAt;
+  }
+  getLastReapCount() {
+    return this.lastReapCount;
+  }
+  pruneClosedSessions(retentionMs, now = Date.now()) {
+    const cutoff = now - retentionMs;
+    const result = this.db.prepare(`DELETE FROM sessions WHERE status = 'closed' AND updated_at < :cutoff`).run({ cutoff });
+    return result.changes;
+  }
+  pruneClosedOrOrphanedSessions() {
+    const predicate = `status = 'closed' OR (host IN ('opencode', 'pi') AND NOT EXISTS (SELECT 1 FROM client_leases WHERE client_leases.client_id = sessions.client_id))`;
+    const deletedBatches = this.db.prepare(`DELETE FROM reminder_batches WHERE session_id IN (SELECT session_id FROM sessions WHERE ${predicate})`).run();
+    const deletedSessions = this.db.prepare(`DELETE FROM sessions WHERE ${predicate}`).run();
+    return {
+      sessions: deletedSessions.changes,
+      reminderBatches: deletedBatches.changes
+    };
+  }
+  pruneExpiredPrStreams(now = Date.now(), streamRetentionMs = PREMIND_PR_STREAM_RETENTION_MS, subscriptionRetentionMs = PREMIND_SUBSCRIPTION_RETENTION_MS) {
+    return this.transaction(() => {
+      const subscriptions = this.db.prepare(`DELETE FROM session_subscriptions
+					 WHERE state = 'unsubscribed' AND updated_at <= :subscriptionCutoff`).run({ subscriptionCutoff: now - subscriptionRetentionMs });
+      const expiredStreams = `
+				SELECT repo, pr_number
+				FROM pr_watchers
+				WHERE state IN ('stopped', 'terminal')
+				  AND COALESCE(terminal_at, idle_deadline_at, updated_at) <= :streamCutoff
+				  AND NOT EXISTS (
+				    SELECT 1 FROM session_subscriptions
+				    WHERE session_subscriptions.repo = pr_watchers.repo
+				      AND session_subscriptions.pr_number = pr_watchers.pr_number
+				      AND session_subscriptions.state = 'active'
+				  )
+			`;
+      const parameters = { streamCutoff: now - streamRetentionMs };
+      const snapshots = this.db.prepare(`DELETE FROM pr_snapshots WHERE (repo, pr_number) IN (${expiredStreams})`).run(parameters);
+      const events = this.db.prepare(`DELETE FROM pr_events WHERE (repo, pr_number) IN (${expiredStreams})`).run(parameters);
+      this.db.prepare(`DELETE FROM etags
+					 WHERE scope = 'pr.snapshot'
+					   AND EXISTS (
+					     SELECT 1 FROM pr_watchers
+					     WHERE etags.key = pr_watchers.repo || '#' || pr_watchers.pr_number
+					       AND (pr_watchers.repo, pr_watchers.pr_number) IN (${expiredStreams})
+					   )`).run(parameters);
+      const watchers = this.db.prepare(`DELETE FROM pr_watchers WHERE (repo, pr_number) IN (${expiredStreams})`).run(parameters);
+      return {
+        events: events.changes,
+        snapshots: snapshots.changes,
+        watchers: watchers.changes,
+        subscriptions: subscriptions.changes
+      };
+    });
+  }
+  pruneOrphanedPrEvents(now = Date.now()) {
+    return this.pruneExpiredPrStreams(now).events;
+  }
+  countClosedSessions() {
+    const row = this.db.prepare(`SELECT COUNT(*) AS count FROM sessions WHERE status = 'closed'`).get();
+    return row.count;
+  }
+  getSession(sessionId) {
+    return this.db.prepare(`SELECT * FROM sessions WHERE session_id = ?`).get(sessionId);
+  }
+  listSessionSummaries() {
+    const sessions = this.db.prepare(`SELECT session_id, host, repo, branch, pr_number, status, busy_state, last_delivered_event_seq FROM sessions WHERE status != 'closed' ORDER BY updated_at DESC`).all();
+    return sessions.map((session) => {
+      const subscriptions = this.listSessionSubscriptions(session.session_id).map((subscription) => ({
+        repo: subscription.repo,
+        prNumber: subscription.prNumber,
+        source: subscription.source,
+        state: subscription.state,
+        pendingEventCount: subscription.state === "active" ? this.countPendingEvents(subscription.repo, subscription.prNumber, subscription.lastDeliveredEventSeq) : 0
+      }));
+      const pendingReminderCount = subscriptions.length > 0 ? subscriptions.filter((subscription) => subscription.state === "active").reduce((count, subscription) => count + subscription.pendingEventCount, 0) : session.pr_number === null ? 0 : this.countPendingEvents(session.repo, session.pr_number, session.last_delivered_event_seq);
+      const binding = this.getWorktreeBinding(session.session_id);
+      return {
+        sessionId: session.session_id,
+        host: session.host,
+        repo: session.repo,
+        branch: session.branch,
+        prNumber: session.pr_number,
+        status: session.status,
+        busyState: session.busy_state,
+        pendingReminderCount,
+        worktreeBinding: binding ? {
+          root: binding.root,
+          gitDir: binding.gitDir,
+          repo: binding.repo,
+          branch: binding.branch,
+          headSha: binding.headSha,
+          state: binding.state,
+          updatedAt: binding.updatedAt
+        } : null,
+        subscriptions
+      };
+    });
+  }
+  countPendingEvents(repo, prNumber, lastDeliveredEventSeq) {
+    return this.db.prepare(`SELECT COUNT(*) AS count FROM pr_events WHERE repo = :repo AND pr_number = :prNumber AND seq > :lastDeliveredEventSeq`).get({ repo, prNumber, lastDeliveredEventSeq }).count;
+  }
+  setSessionPaused(sessionId, paused, now = Date.now()) {
+    const status = paused ? "paused" : "active";
+    const result = this.db.prepare(`UPDATE sessions SET status = :status, updated_at = :now WHERE session_id = :sessionId`).run({ status, now, sessionId });
+    return result.changes > 0;
+  }
+  isGloballyDisabled() {
+    const row = this.db.prepare(`SELECT value FROM settings WHERE key = 'globally_disabled'`).get();
+    return row?.value === "true";
+  }
+  setGloballyDisabled(disabled, now = Date.now()) {
+    this.db.prepare(`
+          INSERT INTO settings (key, value, updated_at)
+          VALUES ('globally_disabled', :value, :now)
+          ON CONFLICT(key) DO UPDATE SET
+            value = excluded.value,
+            updated_at = excluded.updated_at
+        `).run({ value: disabled ? "true" : "false", now });
+  }
+  countActiveClients(now = Date.now()) {
+    this.pruneExpiredClients(now);
+    const row = this.db.prepare(`SELECT COUNT(*) AS count FROM client_leases`).get();
+    return row.count;
+  }
+  countActiveSessions() {
+    const row = this.db.prepare(`SELECT COUNT(*) AS count FROM sessions WHERE status != 'closed'`).get();
+    return row.count;
+  }
+  countActiveWatchers() {
+    const row = this.db.prepare(`SELECT COUNT(*) AS count FROM pr_watchers WHERE active_session_count > 0`).get();
+    return row.count;
+  }
+  hasDaemonDemand(now = Date.now()) {
+    if (this.countActiveClients(now) > 0)
+      return true;
+    this.refreshWatcherCounts(now);
+    const row = this.db.prepare(`SELECT
+				   (SELECT COUNT(*) FROM session_subscriptions
+				      INNER JOIN sessions USING (session_id)
+				      WHERE session_subscriptions.state = 'active' AND sessions.status != 'closed') +
+				   (SELECT COUNT(*) FROM pr_watchers WHERE active_session_count > 0) +
+				   (SELECT COUNT(*) FROM branch_watchers WHERE active_session_count > 0)
+				 AS count`).get();
+    return row.count > 0;
+  }
+  listBranchWatchTargets(now = Date.now()) {
+    this.pruneExpiredClients(now);
+    this.refreshWatcherCounts(now);
+    return this.db.prepare(`
+          SELECT repo, branch, pr_number, last_checked_at, active_session_count
+          FROM branch_watchers
+          WHERE active_session_count > 0
+          ORDER BY updated_at ASC
+        `).all();
+  }
+  listActiveWorktreeBranchTargets(now = Date.now()) {
+    this.pruneExpiredClients(now);
+    return this.db.prepare(`SELECT sessions.session_id, worktree_bindings.git_dir, worktree_bindings.repo, worktree_bindings.branch, branch_watchers.pr_number
+				 FROM worktree_bindings
+				 INNER JOIN sessions ON sessions.session_id = worktree_bindings.session_id
+				 LEFT JOIN branch_watchers
+				   ON branch_watchers.repo = worktree_bindings.repo
+				  AND branch_watchers.branch = worktree_bindings.branch
+				 WHERE sessions.status != 'closed'
+				   AND worktree_bindings.branch IS NOT NULL
+				   AND worktree_bindings.state != 'detached_head'
+				 UNION ALL
+				 SELECT sessions.session_id, '' AS git_dir, sessions.repo, sessions.branch, branch_watchers.pr_number
+				 FROM sessions
+				 LEFT JOIN worktree_bindings ON worktree_bindings.session_id = sessions.session_id
+				 LEFT JOIN branch_watchers
+				   ON branch_watchers.repo = sessions.repo
+				  AND branch_watchers.branch = sessions.branch
+				 WHERE sessions.status != 'closed'
+				   AND worktree_bindings.session_id IS NULL
+				 `).all();
+  }
+  recordBranchAssociation(repo, branch, prNumber, checkedAt = Date.now()) {
+    this.db.prepare(`
+          INSERT INTO branch_watchers (repo, branch, pr_number, last_checked_at, active_session_count, created_at, updated_at)
+          VALUES (:repo, :branch, :prNumber, :checkedAt, 0, :checkedAt, :checkedAt)
+          ON CONFLICT(repo, branch) DO UPDATE SET
+            pr_number = excluded.pr_number,
+            last_checked_at = excluded.last_checked_at,
+            updated_at = excluded.updated_at
+        `).run({ repo, branch, prNumber, checkedAt });
+    const sessionsToUpdate = this.db.prepare(`SELECT session_id, pr_number FROM sessions WHERE repo = :repo AND branch = :branch`).all({ repo, branch });
+    let freshCursor = 0;
+    if (prNumber !== null) {
+      const row = this.db.prepare(`SELECT MAX(seq) AS maxSeq FROM pr_events WHERE repo = :repo AND pr_number = :prNumber`).get({ repo, prNumber });
+      freshCursor = row?.maxSeq ?? 0;
+    }
+    this.db.prepare(`UPDATE sessions SET pr_number = :prNumber, updated_at = :checkedAt WHERE repo = :repo AND branch = :branch`).run({ repo, branch, prNumber, checkedAt });
+    if (prNumber !== null && freshCursor > 0) {
+      const advance = this.db.prepare(`UPDATE sessions SET last_delivered_event_seq = :cursor WHERE session_id = :sessionId`);
+      for (const session of sessionsToUpdate) {
+        if (session.pr_number !== prNumber) {
+          advance.run({ cursor: freshCursor, sessionId: session.session_id });
+        }
+      }
+    }
+    if (prNumber !== null) {
+      const legacySessions = this.db.prepare(`SELECT sessions.session_id FROM sessions
+					 LEFT JOIN worktree_bindings ON worktree_bindings.session_id = sessions.session_id
+					 WHERE sessions.repo = :repo AND sessions.branch = :branch
+					   AND worktree_bindings.session_id IS NULL`).all({ repo, branch });
+      for (const session of legacySessions) {
+        this.baselineAutomaticSubscription({
+          sessionId: session.session_id,
+          repo,
+          prNumber
+        }, checkedAt);
+      }
+    }
+    if (prNumber !== null) {
+      this.touchPrWatcher(repo, prNumber, checkedAt);
+    }
+  }
+  getSnapshot(repo, prNumber) {
+    const row = this.db.prepare(`SELECT snapshot_json FROM pr_snapshots WHERE repo = ? AND pr_number = ?`).get(repo, prNumber);
+    if (!row)
+      return null;
+    try {
+      return JSON.parse(row.snapshot_json);
+    } catch {
+      return null;
+    }
+  }
+  getEtag(scope, key) {
+    const row = this.db.prepare(`SELECT etag FROM etags WHERE scope = ? AND key = ?`).get(scope, key);
+    return row?.etag ?? null;
+  }
+  saveEtag(scope, key, etag, now = Date.now()) {
+    if (etag === null) {
+      this.db.prepare(`DELETE FROM etags WHERE scope = ? AND key = ?`).run(scope, key);
+      return;
+    }
+    this.db.prepare(`
+          INSERT INTO etags (scope, key, etag, updated_at)
+          VALUES (:scope, :key, :etag, :now)
+          ON CONFLICT(scope, key) DO UPDATE SET
+            etag = excluded.etag,
+            updated_at = excluded.updated_at
+        `).run({ scope, key, etag, now });
+  }
+  saveSnapshot(repo, prNumber, snapshot) {
+    this.db.prepare(`
+          INSERT INTO pr_snapshots (repo, pr_number, head_sha, snapshot_json, fetched_at, updated_at)
+          VALUES (:repo, :prNumber, :headSha, :snapshotJson, :fetchedAt, :fetchedAt)
+          ON CONFLICT(repo, pr_number) DO UPDATE SET
+            head_sha = excluded.head_sha,
+            snapshot_json = excluded.snapshot_json,
+            fetched_at = excluded.fetched_at,
+            updated_at = excluded.updated_at
+        `).run({
+      repo,
+      prNumber,
+      headSha: snapshot.core.headRefOid,
+      snapshotJson: JSON.stringify(snapshot),
+      fetchedAt: snapshot.fetchedAt
+    });
+  }
+  saveSnapshotAndEvents(repo, prNumber, snapshot, events, now = Date.now()) {
+    this.db.exec("BEGIN");
+    try {
+      this.saveSnapshot(repo, prNumber, snapshot);
+      this.insertEventsInTransaction(repo, prNumber, events, now);
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+  saveTerminalSnapshotAndEvents(repo, prNumber, snapshot, events, etag, now = Date.now()) {
+    this.transaction(() => {
+      this.saveSnapshot(repo, prNumber, snapshot);
+      this.insertEventsInTransaction(repo, prNumber, events, now);
+      this.saveEtag("pr.snapshot", `${repo}#${prNumber}`, etag, now);
+      this.persistPrWatcherLifecycle({
+        repo,
+        prNumber,
+        state: "terminal",
+        idleDeadlineAt: null,
+        terminalAt: now,
+        nextEligiblePollAt: null,
+        consecutiveFailures: 0,
+        lastFailureAt: null,
+        lastFailureMessage: null,
+        rateLimitResetAt: null
+      }, now);
+    });
+  }
+  insertEvents(repo, prNumber, events, now = Date.now()) {
+    this.db.exec("BEGIN");
+    try {
+      this.insertEventsInTransaction(repo, prNumber, events, now);
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+  insertEventsInTransaction(repo, prNumber, events, now) {
+    const insert = this.db.prepare(`
+				INSERT OR IGNORE INTO pr_events (repo, pr_number, dedupe_key, kind, priority, summary, reference_link, payload_json, created_at)
+				VALUES (:repo, :prNumber, :dedupeKey, :kind, :priority, :summary, :referenceLink, :payloadJson, :now)
+			`);
+    for (const event of events) {
+      const localPath = this.detailFiles.write(repo, prNumber, event);
+      const referenceLink = localPath ?? event.referenceLink ?? null;
+      insert.run({
+        repo,
+        prNumber,
+        dedupeKey: event.dedupeKey,
+        kind: event.kind,
+        priority: event.priority,
+        summary: event.summary,
+        referenceLink,
+        payloadJson: JSON.stringify(event.payload),
+        now
+      });
+    }
+  }
+  listPrWatchTargets(now = Date.now()) {
+    this.pruneExpiredClients(now);
+    return this.db.prepare(`SELECT session_subscriptions.repo, session_subscriptions.pr_number,
+				        COUNT(*) AS active_session_count, pr_watchers.last_checked_at
+				 FROM session_subscriptions
+				 INNER JOIN sessions ON sessions.session_id = session_subscriptions.session_id
+				 LEFT JOIN pr_watchers
+				   ON pr_watchers.repo = session_subscriptions.repo
+				  AND pr_watchers.pr_number = session_subscriptions.pr_number
+				 WHERE session_subscriptions.state = 'active'
+				   AND sessions.status != 'closed'
+				 GROUP BY session_subscriptions.repo, session_subscriptions.pr_number
+				 ORDER BY MIN(session_subscriptions.updated_at) ASC`).all();
+  }
+  listPrWatcherRecords(now = Date.now()) {
+    this.pruneExpiredClients(now);
+    this.refreshWatcherCounts(now);
+    const rows = this.db.prepare(`SELECT * FROM pr_watchers ORDER BY created_at ASC`).all();
+    return rows.map((row) => ({
+      repo: row.repo,
+      prNumber: row.pr_number,
+      state: row.state,
+      activeSubscriberCount: row.active_session_count,
+      lastCheckedAt: row.last_checked_at,
+      idleDeadlineAt: row.idle_deadline_at,
+      terminalAt: row.terminal_at,
+      nextEligiblePollAt: row.next_eligible_poll_at,
+      consecutiveFailures: row.consecutive_failures,
+      lastFailureAt: row.last_failure_at,
+      lastFailureMessage: row.last_failure_message,
+      rateLimitResetAt: row.rate_limit_reset_at,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at
+    }));
+  }
+  getPrWatcherRecord(repo, prNumber) {
+    return this.listPrWatcherRecords().find((record) => record.repo === repo && record.prNumber === prNumber) ?? null;
+  }
+  persistPrWatcherLifecycle(record, now = Date.now()) {
+    this.db.prepare(`UPDATE pr_watchers
+				 SET state = :state,
+				     idle_deadline_at = :idleDeadlineAt,
+				     terminal_at = :terminalAt,
+				     next_eligible_poll_at = :nextEligiblePollAt,
+				     consecutive_failures = :consecutiveFailures,
+				     last_failure_at = :lastFailureAt,
+				     last_failure_message = :lastFailureMessage,
+				     rate_limit_reset_at = :rateLimitResetAt,
+				     updated_at = :now
+				 WHERE repo = :repo AND pr_number = :prNumber`).run({ ...record, now });
+  }
+  markPrWatchChecked(repo, prNumber, checkedAt = Date.now()) {
+    this.db.prepare(`UPDATE pr_watchers SET last_checked_at = :checkedAt, updated_at = :checkedAt WHERE repo = :repo AND pr_number = :prNumber`).run({ repo, prNumber, checkedAt });
+  }
+  listSessionsForPr(repo, prNumber) {
+    return this.db.prepare(`
+          SELECT *
+          FROM sessions
+          WHERE repo = :repo AND pr_number = :prNumber AND status != 'closed'
+        `).all({ repo, prNumber });
+  }
+  listUndeliveredEvents(sessionId, limit = 20) {
+    const subscriptions = this.listSessionSubscriptions(sessionId, "active");
+    for (const subscription of subscriptions) {
+      const events = this.listUndeliveredEventsForSubscription(subscription.subscriptionId, limit);
+      if (events.length > 0)
+        return events;
+    }
+    if (subscriptions.length > 0)
+      return [];
+    const session = this.getSession(sessionId);
+    if (!session || session.pr_number === null)
+      return [];
+    return this.listEventsAfterCursor(session.repo, session.pr_number, session.last_delivered_event_seq, limit);
+  }
+  listUndeliveredEventsForSubscription(subscriptionId, limit = 20) {
+    const subscription = this.getSubscriptionById(subscriptionId);
+    if (!subscription || subscription.state !== "active")
+      return [];
+    return this.listEventsAfterCursor(subscription.repo, subscription.prNumber, subscription.lastDeliveredEventSeq, limit);
+  }
+  listEventsAfterCursor(repo, prNumber, lastDeliveredEventSeq, limit) {
+    return this.db.prepare(`SELECT seq, kind, priority, summary, reference_link, payload_json
+				 FROM pr_events
+				 WHERE repo = :repo
+				   AND pr_number = :prNumber
+				   AND seq > :lastDeliveredEventSeq
+				 ORDER BY seq ASC
+				 LIMIT :limit`).all({ repo, prNumber, lastDeliveredEventSeq, limit });
+  }
+  createOrReplaceReminder(sessionId, subscriptionId, reminderText, events, maxEventSeq, now = Date.now()) {
+    const batchId = randomUUID();
+    this.db.prepare(`INSERT INTO reminder_batches (batch_id, session_id, subscription_id, reminder_text, events_json, state, max_event_seq, created_at, updated_at)
+				 VALUES (:batchId, :sessionId, :subscriptionId, :reminderText, :eventsJson, 'built', :maxEventSeq, :now, :now)`).run({
+      batchId,
+      sessionId,
+      subscriptionId,
+      reminderText,
+      eventsJson: JSON.stringify(events),
+      maxEventSeq,
+      now
+    });
+    return batchId;
+  }
+  getPendingReminder(sessionId) {
+    const record = this.getPendingReminderRecord(sessionId);
+    return record ? this.refreshPendingReminder(record) : null;
+  }
+  claimClaudeReminder(sessionId, now = Date.now()) {
+    return this.transaction(() => {
+      this.expireStaleHandoffs(undefined, now);
+      let record = this.getPendingReminderRecord(sessionId);
+      if (!record) {
+        const built = this.buildReminderBatch(sessionId, now);
+        if (!built)
+          return null;
+        record = this.getReminderBatchRecord(built.batchId, sessionId);
+        if (!record)
+          return null;
+      }
+      if (record.state === "failed") {
+        if (!this.transitionReminderBatchState(record.batchId, sessionId, "failed", "built", now))
+          return null;
+      }
+      const batch = this.getPendingReminder(sessionId);
+      if (!batch)
+        return null;
+      return this.transitionReminderBatchState(batch.batchId, sessionId, "built", "handed_off", now) ? batch : null;
+    });
+  }
+  confirmClaudeHandoff(sessionId, now = Date.now()) {
+    const row = this.db.prepare(`SELECT batch_id FROM reminder_batches
+				 WHERE session_id = :sessionId AND state = 'handed_off'
+				 ORDER BY updated_at DESC, created_at DESC LIMIT 1`).get({ sessionId });
+    return row ? this.confirmReminderBatch(row.batch_id, sessionId, now) : false;
+  }
+  getPendingReminderRecord(sessionId) {
+    const row = this.db.prepare(`SELECT reminder_batches.batch_id, reminder_batches.session_id, reminder_batches.subscription_id,
+				        reminder_batches.reminder_text, reminder_batches.events_json, reminder_batches.state,
+				        reminder_batches.max_event_seq, session_subscriptions.repo,
+				        session_subscriptions.pr_number, session_subscriptions.source
+				 FROM reminder_batches
+				 LEFT JOIN session_subscriptions
+				   ON session_subscriptions.subscription_id = reminder_batches.subscription_id
+				 WHERE reminder_batches.session_id = :sessionId
+				   AND reminder_batches.state IN ('built', 'failed')
+				   AND (reminder_batches.subscription_id IS NULL OR session_subscriptions.state = 'active')
+				 ORDER BY reminder_batches.created_at ASC LIMIT 1`).get({ sessionId });
+    return this.toReminderBatchRecord(row);
+  }
+  hasInFlightHandoff(sessionId, subscriptionId) {
+    const row = subscriptionId ? this.db.prepare(`SELECT 1 FROM reminder_batches
+						 WHERE subscription_id = :subscriptionId AND state = 'handed_off' LIMIT 1`).get({ subscriptionId }) : this.db.prepare(`SELECT 1 FROM reminder_batches
+						 WHERE session_id = :sessionId AND subscription_id IS NULL
+						   AND state = 'handed_off' LIMIT 1`).get({ sessionId });
+    return row !== undefined;
+  }
+  expireStaleHandoffs(thresholdMs = PREMIND_REMINDER_HANDOFF_STALE_MS, now = Date.now()) {
+    const result = this.db.prepare(`UPDATE reminder_batches SET state = 'failed', updated_at = :now
+				 WHERE state = 'handed_off' AND updated_at < :cutoff`).run({ now, cutoff: now - thresholdMs });
+    return result.changes;
+  }
+  getReminderBatchRecord(batchId, sessionId) {
+    const row = sessionId ? this.db.prepare(`SELECT reminder_batches.batch_id, reminder_batches.session_id, reminder_batches.subscription_id,
+						        reminder_batches.reminder_text, reminder_batches.events_json, reminder_batches.state, reminder_batches.max_event_seq,
+						        session_subscriptions.repo, session_subscriptions.pr_number, session_subscriptions.source
+						 FROM reminder_batches LEFT JOIN session_subscriptions USING (subscription_id)
+						 WHERE batch_id = :batchId AND reminder_batches.session_id = :sessionId`).get({ batchId, sessionId }) : this.db.prepare(`SELECT reminder_batches.batch_id, reminder_batches.session_id, reminder_batches.subscription_id,
+						        reminder_batches.reminder_text, reminder_batches.events_json, reminder_batches.state, reminder_batches.max_event_seq,
+						        session_subscriptions.repo, session_subscriptions.pr_number, session_subscriptions.source
+						 FROM reminder_batches LEFT JOIN session_subscriptions USING (subscription_id)
+						 WHERE batch_id = :batchId`).get({ batchId });
+    return this.toReminderBatchRecord(row);
+  }
+  listPendingReminderBatchRecords() {
+    const rows = this.db.prepare(`SELECT reminder_batches.batch_id, reminder_batches.session_id, reminder_batches.subscription_id,
+				        reminder_batches.reminder_text, reminder_batches.events_json, reminder_batches.state, reminder_batches.max_event_seq,
+				        session_subscriptions.repo, session_subscriptions.pr_number, session_subscriptions.source
+				 FROM reminder_batches LEFT JOIN session_subscriptions USING (subscription_id)
+				 WHERE reminder_batches.state != 'confirmed' ORDER BY reminder_batches.created_at ASC`).all();
+    return rows.flatMap((row) => {
+      const record = this.toReminderBatchRecord(row);
+      return record ? [record] : [];
+    });
+  }
+  getPendingReminderForSubscription(subscriptionId) {
+    const row = this.db.prepare(`SELECT reminder_batches.batch_id, reminder_batches.session_id, reminder_batches.subscription_id,
+				        reminder_batches.reminder_text, reminder_batches.events_json, reminder_batches.state,
+				        reminder_batches.max_event_seq, session_subscriptions.repo,
+				        session_subscriptions.pr_number, session_subscriptions.source
+				 FROM reminder_batches
+				 INNER JOIN session_subscriptions
+				   ON session_subscriptions.subscription_id = reminder_batches.subscription_id
+				 WHERE reminder_batches.subscription_id = :subscriptionId
+				   AND reminder_batches.state IN ('built', 'failed')
+				   AND session_subscriptions.state = 'active'`).get({ subscriptionId });
+    const record = this.toReminderBatchRecord(row);
+    return record ? this.refreshPendingReminder(record) : null;
+  }
+  refreshPendingReminder(record) {
+    if (record.state !== "built" && record.state !== "failed") {
+      return null;
+    }
+    const target = this.resolveReminderTarget(record);
+    if (!target) {
+      return this.toReminderBatch(record);
+    }
+    const sourceEvents = this.loadBatchSourceEvents(record, target);
+    const currentSnapshot = this.loadReminderSnapshot(target);
+    const rendered = renderReminder(sourceEvents, currentSnapshot, target);
+    return this.persistRefreshedReminderBatch({
+      ...record,
+      ...target,
+      ...rendered
+    });
+  }
+  resolveReminderTarget(record) {
+    const session = this.getSession(record.sessionId);
+    const repo = record.repo ?? session?.repo;
+    if (!repo) {
+      return null;
+    }
+    return {
+      repo,
+      prNumber: record.prNumber ?? session?.pr_number ?? undefined,
+      source: record.source
+    };
+  }
+  loadReminderSnapshot(target) {
+    if (!target.prNumber) {
+      return null;
+    }
+    return this.getSnapshot(target.repo, target.prNumber);
+  }
+  loadBatchSourceEvents(record, target) {
+    const storedEvents = record.events;
+    const window2 = this.getReminderEventWindow(record);
+    let sourceEvents;
+    if (this.needsLegacyEventRecovery(storedEvents)) {
+      sourceEvents = this.recoverLegacyBatchEvents(record, target, window2);
+    } else {
+      sourceEvents = this.loadEventsBySourceId(target, window2);
+    }
+    return this.preserveMissingEventHistory(storedEvents, sourceEvents);
+  }
+  getReminderEventWindow(record) {
+    const sourceEventIds = new Set;
+    for (const event of record.events) {
+      for (const id of event.sourceEventIds ?? [event.eventId]) {
+        sourceEventIds.add(Number(id));
+      }
+    }
+    let maximumEventSequence = record.maxEventSeq;
+    if (maximumEventSequence === null) {
+      const validSequences = [...sourceEventIds].filter(Number.isSafeInteger);
+      maximumEventSequence = Math.max(0, ...validSequences);
+    }
+    return { sourceEventIds: [...sourceEventIds], maximumEventSequence };
+  }
+  needsLegacyEventRecovery(events) {
+    for (const event of events) {
+      if (event.sourceEventIds?.length) {
+        continue;
+      }
+      if ((event.count ?? 1) > 1 || event.kind === "check.superseded") {
+        return true;
+      }
+    }
+    return false;
+  }
+  loadEventsBySourceId(target, window2) {
+    if (!target.prNumber) {
+      return [];
+    }
+    return this.db.prepare(`SELECT seq, kind, priority, summary, reference_link, payload_json
+			 FROM pr_events
+			 WHERE repo = :repo AND pr_number = :prNumber
+			   AND seq <= :maximumSequence
+			   AND seq IN (SELECT value FROM json_each(:sourceEventIds))
+			 ORDER BY seq ASC`).all({
+      repo: target.repo,
+      prNumber: target.prNumber,
+      maximumSequence: window2.maximumEventSequence,
+      sourceEventIds: JSON.stringify(window2.sourceEventIds)
+    });
+  }
+  recoverLegacyBatchEvents(record, target, window2) {
+    if (!target.prNumber) {
+      return [];
+    }
+    return this.db.prepare(`SELECT seq, kind, priority, summary, reference_link, payload_json
+			 FROM pr_events
+			 WHERE repo = :repo AND pr_number = :prNumber
+			   AND seq <= :maximumSequence
+			   AND (seq IN (SELECT value FROM json_each(:sourceEventIds))
+			        OR seq > :lastDeliveredSequence)
+			 ORDER BY seq ASC`).all({
+      repo: target.repo,
+      prNumber: target.prNumber,
+      maximumSequence: window2.maximumEventSequence,
+      sourceEventIds: JSON.stringify(window2.sourceEventIds),
+      lastDeliveredSequence: this.getReminderDeliveryCursor(record)
+    });
+  }
+  getReminderDeliveryCursor(record) {
+    if (record.subscriptionId) {
+      const subscription = this.getSubscriptionById(record.subscriptionId);
+      if (subscription) {
+        return subscription.lastDeliveredEventSeq;
+      }
+    }
+    return this.getSession(record.sessionId)?.last_delivered_event_seq ?? 0;
+  }
+  preserveMissingEventHistory(storedEvents, sourceEvents) {
+    const recoveredIds = new Set(sourceEvents.map((row) => String(row.seq)));
+    for (const event of storedEvents) {
+      const sourceIds2 = event.sourceEventIds ?? [event.eventId];
+      if (sourceIds2.some((id) => recoveredIds.has(id))) {
+        continue;
+      }
+      sourceEvents.push(this.toUnverifiedSourceEvent(event));
+    }
+    return sourceEvents;
+  }
+  toUnverifiedSourceEvent(event) {
+    return {
+      seq: Number(event.eventId),
+      kind: event.kind,
+      priority: event.priority,
+      summary: event.summary,
+      reference_link: event.referenceLink ?? null,
+      payload_json: "{}"
+    };
+  }
+  persistRefreshedReminderBatch(record) {
+    const result = this.db.prepare(`UPDATE reminder_batches SET reminder_text = :text, events_json = :events
+				 WHERE batch_id = :batchId AND session_id = :sessionId AND state IN ('built', 'failed')`).run({
+      text: record.reminderText,
+      events: JSON.stringify(record.events),
+      batchId: record.batchId,
+      sessionId: record.sessionId
+    });
+    if (!result.changes) {
+      return null;
+    }
+    return this.toReminderBatch(record);
+  }
+  toReminderBatch(record) {
+    return {
+      batchId: record.batchId,
+      sessionId: record.sessionId,
+      ...record.repo ? { repo: record.repo } : {},
+      ...record.prNumber ? { prNumber: record.prNumber } : {},
+      ...record.subscriptionId ? { subscriptionId: record.subscriptionId } : {},
+      ...record.source ? { source: record.source } : {},
+      reminderText: record.reminderText,
+      events: record.events
+    };
+  }
+  toReminderBatchRecord(row) {
+    if (!row || row.state === "confirmed")
+      return null;
+    try {
+      return {
+        batchId: row.batch_id,
+        sessionId: row.session_id,
+        subscriptionId: row.subscription_id,
+        repo: row.repo ?? undefined,
+        prNumber: row.pr_number ?? undefined,
+        source: row.source ?? undefined,
+        reminderText: row.reminder_text,
+        events: JSON.parse(row.events_json),
+        state: row.state,
+        maxEventSeq: row.max_event_seq
+      };
+    } catch {
+      return null;
+    }
+  }
+  transitionReminderBatchState(batchId, sessionId, expectedState, nextState, now = Date.now()) {
+    const valid = expectedState === "built" && nextState === "handed_off" || expectedState === "handed_off" && nextState === "failed" || expectedState === "failed" && nextState === "built";
+    if (!valid)
+      return false;
+    const result = this.db.prepare(`UPDATE reminder_batches SET state = :nextState, updated_at = :now
+				 WHERE batch_id = :batchId AND session_id = :sessionId AND state = :expectedState`).run({ batchId, sessionId, expectedState, nextState, now });
+    return result.changes === 1;
+  }
+  confirmReminderBatch(batchId, sessionId, now = Date.now()) {
+    return this.transaction(() => {
+      const row = this.db.prepare(`SELECT subscription_id, max_event_seq FROM reminder_batches
+					 WHERE batch_id = :batchId AND session_id = :sessionId AND state = 'handed_off'`).get({ batchId, sessionId });
+      if (!row)
+        return false;
+      const confirmed = this.db.prepare(`UPDATE reminder_batches SET state = 'confirmed', updated_at = :now
+					 WHERE batch_id = :batchId AND session_id = :sessionId AND state = 'handed_off'`).run({ batchId, sessionId, now });
+      if (confirmed.changes !== 1)
+        return false;
+      if (row.max_event_seq !== null) {
+        if (row.subscription_id) {
+          this.db.prepare(`UPDATE session_subscriptions
+							 SET last_delivered_event_seq = MAX(last_delivered_event_seq, :seq), updated_at = :now
+							 WHERE subscription_id = :subscriptionId`).run({
+            seq: row.max_event_seq,
+            now,
+            subscriptionId: row.subscription_id
+          });
+        }
+        this.db.prepare(`UPDATE sessions
+						 SET last_delivered_event_seq = MAX(last_delivered_event_seq, :seq), updated_at = :now
+						 WHERE session_id = :sessionId`).run({ seq: row.max_event_seq, now, sessionId });
+      }
+      this.db.prepare(`DELETE FROM reminder_batches WHERE batch_id = :batchId AND state = 'confirmed'`).run({ batchId });
+      return true;
+    });
+  }
+  ackReminder(payload, now = Date.now()) {
+    const record = this.getReminderBatchRecord(payload.batchId, payload.sessionId);
+    if (!record)
+      return false;
+    const actor = createReminderHandoffActor(record.state);
+    actor.send(eventForReminderState(payload.state));
+    const accepted = actor.getSnapshot().value === payload.state;
+    actor.stop();
+    if (!accepted)
+      return false;
+    switch (payload.state) {
+      case "handed_off":
+        return this.transitionReminderBatchState(payload.batchId, payload.sessionId, "built", "handed_off", now);
+      case "failed":
+        return this.transitionReminderBatchState(payload.batchId, payload.sessionId, "handed_off", "failed", now);
+      case "confirmed":
+        return this.confirmReminderBatch(payload.batchId, payload.sessionId, now);
+    }
+  }
+  listSessionsForBranch(repo, branch) {
+    return this.db.prepare(`
+          SELECT *
+          FROM sessions
+          WHERE repo = :repo AND branch = :branch AND status != 'closed'
+        `).all({ repo, branch });
+  }
+  buildReminderBatch(sessionId, now = Date.now(), subscriptionId) {
+    const session = this.getSession(sessionId);
+    if (!session || session.status === "paused" || session.status === "closed")
+      return null;
+    const subscription = subscriptionId ? this.getSubscriptionById(subscriptionId) : this.listSessionSubscriptions(sessionId, "active").find((candidate) => this.listUndeliveredEventsForSubscription(candidate.subscriptionId).length > 0);
+    if (subscription && (subscription.sessionId !== sessionId || subscription.state !== "active"))
+      return null;
+    const targetRepo = subscription?.repo ?? session.repo;
+    const targetPrNumber = subscription?.prNumber ?? session.pr_number;
+    const existing = subscription ? this.getPendingReminderForSubscription(subscription.subscriptionId) : this.getPendingReminder(sessionId);
+    if (existing)
+      return existing;
+    if (this.hasInFlightHandoff(sessionId, subscription?.subscriptionId ?? null))
+      return null;
+    const events = subscription ? this.listUndeliveredEventsForSubscription(subscription.subscriptionId) : this.listUndeliveredEvents(sessionId);
+    if (events.length === 0)
+      return null;
+    const maxEventSeq = events.at(-1).seq;
+    const { reminderText, events: condensed } = renderReminder(events, targetPrNumber ? this.getSnapshot(targetRepo, targetPrNumber) : null, {
+      repo: targetRepo,
+      prNumber: targetPrNumber ?? undefined,
+      source: subscription?.source
+    });
+    const batchId = this.createOrReplaceReminder(sessionId, subscription?.subscriptionId ?? null, reminderText, condensed, maxEventSeq, now);
+    return {
+      batchId,
+      sessionId,
+      repo: targetRepo,
+      ...targetPrNumber ? { prNumber: targetPrNumber } : {},
+      ...subscription ? {
+        subscriptionId: subscription.subscriptionId,
+        source: subscription.source
+      } : {},
+      reminderText,
+      events: condensed
+    };
+  }
+  buildReminderBatchForSubscription(subscriptionId, now = Date.now()) {
+    const subscription = this.getSubscriptionById(subscriptionId);
+    if (!subscription || subscription.state !== "active")
+      return null;
+    return this.buildReminderBatch(subscription.sessionId, now, subscriptionId);
+  }
+  ensureBranchWatcher(repo, branch, now = Date.now()) {
+    this.touchBranchWatcher(repo, branch, now);
+  }
+  touchBranchWatcher(repo, branch, now = Date.now()) {
+    this.db.prepare(`
+          INSERT INTO branch_watchers (repo, branch, pr_number, last_checked_at, active_session_count, created_at, updated_at)
+          VALUES (:repo, :branch, NULL, NULL, 0, :now, :now)
+          ON CONFLICT(repo, branch) DO UPDATE SET
+            updated_at = excluded.updated_at
+        `).run({ repo, branch, now });
+    this.refreshWatcherCounts(now);
+  }
+  touchPrWatcher(repo, prNumber, now = Date.now()) {
+    this.db.prepare(`
+          INSERT INTO pr_watchers (repo, pr_number, last_checked_at, active_session_count, created_at, updated_at)
+          VALUES (:repo, :prNumber, NULL, 0, :now, :now)
+          ON CONFLICT(repo, pr_number) DO UPDATE SET
+            updated_at = excluded.updated_at
+        `).run({ repo, prNumber, now });
+    this.refreshWatcherCounts(now);
+  }
+  refreshWatcherCounts(now = Date.now()) {
+    this.db.prepare(`UPDATE branch_watchers SET active_session_count = 0, updated_at = :now`).run({ now });
+    this.db.prepare(`
+          UPDATE branch_watchers
+          SET active_session_count = (
+            SELECT COUNT(*)
+            FROM sessions
+            LEFT JOIN worktree_bindings
+              ON worktree_bindings.session_id = sessions.session_id
+            WHERE sessions.status != 'closed'
+              AND (
+                (worktree_bindings.session_id IS NOT NULL
+                  AND worktree_bindings.repo = branch_watchers.repo
+                  AND worktree_bindings.branch = branch_watchers.branch)
+                OR (worktree_bindings.session_id IS NULL
+                  AND sessions.repo = branch_watchers.repo
+                  AND sessions.branch = branch_watchers.branch)
+              )
+          ),
+              updated_at = :now
+        `).run({ now });
+    this.db.prepare(`
+          UPDATE pr_watchers
+          SET active_session_count = (
+            SELECT COUNT(*)
+            FROM session_subscriptions
+            INNER JOIN sessions
+              ON sessions.session_id = session_subscriptions.session_id
+            WHERE session_subscriptions.repo = pr_watchers.repo
+              AND session_subscriptions.pr_number = pr_watchers.pr_number
+              AND session_subscriptions.state = 'active'
+              AND sessions.status != 'closed'
+          ),
+              updated_at = CASE
+                WHEN active_session_count != (
+                  SELECT COUNT(*)
+                  FROM session_subscriptions
+                  INNER JOIN sessions
+                    ON sessions.session_id = session_subscriptions.session_id
+                  WHERE session_subscriptions.repo = pr_watchers.repo
+                    AND session_subscriptions.pr_number = pr_watchers.pr_number
+                    AND session_subscriptions.state = 'active'
+                    AND sessions.status != 'closed'
+                ) THEN :now
+                ELSE updated_at
+              END
+        `).run({ now });
+  }
+  migrate() {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS client_leases (
+        client_id TEXT PRIMARY KEY,
+        pid INTEGER NOT NULL,
+        project_root TEXT NOT NULL,
+        session_source TEXT,
+        expires_at INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS sessions (
+        session_id TEXT PRIMARY KEY,
+        host TEXT NOT NULL DEFAULT 'opencode' CHECK(host IN ('opencode', 'pi', 'claude')),
+        host_session_id TEXT NOT NULL,
+        client_id TEXT NOT NULL,
+        repo TEXT NOT NULL,
+        branch TEXT NOT NULL,
+        pr_number INTEGER,
+        is_primary INTEGER NOT NULL,
+        status TEXT NOT NULL,
+        busy_state TEXT NOT NULL,
+        last_delivered_event_seq INTEGER NOT NULL DEFAULT 0,
+        last_activity_at INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        UNIQUE(host, host_session_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS worktree_bindings (
+        session_id TEXT PRIMARY KEY,
+        root TEXT NOT NULL,
+        git_dir TEXT NOT NULL,
+        repo TEXT NOT NULL,
+        branch TEXT,
+        head_sha TEXT NOT NULL,
+        state TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        FOREIGN KEY(session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS session_subscriptions (
+        subscription_id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        repo TEXT NOT NULL,
+        pr_number INTEGER NOT NULL,
+        source TEXT NOT NULL CHECK(source IN ('automatic', 'manual')),
+        state TEXT NOT NULL CHECK(state IN ('active', 'unsubscribed')),
+        last_delivered_event_seq INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        UNIQUE(session_id, repo, pr_number),
+        FOREIGN KEY(session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS session_subscriptions_active_pr
+      ON session_subscriptions(repo, pr_number, state);
+
+      CREATE TABLE IF NOT EXISTS automatic_subscription_opt_outs (
+        session_id TEXT NOT NULL,
+        git_dir TEXT NOT NULL,
+        repo TEXT NOT NULL,
+        branch TEXT NOT NULL,
+        pr_number INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY(session_id, git_dir, repo, branch, pr_number),
+        FOREIGN KEY(session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS reminder_batches (
+        batch_id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        subscription_id TEXT UNIQUE,
+        reminder_text TEXT NOT NULL,
+        events_json TEXT NOT NULL,
+        state TEXT NOT NULL,
+        max_event_seq INTEGER,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        FOREIGN KEY(session_id) REFERENCES sessions(session_id) ON DELETE CASCADE,
+        FOREIGN KEY(subscription_id) REFERENCES session_subscriptions(subscription_id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS branch_watchers (
+        repo TEXT NOT NULL,
+        branch TEXT NOT NULL,
+        pr_number INTEGER,
+        last_checked_at INTEGER,
+        active_session_count INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY(repo, branch)
+      );
+
+      CREATE TABLE IF NOT EXISTS pr_watchers (
+        repo TEXT NOT NULL,
+        pr_number INTEGER NOT NULL,
+        last_checked_at INTEGER,
+        active_session_count INTEGER NOT NULL DEFAULT 0,
+        state TEXT NOT NULL DEFAULT 'stopped',
+        idle_deadline_at INTEGER,
+        terminal_at INTEGER,
+        next_eligible_poll_at INTEGER,
+        consecutive_failures INTEGER NOT NULL DEFAULT 0,
+        last_failure_at INTEGER,
+        last_failure_message TEXT,
+        rate_limit_reset_at INTEGER,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY(repo, pr_number)
+      );
+
+      CREATE TABLE IF NOT EXISTS pr_snapshots (
+        repo TEXT NOT NULL,
+        pr_number INTEGER NOT NULL,
+        head_sha TEXT NOT NULL,
+        snapshot_json TEXT NOT NULL,
+        fetched_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY(repo, pr_number)
+      );
+
+      CREATE TABLE IF NOT EXISTS pr_events (
+        seq INTEGER PRIMARY KEY AUTOINCREMENT,
+        repo TEXT NOT NULL,
+        pr_number INTEGER NOT NULL,
+        dedupe_key TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        priority TEXT NOT NULL,
+        summary TEXT NOT NULL,
+        reference_link TEXT,
+        payload_json TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        UNIQUE(repo, pr_number, dedupe_key)
+      );
+
+      CREATE TABLE IF NOT EXISTS etags (
+        scope TEXT NOT NULL,
+        key TEXT NOT NULL,
+        etag TEXT NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY(scope, key)
+      );
+
+      CREATE TABLE IF NOT EXISTS settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+    `);
+    const sessionColumns = this.db.prepare(`PRAGMA table_info(sessions)`).all();
+    if (!sessionColumns.some((column) => column.name === "last_delivered_event_seq")) {
+      this.db.exec(`ALTER TABLE sessions ADD COLUMN last_delivered_event_seq INTEGER NOT NULL DEFAULT 0`);
+    }
+    if (!sessionColumns.some((column) => column.name === "host")) {
+      this.db.exec(`ALTER TABLE sessions ADD COLUMN host TEXT NOT NULL DEFAULT 'opencode'`);
+    }
+    if (!sessionColumns.some((column) => column.name === "host_session_id")) {
+      this.db.exec(`ALTER TABLE sessions ADD COLUMN host_session_id TEXT`);
+    }
+    this.db.exec(`
+			UPDATE sessions
+			SET host = CASE WHEN client_id LIKE 'claude:%' THEN 'claude' ELSE host END,
+				host_session_id = COALESCE(NULLIF(host_session_id, ''), session_id);
+			CREATE UNIQUE INDEX IF NOT EXISTS sessions_host_session_id_unique
+			ON sessions(host, host_session_id);
+		`);
+    this.db.prepare(`INSERT OR IGNORE INTO session_subscriptions (subscription_id, session_id, repo, pr_number, source, state, last_delivered_event_seq, created_at, updated_at)
+				 SELECT 'legacy:' || session_id || ':' || repo || ':' || pr_number,
+				        session_id, repo, pr_number, 'automatic', 'active', last_delivered_event_seq, created_at, updated_at
+				 FROM sessions WHERE pr_number IS NOT NULL`).run();
+    const prWatcherColumns = this.db.prepare(`PRAGMA table_info(pr_watchers)`).all();
+    const hasPrWatcherColumn = (name) => prWatcherColumns.some((column) => column.name === name);
+    if (!hasPrWatcherColumn("state")) {
+      this.db.exec("ALTER TABLE pr_watchers ADD COLUMN state TEXT NOT NULL DEFAULT 'stopped'");
+    }
+    if (!hasPrWatcherColumn("idle_deadline_at")) {
+      this.db.exec("ALTER TABLE pr_watchers ADD COLUMN idle_deadline_at INTEGER");
+    }
+    if (!hasPrWatcherColumn("terminal_at")) {
+      this.db.exec("ALTER TABLE pr_watchers ADD COLUMN terminal_at INTEGER");
+    }
+    if (!hasPrWatcherColumn("next_eligible_poll_at")) {
+      this.db.exec("ALTER TABLE pr_watchers ADD COLUMN next_eligible_poll_at INTEGER");
+    }
+    if (!hasPrWatcherColumn("consecutive_failures")) {
+      this.db.exec("ALTER TABLE pr_watchers ADD COLUMN consecutive_failures INTEGER NOT NULL DEFAULT 0");
+    }
+    if (!hasPrWatcherColumn("last_failure_at")) {
+      this.db.exec("ALTER TABLE pr_watchers ADD COLUMN last_failure_at INTEGER");
+    }
+    if (!hasPrWatcherColumn("last_failure_message")) {
+      this.db.exec("ALTER TABLE pr_watchers ADD COLUMN last_failure_message TEXT");
+    }
+    if (!hasPrWatcherColumn("rate_limit_reset_at")) {
+      this.db.exec("ALTER TABLE pr_watchers ADD COLUMN rate_limit_reset_at INTEGER");
+    }
+    this.db.exec(`UPDATE pr_watchers
+			 SET state = 'warming_up'
+			 WHERE active_session_count > 0 AND state = 'stopped'`);
+    const reminderColumns = this.db.prepare(`PRAGMA table_info(reminder_batches)`).all();
+    if (!reminderColumns.some((column) => column.name === "max_event_seq")) {
+      this.db.exec(`ALTER TABLE reminder_batches ADD COLUMN max_event_seq INTEGER`);
+    }
+    if (!reminderColumns.some((column) => column.name === "subscription_id")) {
+      this.db.exec(`
+				CREATE TABLE reminder_batches_next (
+					batch_id TEXT PRIMARY KEY,
+					session_id TEXT NOT NULL,
+					subscription_id TEXT UNIQUE,
+					reminder_text TEXT NOT NULL,
+					events_json TEXT NOT NULL,
+					state TEXT NOT NULL,
+					max_event_seq INTEGER,
+					created_at INTEGER NOT NULL,
+					updated_at INTEGER NOT NULL,
+					FOREIGN KEY(session_id) REFERENCES sessions(session_id) ON DELETE CASCADE,
+					FOREIGN KEY(subscription_id) REFERENCES session_subscriptions(subscription_id) ON DELETE CASCADE
+				);
+				INSERT INTO reminder_batches_next (batch_id, session_id, subscription_id, reminder_text, events_json, state, max_event_seq, created_at, updated_at)
+				SELECT reminder_batches.batch_id, reminder_batches.session_id,
+				       session_subscriptions.subscription_id, reminder_batches.reminder_text,
+				       reminder_batches.events_json, reminder_batches.state, reminder_batches.max_event_seq,
+				       reminder_batches.created_at, reminder_batches.updated_at
+				FROM reminder_batches
+				LEFT JOIN sessions ON sessions.session_id = reminder_batches.session_id
+				LEFT JOIN session_subscriptions
+				  ON session_subscriptions.session_id = reminder_batches.session_id
+				 AND session_subscriptions.repo = sessions.repo
+				 AND session_subscriptions.pr_number = sessions.pr_number;
+				DROP TABLE reminder_batches;
+				ALTER TABLE reminder_batches_next RENAME TO reminder_batches;
+			`);
+    }
+    const prEventColumns = this.db.prepare(`PRAGMA table_info(pr_events)`).all();
+    if (prEventColumns.some((column) => column.name === "detail_file_path") && !prEventColumns.some((column) => column.name === "reference_link")) {
+      this.db.exec(`ALTER TABLE pr_events RENAME COLUMN detail_file_path TO reference_link`);
+    }
+    const prEventIndexes = this.db.prepare(`PRAGMA index_list(pr_events)`).all();
+    const hasScopedEventUniqueness = prEventIndexes.some((index) => {
+      if (index.unique !== 1)
+        return false;
+      const columns = this.db.prepare(`SELECT name FROM pragma_index_info(?) ORDER BY seqno`).all(index.name);
+      return columns.map((column) => column.name).join(",") === "repo,pr_number,dedupe_key";
+    });
+    if (!hasScopedEventUniqueness) {
+      const previousSequence = this.db.prepare(`SELECT seq FROM sqlite_sequence WHERE name = 'pr_events'`).get()?.seq;
+      this.transaction(() => {
+        this.db.exec(`
+					CREATE TABLE pr_events_next (
+						seq INTEGER PRIMARY KEY AUTOINCREMENT,
+						repo TEXT NOT NULL,
+						pr_number INTEGER NOT NULL,
+						dedupe_key TEXT NOT NULL,
+						kind TEXT NOT NULL,
+						priority TEXT NOT NULL,
+						summary TEXT NOT NULL,
+						reference_link TEXT,
+						payload_json TEXT NOT NULL,
+						created_at INTEGER NOT NULL,
+						UNIQUE(repo, pr_number, dedupe_key)
+					);
+					INSERT INTO pr_events_next
+						(seq, repo, pr_number, dedupe_key, kind, priority, summary, reference_link, payload_json, created_at)
+					SELECT seq, repo, pr_number, dedupe_key, kind, priority, summary, reference_link, payload_json, created_at
+					FROM pr_events ORDER BY seq;
+					DROP TABLE pr_events;
+					ALTER TABLE pr_events_next RENAME TO pr_events;
+				`);
+        if (previousSequence !== undefined) {
+          this.db.prepare(`DELETE FROM sqlite_sequence WHERE name = 'pr_events'`).run();
+          this.db.prepare(`INSERT INTO sqlite_sequence (name, seq) VALUES ('pr_events', ?)`).run(previousSequence);
+        }
+      });
+    }
+  }
+}
+
+// src/daemon/ipc/server.ts
+class IpcServer {
+  logger = createLogger("daemon.ipc");
+  store;
+  worktreeBindings;
+  reminderHandoffs;
+  router;
+  demandChangeListener = () => {};
+  server = net2.createServer((socket) => {
+    let buffer = "";
+    socket.setEncoding("utf8");
+    socket.on("data", (chunk) => {
+      buffer += chunk;
+      let newlineIndex = buffer.indexOf(`
+`);
+      while (newlineIndex >= 0) {
+        const line = buffer.slice(0, newlineIndex).trim();
+        buffer = buffer.slice(newlineIndex + 1);
+        if (line.length > 0) {
+          this.handleLine(line).then((response) => {
+            socket.write(`${JSON.stringify(response)}
+`);
+          });
+        }
+        newlineIndex = buffer.indexOf(`
+`);
+      }
+    });
+  });
+  constructor(store = new StateStore, worktreeBindings = new WorktreeBindingRegistry(store), reminderHandoffs = new ReminderHandoffRegistry(store)) {
+    this.store = store;
+    this.worktreeBindings = worktreeBindings;
+    this.reminderHandoffs = reminderHandoffs;
+    this.router = new Router(store, undefined, worktreeBindings, reminderHandoffs, () => this.demandChangeListener());
+  }
+  async listen(socketPath = PREMIND_SOCKET_PATH) {
+    if (fs4.existsSync(socketPath)) {
+      if (await isSocketReachable(socketPath)) {
+        throw new Error(`premind daemon already owns socket: ${socketPath}`);
+      }
+      fs4.rmSync(socketPath);
+    }
+    await new Promise((resolve, reject) => {
+      this.server.once("error", reject);
+      this.server.listen(socketPath, () => resolve());
+    });
+    this.logger.info("listening", { socketPath });
+  }
+  async close(socketPath = PREMIND_SOCKET_PATH) {
+    await new Promise((resolve, reject) => {
+      this.server.close((error) => {
+        if (error)
+          reject(error);
+        else
+          resolve();
+      });
+    });
+    if (fs4.existsSync(socketPath))
+      fs4.rmSync(socketPath);
+    this.reminderHandoffs.close();
+    this.worktreeBindings.close();
+    this.store.close();
+  }
+  setDemandChangeListener(listener) {
+    this.demandChangeListener = listener;
+  }
+  hasDemand(now = Date.now()) {
+    return this.router.hasDaemonDemand(now);
+  }
+  shouldShutdown(now = Date.now()) {
+    return !this.hasDemand(now);
+  }
+  async handleLine(line) {
+    try {
+      const request = requestSchema.parse(JSON.parse(line));
+      return await this.router.handle(request);
+    } catch (error) {
+      this.logger.warn("failed to handle request", {
+        error: error instanceof Error ? error.message : String(error)
+      });
+      return {
+        ok: false,
+        protocolVersion: 1,
+        error: {
+          code: "BAD_REQUEST",
+          message: error instanceof Error ? error.message : "Invalid request"
+        }
+      };
+    }
+  }
+}
+
+// src/daemon/github/http.ts
+import { execFile as execFile2 } from "node:child_process";
+import { promisify as promisify2 } from "node:util";
+
+// src/daemon/github/ratelimit.ts
+var parseIntHeader = (value) => {
+  if (value === null || value === undefined || value === "")
+    return null;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+var normalizeResource = (value) => {
+  const normalized = (value ?? "core").toLowerCase();
+  if (normalized === "graphql")
+    return "graphql";
+  if (normalized === "search")
+    return "search";
+  if (normalized === "core")
+    return "core";
+  return "other";
+};
+
+class RateLimitTracker {
+  logger = createLogger("daemon.github.ratelimit");
+  snapshots = new Map;
+  listeners = new Set;
+  throttleThreshold = 0.1;
+  ingest(headers, now = Date.now()) {
+    const limit = parseIntHeader(headers.get("x-ratelimit-limit"));
+    const remaining = parseIntHeader(headers.get("x-ratelimit-remaining"));
+    const resetSeconds = parseIntHeader(headers.get("x-ratelimit-reset"));
+    if (limit === null || remaining === null || resetSeconds === null)
+      return null;
+    const resource = normalizeResource(headers.get("x-ratelimit-resource"));
+    const snapshot = {
+      limit,
+      remaining,
+      resource,
+      resetAtMs: resetSeconds * 1000,
+      updatedAtMs: now
+    };
+    this.snapshots.set(resource, snapshot);
+    this.fanout(snapshot);
+    return snapshot;
+  }
+  recordRetryAfter(resource, retryAfterSeconds, now = Date.now()) {
+    const resetAtMs = now + Math.max(0, retryAfterSeconds) * 1000;
+    const existing = this.snapshots.get(resource);
+    const snapshot = {
+      limit: existing?.limit ?? 0,
+      remaining: 0,
+      resource,
+      resetAtMs,
+      updatedAtMs: now
+    };
+    this.snapshots.set(resource, snapshot);
+    this.logger.warn("retry-after observed", { resource, retryAfterSeconds, resetAtMs });
+    this.fanout(snapshot);
+  }
+  getSnapshot(resource) {
+    return this.snapshots.get(resource) ?? null;
+  }
+  isThrottled(resource, now = Date.now()) {
+    const snapshot = this.snapshots.get(resource);
+    if (!snapshot)
+      return false;
+    if (snapshot.resetAtMs <= now)
+      return false;
+    if (snapshot.limit <= 0)
+      return snapshot.remaining <= 0;
+    return snapshot.remaining <= Math.max(1, Math.floor(snapshot.limit * this.throttleThreshold));
+  }
+  resetAt(resource) {
+    return this.snapshots.get(resource)?.resetAtMs ?? null;
+  }
+  onUpdate(listener) {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+  fanout(snapshot) {
+    for (const listener of this.listeners) {
+      try {
+        listener(snapshot);
+      } catch (error) {
+        this.logger.warn("ratelimit listener failed", {
+          error: error instanceof Error ? error.message : String(error)
+        });
+      }
+    }
+  }
+}
+
+// src/daemon/github/http.ts
+var execFileAsync = promisify2(execFile2);
+var USER_AGENT = "premind-daemon";
+var GITHUB_API_BASE = "https://api.github.com";
+var DEFAULT_ACCEPT = "application/vnd.github+json";
+var API_VERSION = "2022-11-28";
+
+class GitHubHttpError extends Error {
+  status;
+  body;
+  retryAfterSeconds;
+  constructor(message, status, body, retryAfterSeconds) {
+    super(message);
+    this.status = status;
+    this.body = body;
+    this.retryAfterSeconds = retryAfterSeconds;
+    this.name = "GitHubHttpError";
+  }
+}
+var defaultTokenProvider = async () => {
+  const { stdout } = await execFileAsync("gh", ["auth", "token"]);
+  const token = stdout.trim();
+  if (!token)
+    throw new Error("gh auth token returned empty token");
+  return token;
+};
+
+class GitHubHttpClient {
+  logger = createLogger("daemon.github.http");
+  fetchImpl;
+  tokenProvider;
+  baseUrl;
+  rateLimit;
+  cachedToken = null;
+  constructor(options = {}) {
+    this.fetchImpl = options.fetchImpl ?? fetch;
+    this.tokenProvider = options.tokenProvider ?? defaultTokenProvider;
+    this.baseUrl = options.baseUrl ?? GITHUB_API_BASE;
+    this.rateLimit = options.rateLimit ?? new RateLimitTracker;
+  }
+  invalidateToken() {
+    this.cachedToken = null;
+  }
+  async get(path5, options = {}) {
+    const url = this.resolveUrl(path5);
+    const headers = await this.buildHeaders(options.headers);
+    if (options.etag)
+      headers["If-None-Match"] = options.etag;
+    const response = await this.fetchImpl(url, { method: "GET", headers });
+    this.ingestRateLimit(response);
+    const etag = response.headers.get("etag");
+    if (response.status === 304) {
+      return { kind: "not_modified", status: 304, etag, headers: response.headers };
+    }
+    if (!response.ok) {
+      await this.throwForResponse(response);
+    }
+    const data = await response.json();
+    return { kind: "ok", status: response.status, data, etag, headers: response.headers };
+  }
+  async graphql(query, variables, options = {}) {
+    const url = this.resolveUrl("graphql");
+    const headers = await this.buildHeaders({ "Content-Type": "application/json", ...options.headers });
+    if (options.etag)
+      headers["If-None-Match"] = options.etag;
+    const response = await this.fetchImpl(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ query, variables })
+    });
+    this.ingestRateLimit(response);
+    const etag = response.headers.get("etag");
+    if (response.status === 304) {
+      return { kind: "not_modified", status: 304, etag, headers: response.headers };
+    }
+    if (!response.ok) {
+      await this.throwForResponse(response);
+    }
+    const payload = await response.json();
+    if (payload.errors && payload.errors.length > 0) {
+      const message = payload.errors.map((error) => error.message).join("; ");
+      throw new GitHubHttpError(`GraphQL error: ${message}`, response.status, JSON.stringify(payload.errors), null);
+    }
+    if (payload.data === undefined) {
+      throw new GitHubHttpError("GraphQL response missing data", response.status, "", null);
+    }
+    return { kind: "ok", status: response.status, data: payload.data, etag, headers: response.headers };
+  }
+  resolveUrl(path5) {
+    if (path5.startsWith("http://") || path5.startsWith("https://"))
+      return path5;
+    const normalized = path5.startsWith("/") ? path5.slice(1) : path5;
+    return `${this.baseUrl}/${normalized}`;
+  }
+  async buildHeaders(extra) {
+    const token = await this.getToken();
+    return {
+      Accept: DEFAULT_ACCEPT,
+      "User-Agent": USER_AGENT,
+      "X-GitHub-Api-Version": API_VERSION,
+      Authorization: `Bearer ${token}`,
+      ...extra ?? {}
+    };
+  }
+  async getToken() {
+    if (this.cachedToken)
+      return this.cachedToken;
+    this.cachedToken = await this.tokenProvider();
+    return this.cachedToken;
+  }
+  ingestRateLimit(response) {
+    this.rateLimit.ingest(response.headers);
+  }
+  async throwForResponse(response) {
+    const body = await response.text().catch(() => "");
+    const retryAfterRaw = response.headers.get("retry-after");
+    const retryAfterSeconds = retryAfterRaw === null ? null : Number.parseInt(retryAfterRaw, 10);
+    const resource = inferResource(response);
+    if ((response.status === 403 || response.status === 429) && Number.isFinite(retryAfterSeconds)) {
+      this.rateLimit.recordRetryAfter(resource, retryAfterSeconds);
+    }
+    if (response.status === 401) {
+      this.invalidateToken();
+    }
+    this.logger.warn("github http error", {
+      status: response.status,
+      resource,
+      retryAfterSeconds: retryAfterRaw,
+      snippet: body.slice(0, 200)
+    });
+    throw new GitHubHttpError(`GitHub request failed with status ${response.status}`, response.status, body, Number.isFinite(retryAfterSeconds) ? retryAfterSeconds : null);
+  }
+}
+var inferResource = (response) => {
+  const resource = response.headers.get("x-ratelimit-resource");
+  if (resource === "graphql")
+    return "graphql";
+  if (resource === "search")
+    return "search";
+  if (resource === "core")
+    return "core";
+  return "other";
+};
+
+// src/daemon/github/graphql.ts
+var PR_SNAPSHOT_QUERY = `
+  query PullRequestSnapshot($owner: String!, $repo: String!, $number: Int!) {
+    repository(owner: $owner, name: $repo) {
+      pullRequest(number: $number) {
+        number
+        title
+        url
+        state
+        isDraft
+        headRefName
+        baseRefName
+        headRefOid
+        mergeStateStatus
+        reviewDecision
+        updatedAt
+        reviewRequests(first: 50) {
+          nodes {
+            requestedReviewer {
+              __typename
+              ... on User { login }
+              ... on Team { slug }
+              ... on Mannequin { login }
+            }
+          }
+        }
+        reviews(last: 100) {
+          nodes {
+            databaseId
+            state
+            body
+            submittedAt
+            authorAssociation
+            author { login }
+          }
+        }
+        comments(last: 100) {
+          nodes {
+            databaseId
+            body
+            createdAt
+            updatedAt
+            author { login }
+          }
+        }
+        reviewThreads(last: 100) {
+          nodes {
+            comments(first: 50) {
+              nodes {
+                databaseId
+                body
+                createdAt
+                updatedAt
+                path
+                line
+                originalLine
+                author { login }
+              }
+            }
+          }
+        }
+        commits(last: 1) {
+          nodes {
+            commit {
+              statusCheckRollup {
+                contexts(first: 100) {
+                  nodes {
+                    __typename
+                    ... on CheckRun {
+                      name
+                      status
+                      conclusion
+                      detailsUrl
+                      checkSuite {
+                        workflowRun { event workflow { name } }
+                      }
+                    }
+                    ... on StatusContext {
+                      context
+                      state
+                      targetUrl
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+var nonNull = (value) => value !== null && value !== undefined;
+var extractReviewerLogin = (node) => {
+  const requested = node?.requestedReviewer;
+  if (!requested)
+    return null;
+  if (requested.__typename === "Team") {
+    const team = requested;
+    return team.slug ? `team:${team.slug}` : null;
+  }
+  const user = requested;
+  return user.login ?? null;
+};
+var mapCheckRunState = (status, conclusion) => {
+  const s = (status ?? "").toUpperCase();
+  const c = (conclusion ?? "").toUpperCase();
+  if (s === "COMPLETED") {
+    if (c === "SUCCESS")
+      return "pass";
+    if (c === "FAILURE" || c === "TIMED_OUT" || c === "STARTUP_FAILURE")
+      return "fail";
+    if (c === "CANCELLED")
+      return "cancelled";
+    if (c === "SKIPPED")
+      return "skipping";
+    if (c === "NEUTRAL")
+      return "neutral";
+    if (c === "ACTION_REQUIRED")
+      return "action_required";
+    return c.toLowerCase() || "pass";
+  }
+  if (s === "IN_PROGRESS")
+    return "in_progress";
+  if (s === "QUEUED" || s === "PENDING" || s === "REQUESTED" || s === "WAITING")
+    return "pending";
+  return s.toLowerCase() || "pending";
+};
+var mapStatusContextState = (state) => {
+  const s = (state ?? "").toUpperCase();
+  if (s === "SUCCESS")
+    return "pass";
+  if (s === "FAILURE" || s === "ERROR")
+    return "fail";
+  if (s === "PENDING" || s === "EXPECTED")
+    return "pending";
+  return s.toLowerCase() || "pending";
+};
+var toCheck = (node) => {
+  if (!node)
+    return null;
+  if (node.__typename === "CheckRun") {
+    const run = node;
+    return {
+      name: run.name ?? "",
+      state: mapCheckRunState(run.status, run.conclusion),
+      link: run.detailsUrl ?? undefined,
+      event: run.checkSuite?.workflowRun?.event ?? undefined,
+      workflow: run.checkSuite?.workflowRun?.workflow?.name ?? undefined
+    };
+  }
+  if (node.__typename === "StatusContext") {
+    const context = node;
+    return {
+      name: context.context ?? "",
+      state: mapStatusContextState(context.state),
+      link: context.targetUrl ?? undefined
+    };
+  }
+  return null;
+};
+var toReview = (node) => {
+  if (!node || node.databaseId === null || node.databaseId === undefined)
+    return null;
+  return {
+    id: node.databaseId,
+    state: node.state ?? undefined,
+    body: node.body ?? null,
+    submitted_at: node.submittedAt ?? undefined,
+    authorAssociation: node.authorAssociation ?? undefined,
+    user: node.author?.login ? { login: node.author.login } : undefined
+  };
+};
+var toIssueComment = (node) => {
+  if (!node || node.databaseId === null || node.databaseId === undefined)
+    return null;
+  return {
+    id: node.databaseId,
+    body: node.body ?? null,
+    created_at: node.createdAt ?? undefined,
+    updated_at: node.updatedAt ?? undefined,
+    user: node.author?.login ? { login: node.author.login } : undefined
+  };
+};
+var toReviewComment = (node) => {
+  if (!node || node.databaseId === null || node.databaseId === undefined)
+    return null;
+  return {
+    id: node.databaseId,
+    body: node.body ?? null,
+    created_at: node.createdAt ?? undefined,
+    updated_at: node.updatedAt ?? undefined,
+    path: node.path ?? undefined,
+    line: node.line ?? node.originalLine ?? null,
+    user: node.author?.login ? { login: node.author.login } : undefined
+  };
+};
+async function fetchPullRequestSnapshotGraphQL(http, repo, prNumber, options = {}) {
+  const [owner, name] = repo.split("/");
+  if (!owner || !name)
+    throw new Error(`Invalid repo: ${repo}`);
+  const response = await http.graphql(PR_SNAPSHOT_QUERY, { owner, repo: name, number: prNumber }, { etag: options.previousEtag ?? undefined });
+  if (response.kind === "not_modified") {
+    return { kind: "not_modified", etag: response.etag };
+  }
+  const pr = response.data.repository?.pullRequest;
+  if (!pr)
+    return { kind: "not_found" };
+  const reviewRequests = (pr.reviewRequests.nodes ?? []).map((node) => extractReviewerLogin(node)).filter(nonNull).map((login) => ({ login }));
+  const reviews = (pr.reviews.nodes ?? []).map(toReview).filter(nonNull);
+  const issueComments = (pr.comments.nodes ?? []).map(toIssueComment).filter(nonNull);
+  const reviewComments = (pr.reviewThreads.nodes ?? []).flatMap((thread) => thread.comments.nodes ?? []).map(toReviewComment).filter(nonNull);
+  const contexts = pr.commits.nodes[0]?.commit.statusCheckRollup?.contexts.nodes ?? [];
+  const checks = contexts.map(toCheck).filter(nonNull);
+  const core = {
+    number: pr.number,
+    title: pr.title,
+    url: pr.url,
+    state: pr.state,
+    isDraft: pr.isDraft,
+    headRefName: pr.headRefName,
+    baseRefName: pr.baseRefName,
+    headRefOid: pr.headRefOid,
+    mergeStateStatus: pr.mergeStateStatus ?? undefined,
+    reviewDecision: pr.reviewDecision ?? null,
+    updatedAt: pr.updatedAt ?? undefined,
+    reviewRequests
+  };
+  const nowFn = options.now ?? Date.now;
+  const snapshot = {
+    core,
+    reviews,
+    issueComments,
+    reviewComments,
+    checks,
+    fetchedAt: nowFn()
+  };
+  return { kind: "ok", snapshot, etag: response.etag };
+}
+
+// src/daemon/github/client.ts
+class GitHubClient {
+  http;
+  rateLimit;
+  viewerLogin = null;
+  constructor(options = {}) {
+    this.http = options.http ?? new GitHubHttpClient;
+    this.rateLimit = this.http.rateLimit;
+  }
+  async getViewerLogin() {
+    this.viewerLogin ??= this.http.get("user").then((response) => response.kind === "ok" ? response.data.login ?? null : null).catch((error) => {
+      this.viewerLogin = null;
+      throw error;
+    });
+    return this.viewerLogin;
+  }
+  async findOpenPullRequestForBranch(repo, branch, context = {}) {
+    const [owner] = repo.split("/");
+    if (!owner || !branch || branch === "HEAD" || branch === "unknown") {
+      return { kind: "ok", pr: null, etag: null };
+    }
+    const path5 = `repos/${repo}/pulls?head=${encodeURIComponent(`${owner}:${branch}`)}&state=open&per_page=1`;
+    const response = await this.http.get(path5, {
+      etag: context.etag ?? undefined
+    });
+    if (response.kind === "not_modified") {
+      return { kind: "not_modified", etag: response.etag };
+    }
+    const first = response.data[0];
+    if (!first)
+      return { kind: "ok", pr: null, etag: response.etag };
+    return {
+      kind: "ok",
+      pr: {
+        number: first.number,
+        title: first.title,
+        url: first.html_url,
+        draft: first.draft,
+        state: first.state,
+        authorLogin: first.user?.login ?? null
+      },
+      etag: response.etag
+    };
+  }
+  async fetchPullRequestSnapshot(repo, prNumber, context = {}) {
+    return fetchPullRequestSnapshotGraphQL(this.http, repo, prNumber, {
+      previousEtag: context.etag ?? null
+    });
+  }
+}
+
+// src/daemon/watchers/branch-discovery.ts
+var BRANCH_PULLS_ETAG_SCOPE = "branch.pulls.author-gate.v1";
+var etagKey = (repo, branch) => `${repo}#${branch}`;
+
+class BranchDiscoveryWatcher {
+  store;
+  github;
+  worktreeBindings;
+  logger = createLogger("daemon.branch-discovery");
+  constructor(store, github, worktreeBindings = new WorktreeBindingRegistry(store)) {
+    this.store = store;
+    this.github = github;
+    this.worktreeBindings = worktreeBindings;
+  }
+  async tick(now = Date.now()) {
+    const targetsByBranch = new Map;
+    for (const target of this.store.listActiveWorktreeBranchTargets(now)) {
+      const key = etagKey(target.repo, target.branch);
+      const targets = targetsByBranch.get(key);
+      if (targets)
+        targets.push(target);
+      else
+        targetsByBranch.set(key, [target]);
+    }
+    if (targetsByBranch.size === 0)
+      return;
+    let viewerLogin;
+    try {
+      viewerLogin = await this.github.getViewerLogin();
+    } catch (error) {
+      this.store.suspendAutomaticSubscriptions(now);
+      this.logger.warn("unable to identify authenticated GitHub user; skipping automatic PR discovery", {
+        error: error instanceof Error ? error.message : String(error)
+      });
+      return;
+    }
+    if (!viewerLogin) {
+      this.store.suspendAutomaticSubscriptions(now);
+      this.logger.warn("authenticated GitHub user has no login; skipping automatic PR discovery");
+      return;
+    }
+    for (const targets of targetsByBranch.values()) {
+      const target = targets[0];
+      try {
+        const cachedEtag = this.store.getEtag(BRANCH_PULLS_ETAG_SCOPE, etagKey(target.repo, target.branch));
+        const result = await this.github.findOpenPullRequestForBranch(target.repo, target.branch, {
+          etag: cachedEtag
+        });
+        if (result.kind === "not_modified") {
+          if (result.etag && result.etag !== cachedEtag) {
+            this.store.saveEtag(BRANCH_PULLS_ETAG_SCOPE, etagKey(target.repo, target.branch), result.etag, now);
+          }
+          continue;
+        }
+        if (result.etag !== null) {
+          this.store.saveEtag(BRANCH_PULLS_ETAG_SCOPE, etagKey(target.repo, target.branch), result.etag, now);
+        }
+        const pr = result.pr;
+        if (pr && pr.authorLogin?.toLowerCase() !== viewerLogin.toLowerCase()) {
+          this.logger.info("automatic PR watch disabled for a foreign-authored PR", {
+            repo: target.repo,
+            branch: target.branch,
+            prNumber: pr.number,
+            authorLogin: pr.authorLogin,
+            viewerLogin
+          });
+          for (const binding of targets) {
+            if (binding.git_dir === "") {
+              this.store.rejectAutomaticPullRequest(binding.session_id, binding.repo, pr.number, now);
+            } else {
+              this.worktreeBindings.pullRequestNotOwned(binding.session_id, { repo: binding.repo, prNumber: pr.number }, now);
+            }
+          }
+          continue;
+        }
+        if (pr && target.pr_number !== null && pr.number !== target.pr_number) {
+          const previousState = this.store.getSnapshot(target.repo, target.pr_number)?.core.state;
+          if (previousState !== "MERGED" && previousState !== "CLOSED") {
+            this.logger.info("deferring branch reassociation until prior PR reaches a terminal state", {
+              repo: target.repo,
+              branch: target.branch,
+              previousPrNumber: target.pr_number,
+              nextPrNumber: pr.number,
+              previousState: previousState ?? null
+            });
+            continue;
+          }
+        }
+        this.store.recordBranchAssociation(target.repo, target.branch, pr?.number ?? target.pr_number, now);
+        if (!pr) {
+          for (const binding of targets) {
+            if (binding.git_dir !== "") {
+              this.worktreeBindings.pullRequestNotFound(binding.session_id, now);
+            }
+          }
+          continue;
+        }
+        for (const binding of targets) {
+          if (binding.git_dir !== "") {
+            this.worktreeBindings.pullRequestFound(binding.session_id, { repo: binding.repo, prNumber: pr.number }, now);
+          }
+        }
+        this.store.insertEvents(target.repo, pr.number, [
+          {
+            dedupeKey: `pr.discovered:${target.repo}:${target.branch}:${pr.number}`,
+            kind: "pr.discovered",
+            priority: "medium",
+            summary: `Discovered open PR ${target.repo}#${pr.number}: ${pr.title}`,
+            referenceLink: pr.url,
+            payload: {
+              repo: target.repo,
+              branch: target.branch,
+              prNumber: pr.number,
+              title: pr.title,
+              url: pr.url
+            }
+          }
+        ], now);
+      } catch (error) {
+        this.logger.warn("branch discovery failed", {
+          repo: target.repo,
+          branch: target.branch,
+          error: error instanceof Error ? error.message : String(error)
+        });
+      }
+    }
+  }
+}
+
+// src/daemon/github/diff.ts
+var stableMergeStateStatus = (state) => {
+  const normalized = (state ?? "").toUpperCase();
+  return normalized && normalized !== "UNKNOWN" ? normalized : undefined;
+};
+var compact = (value, max = 160) => {
+  const text = (value ?? "").replace(/\s+/g, " ").trim();
+  if (!text)
+    return "";
+  if (text.length <= max)
+    return text;
+  return `${text.slice(0, max - 3)}...`;
+};
+var checkKind = (state) => {
+  const normalized = (state ?? "").toLowerCase();
+  if (["pass", "success", "succeeded"].includes(normalized))
+    return "check.succeeded";
+  if (["fail", "failed", "failure"].includes(normalized))
+    return "check.failed";
+  if (["cancelled", "canceled"].includes(normalized))
+    return "check.cancelled";
+  if (["pending", "queued"].includes(normalized))
+    return "check.queued";
+  if (["running", "in_progress"].includes(normalized))
+    return "check.in_progress";
+  return "check.created";
+};
+var checkPriority = (kind) => {
+  if (kind === "check.failed")
+    return "high";
+  if (kind === "check.succeeded")
+    return "medium";
+  return "low";
+};
+var checkSummary = (check, kind) => {
+  const name = check.name || "unnamed check";
+  if (kind === "check.failed")
+    return `Check failed: ${name}`;
+  if (kind === "check.succeeded")
+    return `Check passed: ${name}`;
+  if (kind === "check.cancelled")
+    return `Check cancelled: ${name}`;
+  if (kind === "check.in_progress")
+    return `Check started: ${name}`;
+  if (kind === "check.queued")
+    return `Check queued: ${name}`;
+  return `New check detected: ${name}`;
+};
+var wasEdited = (previousBody, nextBody, previousUpdatedAt, nextUpdatedAt) => {
+  const prev = (previousBody ?? "").trim();
+  const next = (nextBody ?? "").trim();
+  return prev !== next || (previousUpdatedAt ?? "") !== (nextUpdatedAt ?? "");
+};
+var groupKinds = new Set([
+  "check.created",
+  "check.queued",
+  "check.in_progress",
+  "check.succeeded",
+  "check.failed",
+  "check.cancelled",
+  "issue_comment.created",
+  "issue_comment.edited",
+  "issue_comment.deleted",
+  "review_comment.created",
+  "review_comment.edited",
+  "review_comment.deleted"
+]);
+var mergedEvent = (next, previousState) => ({
+  dedupeKey: `pr.merged:${next.core.url}`,
+  kind: "pr.merged",
+  priority: "high",
+  summary: `Branch ${next.core.headRefName} was merged via PR #${next.core.number}: ${next.core.title}`,
+  referenceLink: next.core.url,
+  payload: {
+    prNumber: next.core.number,
+    title: next.core.title,
+    url: next.core.url,
+    branch: next.core.headRefName,
+    baseBranch: next.core.baseRefName,
+    headSha: next.core.headRefOid,
+    previousState,
+    state: next.core.state
+  }
+});
+var closedEvent = (next) => ({
+  dedupeKey: `pr.closed:${next.core.url}`,
+  kind: "pr.closed",
+  priority: "high",
+  summary: `PR #${next.core.number} was closed without merging: ${next.core.title}`,
+  referenceLink: next.core.url,
+  payload: {
+    prNumber: next.core.number,
+    title: next.core.title,
+    url: next.core.url,
+    branch: next.core.headRefName,
+    baseBranch: next.core.baseRefName,
+    headSha: next.core.headRefOid,
+    previousState: "OPEN",
+    state: next.core.state
+  }
+});
+var sampleSummaries = (bucket, max = 2) => bucket.slice(0, max).map((event) => event.summary);
+function diffSnapshot(previous, next) {
+  if (!previous) {
+    const failingChecks = next.checks.filter((check) => checkKind(check.state) === "check.failed").map((check) => check.name || "unnamed check");
+    const mergeState2 = (next.core.mergeStateStatus ?? "").toUpperCase();
+    const hasMergeConflict = mergeState2 === "DIRTY";
+    const changesRequested = next.core.reviewDecision === "CHANGES_REQUESTED";
+    const blockers = [];
+    if (hasMergeConflict)
+      blockers.push("merge conflicts present");
+    if (failingChecks.length > 0) {
+      blockers.push(`${failingChecks.length} check${failingChecks.length === 1 ? "" : "s"} failing (${failingChecks.join(", ")})`);
+    }
+    if (changesRequested)
+      blockers.push("changes requested");
+    const baseSummary = `Started tracking ${next.core.number}: ${next.core.title}`;
+    const summary = blockers.length > 0 ? `${baseSummary} — ${blockers.join("; ")}` : baseSummary;
+    return [
+      ...next.core.state === "MERGED" ? [
+        mergedEvent(next, null)
+      ] : [],
+      {
+        dedupeKey: `pr.snapshot.initial:${next.core.number}:${next.core.headRefOid}`,
+        kind: "pr.snapshot.initialized",
+        priority: blockers.length > 0 ? "high" : "low",
+        summary,
+        referenceLink: next.core.url,
+        payload: {
+          prNumber: next.core.number,
+          headSha: next.core.headRefOid,
+          reviewDecision: next.core.reviewDecision ?? null,
+          mergeStateStatus: next.core.mergeStateStatus ?? null,
+          hasMergeConflict,
+          failingChecks,
+          changesRequested
+        }
+      }
+    ];
+  }
+  const events = [];
+  if (previous.core.state !== "MERGED" && next.core.state === "MERGED") {
+    events.push(mergedEvent(next, previous.core.state));
+  }
+  if (previous.core.state.toUpperCase() === "OPEN" && next.core.state.toUpperCase() === "CLOSED") {
+    events.push(closedEvent(next));
+  }
+  if (previous.core.isDraft && !next.core.isDraft) {
+    events.push({
+      dedupeKey: `pr.ready_for_review:${next.core.number}:${next.core.headRefOid}`,
+      kind: "pr.ready_for_review",
+      priority: "high",
+      summary: `PR is ready for review: ${next.core.title}`,
+      referenceLink: next.core.url,
+      payload: { prNumber: next.core.number }
+    });
+  }
+  if (!previous.core.isDraft && next.core.isDraft) {
+    events.push({
+      dedupeKey: `pr.converted_to_draft:${next.core.number}:${next.core.headRefOid}`,
+      kind: "pr.converted_to_draft",
+      priority: "medium",
+      summary: `PR moved back to draft: ${next.core.title}`,
+      referenceLink: next.core.url,
+      payload: { prNumber: next.core.number }
+    });
+  }
+  if (previous.core.headRefOid !== next.core.headRefOid) {
+    events.push({
+      dedupeKey: `pr.synchronized:${next.core.number}:${next.core.headRefOid}`,
+      kind: "pr.synchronized",
+      priority: "medium",
+      summary: `New commits pushed to PR #${next.core.number}`,
+      referenceLink: next.core.url,
+      payload: { previousHeadSha: previous.core.headRefOid, headSha: next.core.headRefOid }
+    });
+  }
+  const previousStableMergeState = previous.core.lastStableMergeStateStatus ?? stableMergeStateStatus(previous.core.mergeStateStatus);
+  const nextStableMergeState = stableMergeStateStatus(next.core.mergeStateStatus);
+  if (previousStableMergeState !== undefined && nextStableMergeState !== undefined && previousStableMergeState !== nextStableMergeState) {
+    if (nextStableMergeState === "DIRTY") {
+      events.push({
+        dedupeKey: `merge_conflict.detected:${next.core.number}:${next.core.headRefOid}`,
+        kind: "merge_conflict.detected",
+        priority: "high",
+        summary: `Merge conflicts detected for PR #${next.core.number}`,
+        referenceLink: next.core.url,
+        payload: { mergeStateStatus: next.core.mergeStateStatus ?? null }
+      });
+    }
+    if (nextStableMergeState === "CLEAN") {
+      events.push({
+        dedupeKey: `merge_conflict.cleared:${next.core.number}:${next.core.headRefOid}`,
+        kind: "merge_conflict.cleared",
+        priority: "medium",
+        summary: `Merge conflicts cleared for PR #${next.core.number}`,
+        referenceLink: next.core.url,
+        payload: { mergeStateStatus: next.core.mergeStateStatus ?? null }
+      });
+    }
+  }
+  if (previous.core.reviewDecision !== next.core.reviewDecision) {
+    const nextDecision = next.core.reviewDecision;
+    if (nextDecision === "APPROVED") {
+      events.push({
+        dedupeKey: `pr.review_decision.approved:${next.core.number}:${next.core.headRefOid}`,
+        kind: "pr.review_decision.approved",
+        priority: "high",
+        summary: `PR review decision is now approved for #${next.core.number}`,
+        referenceLink: next.core.url,
+        payload: { reviewDecision: nextDecision }
+      });
+    } else if (nextDecision === "CHANGES_REQUESTED") {
+      events.push({
+        dedupeKey: `pr.review_decision.changes_requested:${next.core.number}:${next.core.headRefOid}`,
+        kind: "pr.review_decision.changes_requested",
+        priority: "high",
+        summary: `PR review decision now requests changes for #${next.core.number}`,
+        referenceLink: next.core.url,
+        payload: { reviewDecision: nextDecision }
+      });
+    } else if (nextDecision === "REVIEW_REQUIRED") {
+      events.push({
+        dedupeKey: `pr.review_decision.review_required:${next.core.number}:${next.core.headRefOid}`,
+        kind: "pr.review_decision.review_required",
+        priority: "medium",
+        summary: `PR review decision now requires review for #${next.core.number}`,
+        referenceLink: next.core.url,
+        payload: { reviewDecision: nextDecision }
+      });
+    }
+  }
+  const previousReviewRequests = new Set((previous.core.reviewRequests ?? []).map((request) => request.login));
+  const nextReviewRequests = new Set((next.core.reviewRequests ?? []).map((request) => request.login));
+  for (const reviewer of nextReviewRequests) {
+    if (previousReviewRequests.has(reviewer))
+      continue;
+    events.push({
+      dedupeKey: `reviewer.requested:${reviewer}:${next.core.headRefOid}`,
+      kind: "reviewer.requested",
+      priority: "high",
+      summary: `Reviewer requested: ${reviewer}`,
+      referenceLink: next.core.url,
+      payload: { reviewer }
+    });
+  }
+  for (const reviewer of previousReviewRequests) {
+    if (nextReviewRequests.has(reviewer))
+      continue;
+    events.push({
+      dedupeKey: `reviewer.removed:${reviewer}:${next.core.headRefOid}`,
+      kind: "reviewer.removed",
+      priority: "medium",
+      summary: `Reviewer removed: ${reviewer}`,
+      referenceLink: next.core.url,
+      payload: { reviewer }
+    });
+  }
+  const previousReviewIds = new Set(previous.reviews.map((review) => review.id));
+  for (const review of next.reviews) {
+    if (previousReviewIds.has(review.id))
+      continue;
+    const state = (review.state ?? "COMMENTED").toUpperCase();
+    const user = review.user?.login ?? "unknown";
+    const kind = state === "APPROVED" ? "review.approved" : state === "CHANGES_REQUESTED" ? "review.changes_requested" : state === "DISMISSED" ? "review.dismissed" : "review.commented";
+    events.push({
+      dedupeKey: `${kind}:${review.id}`,
+      kind,
+      priority: kind === "review.changes_requested" || kind === "review.approved" ? "high" : "medium",
+      summary: `${user} ${kind.replace("review.", "").replaceAll("_", " ")}${compact(review.body) ? `: ${compact(review.body)}` : ""}`,
+      referenceLink: next.core.url,
+      payload: {
+        reviewId: review.id,
+        user,
+        state,
+        body: review.body ?? null
+      }
+    });
+  }
+  const previousIssueCommentIds = new Set(previous.issueComments.map((comment) => comment.id));
+  const previousIssueComments = new Map(previous.issueComments.map((comment) => [comment.id, comment]));
+  const nextIssueCommentIds = new Set(next.issueComments.map((comment) => comment.id));
+  for (const comment of next.issueComments) {
+    const previousComment = previousIssueComments.get(comment.id);
+    if (previousComment) {
+      if (wasEdited(previousComment.body, comment.body, previousComment.updated_at, comment.updated_at)) {
+        const user2 = comment.user?.login ?? previousComment.user?.login ?? "unknown";
+        events.push({
+          dedupeKey: `issue_comment.edited:${comment.id}:${comment.updated_at ?? "unknown"}`,
+          kind: "issue_comment.edited",
+          priority: "medium",
+          summary: `Issue comment edited by ${user2}${compact(comment.body) ? `: ${compact(comment.body)}` : ""}`,
+          referenceLink: next.core.url,
+          payload: {
+            commentId: comment.id,
+            user: user2,
+            previousBody: previousComment.body ?? null,
+            body: comment.body ?? null,
+            updatedAt: comment.updated_at ?? null
+          }
+        });
+      }
+      continue;
+    }
+    if (previousIssueCommentIds.has(comment.id))
+      continue;
+    const user = comment.user?.login ?? "unknown";
+    events.push({
+      dedupeKey: `issue_comment.created:${comment.id}`,
+      kind: "issue_comment.created",
+      priority: "high",
+      summary: `New issue comment from ${user}${compact(comment.body) ? `: ${compact(comment.body)}` : ""}`,
+      referenceLink: next.core.url,
+      payload: {
+        commentId: comment.id,
+        user,
+        body: comment.body ?? null
+      }
+    });
+  }
+  for (const previousComment of previous.issueComments) {
+    if (nextIssueCommentIds.has(previousComment.id))
+      continue;
+    const user = previousComment.user?.login ?? "unknown";
+    events.push({
+      dedupeKey: `issue_comment.deleted:${previousComment.id}:${next.core.headRefOid}`,
+      kind: "issue_comment.deleted",
+      priority: "medium",
+      summary: `Issue comment deleted by ${user}${compact(previousComment.body) ? `: ${compact(previousComment.body)}` : ""}`,
+      referenceLink: next.core.url,
+      payload: {
+        commentId: previousComment.id,
+        user,
+        previousBody: previousComment.body ?? null
+      }
+    });
+  }
+  const previousReviewCommentIds = new Set(previous.reviewComments.map((comment) => comment.id));
+  const previousReviewComments = new Map(previous.reviewComments.map((comment) => [comment.id, comment]));
+  const nextReviewCommentIds = new Set(next.reviewComments.map((comment) => comment.id));
+  for (const comment of next.reviewComments) {
+    const previousComment = previousReviewComments.get(comment.id);
+    if (previousComment) {
+      if (wasEdited(previousComment.body, comment.body, previousComment.updated_at, comment.updated_at)) {
+        const user2 = comment.user?.login ?? previousComment.user?.login ?? "unknown";
+        const location2 = comment.path ? ` on ${comment.path}${comment.line ? `:${comment.line}` : ""}` : "";
+        events.push({
+          dedupeKey: `review_comment.edited:${comment.id}:${comment.updated_at ?? "unknown"}`,
+          kind: "review_comment.edited",
+          priority: "medium",
+          summary: `Review comment edited by ${user2}${location2}${compact(comment.body) ? `: ${compact(comment.body)}` : ""}`,
+          referenceLink: next.core.url,
+          payload: {
+            commentId: comment.id,
+            user: user2,
+            previousBody: previousComment.body ?? null,
+            body: comment.body ?? null,
+            path: comment.path ?? null,
+            line: comment.line ?? null,
+            updatedAt: comment.updated_at ?? null
+          }
+        });
+      }
+      continue;
+    }
+    if (previousReviewCommentIds.has(comment.id))
+      continue;
+    const user = comment.user?.login ?? "unknown";
+    const location = comment.path ? ` on ${comment.path}${comment.line ? `:${comment.line}` : ""}` : "";
+    events.push({
+      dedupeKey: `review_comment.created:${comment.id}`,
+      kind: "review_comment.created",
+      priority: "high",
+      summary: `New review comment from ${user}${location}${compact(comment.body) ? `: ${compact(comment.body)}` : ""}`,
+      referenceLink: next.core.url,
+      payload: {
+        commentId: comment.id,
+        user,
+        body: comment.body ?? null,
+        path: comment.path ?? null,
+        line: comment.line ?? null
+      }
+    });
+  }
+  for (const previousComment of previous.reviewComments) {
+    if (nextReviewCommentIds.has(previousComment.id))
+      continue;
+    const user = previousComment.user?.login ?? "unknown";
+    const location = previousComment.path ? ` on ${previousComment.path}${previousComment.line ? `:${previousComment.line}` : ""}` : "";
+    events.push({
+      dedupeKey: `review_comment.deleted:${previousComment.id}:${next.core.headRefOid}`,
+      kind: "review_comment.deleted",
+      priority: "medium",
+      summary: `Review comment deleted by ${user}${location}${compact(previousComment.body) ? `: ${compact(previousComment.body)}` : ""}`,
+      referenceLink: next.core.url,
+      payload: {
+        commentId: previousComment.id,
+        user,
+        path: previousComment.path ?? null,
+        line: previousComment.line ?? null,
+        previousBody: previousComment.body ?? null
+      }
+    });
+  }
+  const previousChecks = new Map(previous.checks.map((check) => [check.name, check]));
+  const nextChecksByName = new Map;
+  for (const check of next.checks) {
+    const bucket = nextChecksByName.get(check.name);
+    if (bucket)
+      bucket.push(check);
+    else
+      nextChecksByName.set(check.name, [check]);
+  }
+  const ACTIVE_CHECK_KINDS = new Set(["check.in_progress", "check.queued", "check.created"]);
+  const representativeCheck = (checks) => {
+    if (checks.length === 1)
+      return checks[0];
+    const active = checks.find((check) => ACTIVE_CHECK_KINDS.has(checkKind(check.state)));
+    if (active)
+      return active;
+    return checks.find((check) => checkKind(check.state) === "check.failed") ?? checks[checks.length - 1];
+  };
+  const AGGREGATE_GATE_NAME_PATTERN = /\b(gate|required|fail[- ]?if|overall|rollup)\b/i;
+  const cancelledWorkflows = new Set;
+  for (const check of next.checks) {
+    if (checkKind(check.state) === "check.cancelled" && check.workflow)
+      cancelledWorkflows.add(check.workflow);
+  }
+  const matrixBaseName = (name) => name.replace(/\s*[([][^()[\]]*[)\]]\s*$/, "").trim() || name;
+  const matrixGroupKey = (check) => `${check.workflow ?? ""}::${matrixBaseName(check.name)}`;
+  const groupsByMatrixKey = new Map;
+  for (const checks of nextChecksByName.values()) {
+    const representative = representativeCheck(checks);
+    const key = matrixGroupKey(representative);
+    const bucket = groupsByMatrixKey.get(key);
+    if (bucket)
+      bucket.push(representative);
+    else
+      groupsByMatrixKey.set(key, [representative]);
+  }
+  const TERMINAL_CHECK_KINDS = new Set(["check.succeeded", "check.failed", "check.cancelled"]);
+  for (const checks of nextChecksByName.values()) {
+    const check = representativeCheck(checks);
+    const prev = previousChecks.get(check.name);
+    if (prev && prev.state === check.state)
+      continue;
+    let kind = checkKind(check.state);
+    let summary = checkSummary(check, kind);
+    const matrixGroup = groupsByMatrixKey.get(matrixGroupKey(check)) ?? [check];
+    if (matrixGroup.length > 1) {
+      if (kind === "check.succeeded") {
+        const allTerminal = matrixGroup.every((sibling) => TERMINAL_CHECK_KINDS.has(checkKind(sibling.state)));
+        const anyFailed = matrixGroup.some((sibling) => checkKind(sibling.state) === "check.failed");
+        if (!allTerminal)
+          continue;
+        if (anyFailed)
+          continue;
+        summary = `${matrixGroup.length}/${matrixGroup.length} shards succeeded: ${matrixBaseName(check.name)}`;
+      } else if (kind === "check.in_progress" || kind === "check.queued" || kind === "check.created") {
+        continue;
+      }
+    }
+    if (kind === "check.failed" && matrixGroup.length === 1 && check.workflow && cancelledWorkflows.has(check.workflow) && AGGREGATE_GATE_NAME_PATTERN.test(check.name)) {
+      kind = "check.cancelled";
+      summary = `Check cancelled (a sibling job in the same workflow run was cancelled): ${check.name || "unnamed check"}`;
+    }
+    events.push({
+      dedupeKey: `${kind}:${check.name}:${next.core.headRefOid}`,
+      kind,
+      priority: checkPriority(kind),
+      summary,
+      referenceLink: check.link ?? next.core.url,
+      payload: {
+        name: check.name,
+        state: check.state ?? null,
+        workflow: check.workflow ?? null,
+        event: check.event ?? null,
+        headSha: next.core.headRefOid
+      }
+    });
+  }
+  const grouped = new Map;
+  const ordered = [];
+  for (const event of events) {
+    if (!groupKinds.has(event.kind)) {
+      ordered.push(event);
+      continue;
+    }
+    const bucket = grouped.get(event.kind);
+    if (bucket)
+      bucket.push(event);
+    else
+      grouped.set(event.kind, [event]);
+  }
+  for (const [kind, bucket] of grouped) {
+    if (bucket.length === 1) {
+      ordered.push(bucket[0]);
+      continue;
+    }
+    ordered.push({
+      dedupeKey: `${kind}:group:${next.core.headRefOid}:${bucket.length}`,
+      kind,
+      priority: bucket.some((event) => event.priority === "high") ? "high" : bucket.some((event) => event.priority === "medium") ? "medium" : "low",
+      summary: `${bucket.length} ${kind.replaceAll("_", " ")} events${sampleSummaries(bucket).length > 0 ? ` (${sampleSummaries(bucket).join("; ")})` : ""}`,
+      referenceLink: next.core.url,
+      payload: {
+        ...kind.startsWith("check.") ? { headSha: next.core.headRefOid } : {},
+        count: bucket.length,
+        samples: sampleSummaries(bucket),
+        events: bucket.map((event) => ({ summary: event.summary, payload: event.payload }))
+      }
+    });
+  }
+  return ordered;
+}
+
+// src/daemon/watchers/pr-watcher-machine.ts
+var prWatcherMachine = import_xstate_development_cjs.setup({
+  types: {
+    context: {},
+    input: {},
+    events: {}
+  },
+  guards: {
+    hasSubscribers: ({ event }) => event.type === "SUBSCRIBERS_CHANGED" && event.count > 0,
+    idleDeadlineElapsed: ({ context, event }) => event.type === "TIME_ELAPSED" && context.idleDeadlineAt !== null && event.now >= context.idleDeadlineAt,
+    pollEligible: ({ context, event }) => event.type === "TIME_ELAPSED" && context.nextEligiblePollAt !== null && event.now >= context.nextEligiblePollAt
+  },
+  actions: {
+    assignActiveSubscribers: import_xstate_development_cjs.assign({
+      subscriberCount: ({ event }) => event.type === "SUBSCRIBERS_CHANGED" ? event.count : 0,
+      idleDeadlineAt: null
+    }),
+    assignIdleSubscribers: import_xstate_development_cjs.assign({
+      subscriberCount: ({ event }) => event.type === "SUBSCRIBERS_CHANGED" ? event.count : 0,
+      idleDeadlineAt: ({ event }) => event.type === "SUBSCRIBERS_CHANGED" ? event.now + event.idleGraceMs : null,
+      nextEligiblePollAt: null
+    })
+  }
+}).createMachine({
+  id: "prWatcher",
+  initial: "stopped",
+  context: ({ input }) => input,
+  on: {
+    PR_TERMINAL: {
+      target: ".terminal",
+      actions: import_xstate_development_cjs.assign({
+        terminalAt: ({ event }) => event.now,
+        idleDeadlineAt: null,
+        nextEligiblePollAt: null,
+        consecutiveFailures: 0,
+        lastFailureAt: null,
+        lastFailureMessage: null,
+        rateLimitResetAt: null
+      })
+    }
+  },
+  states: {
+    stopped: {
+      on: {
+        SUBSCRIBERS_CHANGED: [
+          { guard: "hasSubscribers", target: "warming_up", actions: "assignActiveSubscribers" },
+          { actions: import_xstate_development_cjs.assign({ subscriberCount: ({ event }) => event.count }) }
+        ]
+      }
+    },
+    warming_up: {
+      on: {
+        SUBSCRIBERS_CHANGED: [
+          { guard: "hasSubscribers", actions: "assignActiveSubscribers" },
+          { target: "idle_grace", actions: "assignIdleSubscribers" }
+        ],
+        WARMED_UP: { target: "polling" },
+        RATE_LIMITED: {
+          target: "rate_limited",
+          actions: import_xstate_development_cjs.assign({
+            rateLimitResetAt: ({ event }) => event.resetAt,
+            nextEligiblePollAt: ({ event }) => event.resetAt
+          })
+        }
+      }
+    },
+    polling: {
+      on: {
+        SUBSCRIBERS_CHANGED: [
+          { guard: "hasSubscribers", actions: "assignActiveSubscribers" },
+          { target: "idle_grace", actions: "assignIdleSubscribers" }
+        ],
+        POLL_SUCCEEDED: {
+          actions: import_xstate_development_cjs.assign({
+            nextEligiblePollAt: ({ event }) => event.nextEligiblePollAt,
+            consecutiveFailures: 0,
+            lastFailureAt: null,
+            lastFailureMessage: null,
+            rateLimitResetAt: null
+          })
+        },
+        POLL_FAILED: {
+          target: "backing_off",
+          actions: import_xstate_development_cjs.assign({
+            nextEligiblePollAt: ({ event }) => event.nextEligiblePollAt,
+            consecutiveFailures: ({ context }) => context.consecutiveFailures + 1,
+            lastFailureAt: ({ event }) => event.now,
+            lastFailureMessage: ({ event }) => event.message
+          })
+        },
+        RATE_LIMITED: {
+          target: "rate_limited",
+          actions: import_xstate_development_cjs.assign({
+            rateLimitResetAt: ({ event }) => event.resetAt,
+            nextEligiblePollAt: ({ event }) => event.resetAt
+          })
+        }
+      }
+    },
+    idle_grace: {
+      on: {
+        SUBSCRIBERS_CHANGED: [
+          { guard: "hasSubscribers", target: "warming_up", actions: "assignActiveSubscribers" },
+          { actions: import_xstate_development_cjs.assign({ subscriberCount: ({ event }) => event.count }) }
+        ],
+        TIME_ELAPSED: {
+          guard: "idleDeadlineElapsed",
+          target: "stopped",
+          actions: import_xstate_development_cjs.assign({ idleDeadlineAt: null, nextEligiblePollAt: null })
+        }
+      }
+    },
+    backing_off: {
+      on: {
+        SUBSCRIBERS_CHANGED: [
+          { guard: "hasSubscribers", actions: "assignActiveSubscribers" },
+          { target: "idle_grace", actions: "assignIdleSubscribers" }
+        ],
+        TIME_ELAPSED: { guard: "pollEligible", target: "polling" },
+        RATE_LIMITED: {
+          target: "rate_limited",
+          actions: import_xstate_development_cjs.assign({
+            rateLimitResetAt: ({ event }) => event.resetAt,
+            nextEligiblePollAt: ({ event }) => event.resetAt
+          })
+        }
+      }
+    },
+    rate_limited: {
+      on: {
+        SUBSCRIBERS_CHANGED: [
+          { guard: "hasSubscribers", actions: "assignActiveSubscribers" },
+          { target: "idle_grace", actions: "assignIdleSubscribers" }
+        ],
+        TIME_ELAPSED: {
+          guard: "pollEligible",
+          target: "polling",
+          actions: import_xstate_development_cjs.assign({ rateLimitResetAt: null })
+        }
+      }
+    },
+    terminal: {}
+  }
+});
+var initialContext = (snapshot) => ({
+  repo: snapshot.repo,
+  prNumber: snapshot.prNumber,
+  subscriberCount: snapshot.subscriberCount,
+  idleDeadlineAt: snapshot.idleDeadlineAt,
+  terminalAt: snapshot.terminalAt,
+  nextEligiblePollAt: snapshot.nextEligiblePollAt,
+  consecutiveFailures: snapshot.state === "backing_off" ? Math.max(0, snapshot.consecutiveFailures - 1) : snapshot.consecutiveFailures,
+  lastFailureAt: snapshot.lastFailureAt,
+  lastFailureMessage: snapshot.lastFailureMessage,
+  rateLimitResetAt: snapshot.rateLimitResetAt
+});
+var createPrWatcherActor = (snapshot) => {
+  const actor = import_xstate_development_cjs.createActor(prWatcherMachine, { input: initialContext(snapshot) });
+  actor.start();
+  if (snapshot.state === "terminal") {
+    actor.send({ type: "PR_TERMINAL", now: snapshot.terminalAt ?? 0 });
+    return actor;
+  }
+  if (snapshot.state !== "stopped") {
+    actor.send({
+      type: "SUBSCRIBERS_CHANGED",
+      count: Math.max(snapshot.subscriberCount, 1),
+      now: snapshot.idleDeadlineAt ?? snapshot.nextEligiblePollAt ?? 0,
+      idleGraceMs: 0
+    });
+  }
+  if (snapshot.state !== "stopped" && snapshot.state !== "warming_up") {
+    actor.send({ type: "WARMED_UP" });
+  }
+  if (snapshot.state === "idle_grace") {
+    actor.send({
+      type: "SUBSCRIBERS_CHANGED",
+      count: 0,
+      now: snapshot.idleDeadlineAt ?? 0,
+      idleGraceMs: 0
+    });
+  } else if (snapshot.state === "backing_off") {
+    actor.send({
+      type: "POLL_FAILED",
+      now: snapshot.lastFailureAt ?? 0,
+      message: snapshot.lastFailureMessage ?? "poll failed",
+      nextEligiblePollAt: snapshot.nextEligiblePollAt ?? 0
+    });
+  } else if (snapshot.state === "rate_limited") {
+    actor.send({ type: "RATE_LIMITED", resetAt: snapshot.rateLimitResetAt ?? snapshot.nextEligiblePollAt ?? 0 });
+  }
+  return actor;
+};
+
+// src/daemon/watchers/pr-watcher-registry.ts
+var watcherKey = (repo, prNumber) => `${repo}#${prNumber}`;
+var durableSnapshot = (record) => ({
+  repo: record.repo,
+  prNumber: record.prNumber,
+  state: record.state,
+  subscriberCount: record.activeSubscriberCount,
+  idleDeadlineAt: record.idleDeadlineAt,
+  terminalAt: record.terminalAt,
+  nextEligiblePollAt: record.nextEligiblePollAt,
+  consecutiveFailures: record.consecutiveFailures,
+  lastFailureAt: record.lastFailureAt,
+  lastFailureMessage: record.lastFailureMessage,
+  rateLimitResetAt: record.rateLimitResetAt
+});
+
+class PrWatcherRegistry {
+  store;
+  actors = new Map;
+  idleGraceMs;
+  failureBackoffBaseMs;
+  failureBackoffMaxMs;
+  constructor(store, options = {}) {
+    this.store = store;
+    this.idleGraceMs = options.idleGraceMs ?? PREMIND_PR_WATCHER_IDLE_GRACE_MS;
+    this.failureBackoffBaseMs = options.failureBackoffBaseMs ?? 20000;
+    this.failureBackoffMaxMs = options.failureBackoffMaxMs ?? 5 * 60000;
+    this.reconstruct(options.now ?? Date.now());
+  }
+  get size() {
+    return this.actors.size;
+  }
+  has(repo, prNumber) {
+    return this.actors.has(watcherKey(repo, prNumber));
+  }
+  getSnapshot(repo, prNumber) {
+    return this.actors.get(watcherKey(repo, prNumber))?.getSnapshot() ?? null;
+  }
+  reconstruct(now = Date.now()) {
+    for (const actor of this.actors.values())
+      actor.stop();
+    this.actors.clear();
+    for (const record of this.store.listPrWatcherRecords(now)) {
+      this.actors.set(watcherKey(record.repo, record.prNumber), createPrWatcherActor(durableSnapshot(record)));
+    }
+  }
+  pollingTargets(now = Date.now()) {
+    this.reconcile(now);
+    const targets = [];
+    for (const actor of this.actors.values()) {
+      const snapshot = actor.getSnapshot();
+      if (snapshot.value !== "polling")
+        continue;
+      if (snapshot.context.nextEligiblePollAt !== null && snapshot.context.nextEligiblePollAt > now) {
+        continue;
+      }
+      targets.push({ repo: snapshot.context.repo, prNumber: snapshot.context.prNumber });
+    }
+    return targets;
+  }
+  reconcile(now = Date.now()) {
+    const records = this.store.listPrWatcherRecords(now);
+    const durableKeys = new Set(records.map((record) => watcherKey(record.repo, record.prNumber)));
+    for (const [key, actor] of this.actors) {
+      if (durableKeys.has(key))
+        continue;
+      actor.stop();
+      this.actors.delete(key);
+    }
+    for (const record of records) {
+      const key = watcherKey(record.repo, record.prNumber);
+      let actor = this.actors.get(key);
+      if (!actor) {
+        actor = createPrWatcherActor(durableSnapshot(record));
+        this.actors.set(key, actor);
+      }
+      let snapshot = actor.getSnapshot();
+      if (snapshot.value !== "terminal" && (snapshot.context.subscriberCount !== record.activeSubscriberCount || snapshot.value === "stopped" && record.activeSubscriberCount > 0)) {
+        actor.send({
+          type: "SUBSCRIBERS_CHANGED",
+          count: record.activeSubscriberCount,
+          now,
+          idleGraceMs: this.idleGraceMs
+        });
+        this.persistActor(actor, now);
+        snapshot = actor.getSnapshot();
+      }
+      if (snapshot.value === "idle_grace" || snapshot.value === "backing_off" || snapshot.value === "rate_limited") {
+        const previousState = snapshot.value;
+        actor.send({ type: "TIME_ELAPSED", now });
+        snapshot = actor.getSnapshot();
+        if (snapshot.value !== previousState)
+          this.persistActor(actor, now);
+      }
+      if (snapshot.value === "warming_up") {
+        actor.send({ type: "WARMED_UP" });
+        this.persistActor(actor, now);
+      }
+    }
+  }
+  recordPollSucceeded(repo, prNumber, nextEligiblePollAt, now = Date.now()) {
+    const actor = this.requireActor(repo, prNumber);
+    actor.send({ type: "POLL_SUCCEEDED", nextEligiblePollAt });
+    this.persistActor(actor, now);
+  }
+  recordPollFailure(repo, prNumber, error, now = Date.now()) {
+    const actor = this.requireActor(repo, prNumber);
+    const failures = actor.getSnapshot().context.consecutiveFailures;
+    const delay = Math.min(this.failureBackoffBaseMs * 2 ** Math.min(failures, 6), this.failureBackoffMaxMs);
+    actor.send({
+      type: "POLL_FAILED",
+      now,
+      message: error instanceof Error ? error.message : String(error),
+      nextEligiblePollAt: now + delay
+    });
+    this.persistActor(actor, now);
+  }
+  rateLimit(resetAt, now = Date.now()) {
+    this.reconcile(now);
+    for (const actor of this.actors.values()) {
+      const state = actor.getSnapshot().value;
+      if (state === "stopped" || state === "idle_grace" || state === "terminal")
+        continue;
+      actor.send({ type: "RATE_LIMITED", resetAt });
+      this.persistActor(actor, now);
+    }
+  }
+  recordTerminalPersisted(repo, prNumber, now = Date.now()) {
+    const actor = this.requireActor(repo, prNumber);
+    actor.send({ type: "PR_TERMINAL", now });
+  }
+  close() {
+    for (const actor of this.actors.values())
+      actor.stop();
+    this.actors.clear();
+  }
+  requireActor(repo, prNumber) {
+    const actor = this.actors.get(watcherKey(repo, prNumber));
+    if (!actor)
+      throw new Error(`No canonical PR watcher for ${repo}#${prNumber}`);
+    return actor;
+  }
+  persistActor(actor, now) {
+    const snapshot = actor.getSnapshot();
+    const context = snapshot.context;
+    try {
+      this.store.persistPrWatcherLifecycle({
+        repo: context.repo,
+        prNumber: context.prNumber,
+        state: snapshot.value,
+        idleDeadlineAt: context.idleDeadlineAt,
+        terminalAt: context.terminalAt,
+        nextEligiblePollAt: context.nextEligiblePollAt,
+        consecutiveFailures: context.consecutiveFailures,
+        lastFailureAt: context.lastFailureAt,
+        lastFailureMessage: context.lastFailureMessage,
+        rateLimitResetAt: context.rateLimitResetAt
+      }, now);
+    } catch (error) {
+      actor.stop();
+      this.actors.delete(watcherKey(context.repo, context.prNumber));
+      throw error;
+    }
+  }
+}
+
+// src/daemon/watchers/pr-watcher.ts
+var PR_SNAPSHOT_ETAG_SCOPE = "pr.snapshot";
+var etagKey2 = (repo, prNumber) => `${repo}#${prNumber}`;
+var targetKey = etagKey2;
+
+class PullRequestWatcher {
+  store;
+  github;
+  logger = createLogger("daemon.pr-watcher");
+  schedule;
+  registry;
+  constructor(store, github, options = {}) {
+    this.store = store;
+    this.github = github;
+    this.schedule = options.schedule ?? null;
+    this.registry = new PrWatcherRegistry(store, options);
+  }
+  getWatcherSnapshot(repo, prNumber) {
+    return this.registry.getSnapshot(repo, prNumber);
+  }
+  setRateLimitReset(resetAtMs, now = Date.now()) {
+    this.registry.rateLimit(resetAtMs, now);
+  }
+  close() {
+    this.registry.close();
+  }
+  async tick(now = Date.now()) {
+    const targets = this.registry.pollingTargets(now);
+    for (const target of targets) {
+      const key = targetKey(target.repo, target.prNumber);
+      try {
+        const previous = this.store.getSnapshot(target.repo, target.prNumber);
+        const cachedEtag = this.store.getEtag(PR_SNAPSHOT_ETAG_SCOPE, etagKey2(target.repo, target.prNumber));
+        const result = await this.github.fetchPullRequestSnapshot(target.repo, target.prNumber, {
+          etag: cachedEtag
+        });
+        this.store.markPrWatchChecked(target.repo, target.prNumber, now);
+        this.schedule?.recordCheck(key, now);
+        if (result.kind === "not_modified") {
+          if (result.etag && result.etag !== cachedEtag) {
+            this.store.saveEtag(PR_SNAPSHOT_ETAG_SCOPE, etagKey2(target.repo, target.prNumber), result.etag, now);
+          }
+          this.registry.recordPollSucceeded(target.repo, target.prNumber, this.nextPollAt(key, now), now);
+          continue;
+        }
+        if (result.kind === "not_found") {
+          this.logger.info("pr not found; skipping", { repo: target.repo, prNumber: target.prNumber });
+          this.registry.recordPollSucceeded(target.repo, target.prNumber, this.nextPollAt(key, now), now);
+          continue;
+        }
+        const stableMergeState = stableMergeStateStatus(result.snapshot.core.mergeStateStatus);
+        const next = {
+          ...result.snapshot,
+          core: {
+            ...result.snapshot.core,
+            lastStableMergeStateStatus: stableMergeState ?? previous?.core.lastStableMergeStateStatus ?? stableMergeStateStatus(previous?.core.mergeStateStatus)
+          }
+        };
+        const events = diffSnapshot(previous, next);
+        const terminal2 = ["MERGED", "CLOSED"].includes(next.core.state.toUpperCase());
+        if (terminal2) {
+          this.store.saveTerminalSnapshotAndEvents(target.repo, target.prNumber, next, events, result.etag, now);
+          this.registry.recordTerminalPersisted(target.repo, target.prNumber, now);
+        } else {
+          this.store.saveSnapshotAndEvents(target.repo, target.prNumber, next, events, now);
+          this.store.saveEtag(PR_SNAPSHOT_ETAG_SCOPE, etagKey2(target.repo, target.prNumber), result.etag, now);
+          if (events.length > 0)
+            this.schedule?.recordActivity(key, now);
+          this.registry.recordPollSucceeded(target.repo, target.prNumber, this.nextPollAt(key, now), now);
+        }
+        for (const subscription of this.store.listActiveSubscriptionsForPr(target.repo, target.prNumber)) {
+          this.store.buildReminderBatchForSubscription(subscription.subscriptionId, now);
+        }
+      } catch (error) {
+        this.registry.recordPollFailure(target.repo, target.prNumber, error, now);
+        this.logger.warn("pr watcher failed", {
+          repo: target.repo,
+          prNumber: target.prNumber,
+          error: error instanceof Error ? error.message : String(error)
+        });
+      }
+    }
+  }
+  nextPollAt(key, now) {
+    return this.schedule ? now + this.schedule.currentInterval(key, now) : now;
+  }
+}
+
+// src/daemon/watchers/adaptive-schedule.ts
+var DEFAULT_TIERS = [
+  { sinceMs: 2 * 60000, intervalMs: 20000 },
+  { sinceMs: 10 * 60000, intervalMs: 45000 },
+  { sinceMs: 60 * 60000, intervalMs: 120000 }
+];
+var DEFAULT_IDLE_INTERVAL_MS = 5 * 60000;
+
+class AdaptiveSchedule {
+  lastActivityAt = new Map;
+  lastCheckedAt = new Map;
+  tiers;
+  idleIntervalMs;
+  constructor(options = {}) {
+    this.tiers = options.tiers ? [...options.tiers].sort((a, b) => a.sinceMs - b.sinceMs) : [...DEFAULT_TIERS];
+    this.idleIntervalMs = options.idleIntervalMs ?? DEFAULT_IDLE_INTERVAL_MS;
+  }
+  recordActivity(key, now = Date.now()) {
+    this.lastActivityAt.set(key, now);
+  }
+  recordCheck(key, now = Date.now()) {
+    this.lastCheckedAt.set(key, now);
+  }
+  shouldFetch(key, now = Date.now()) {
+    const lastChecked = this.lastCheckedAt.get(key);
+    if (lastChecked === undefined)
+      return true;
+    const interval = this.currentInterval(key, now);
+    return now - lastChecked >= interval;
+  }
+  currentInterval(key, now = Date.now()) {
+    const lastActivity = this.lastActivityAt.get(key);
+    if (lastActivity === undefined)
+      return this.tiers[0]?.intervalMs ?? this.idleIntervalMs;
+    const sinceActivity = now - lastActivity;
+    for (const tier of this.tiers) {
+      if (sinceActivity <= tier.sinceMs)
+        return tier.intervalMs;
+    }
+    return this.idleIntervalMs;
+  }
+  forget(key) {
+    this.lastActivityAt.delete(key);
+    this.lastCheckedAt.delete(key);
+  }
+}
+
+// src/daemon/watchers/poll-scheduler.ts
+var DEFAULT_OPTIONS = {
+  baseIntervalMs: 15000,
+  maxIntervalMs: 120000,
+  jitterFactor: 0.2
+};
+
+class PollScheduler {
+  name;
+  tick;
+  logger = createLogger("daemon.poll-scheduler");
+  consecutiveFailures = 0;
+  rateLimitResetAt = null;
+  timer = null;
+  options;
+  constructor(name, tick, options = {}) {
+    this.name = name;
+    this.tick = tick;
+    this.options = { ...DEFAULT_OPTIONS, ...options };
+  }
+  start() {
+    this.scheduleNext();
+  }
+  stop() {
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
+  }
+  setRateLimitReset(resetAtMs) {
+    this.rateLimitResetAt = resetAtMs;
+  }
+  nextIntervalMs(now = Date.now()) {
+    if (this.rateLimitResetAt !== null && this.rateLimitResetAt > now) {
+      const waitMs = this.rateLimitResetAt - now + 1000;
+      return Math.min(waitMs, this.options.maxIntervalMs);
+    }
+    const backoffMultiplier = 2 ** Math.min(this.consecutiveFailures, 6);
+    const interval = Math.min(this.options.baseIntervalMs * backoffMultiplier, this.options.maxIntervalMs);
+    const jitter = interval * this.options.jitterFactor * Math.random();
+    return Math.round(interval + jitter);
+  }
+  scheduleNext() {
+    const intervalMs = this.nextIntervalMs();
+    this.timer = setTimeout(async () => {
+      try {
+        await this.tick();
+        this.consecutiveFailures = 0;
+        if (this.rateLimitResetAt !== null && Date.now() >= this.rateLimitResetAt) {
+          this.rateLimitResetAt = null;
+        }
+      } catch (error) {
+        this.consecutiveFailures++;
+        this.logger.warn(`${this.name} tick failed`, {
+          consecutiveFailures: this.consecutiveFailures,
+          nextIntervalMs: this.nextIntervalMs(),
+          error: error instanceof Error ? error.message : String(error)
+        });
+      }
+      this.scheduleNext();
+    }, intervalMs);
+    if (typeof this.timer.unref === "function")
+      this.timer.unref();
+  }
+}
+
+// src/daemon/watchers/disable-gate.ts
+var createDisableGatedTick = (name, store, tick, logger) => {
+  let lastLoggedDisabled;
+  return async () => {
+    if (store.isGloballyDisabled()) {
+      if (lastLoggedDisabled !== true) {
+        logger.info(`${name} skipped: premind globally disabled`);
+        lastLoggedDisabled = true;
+      }
+      return;
+    }
+    if (lastLoggedDisabled === true) {
+      logger.info(`${name} resumed: premind globally re-enabled`);
+    }
+    lastLoggedDisabled = false;
+    await tick();
+  };
+};
+
+// src/daemon/lifecycle/daemon-machine.ts
+var daemonLifecycleMachine = import_xstate_development_cjs.setup({
+  types: {
+    context: {},
+    events: {}
+  },
+  guards: {
+    startupHasDemand: ({ event }) => event.type === "STARTUP_COMPLETE" && event.hasDemand,
+    demandReturned: ({ event }) => event.type === "DEMAND_CHANGED" && event.hasDemand
+  },
+  actions: {
+    clearStopReason: import_xstate_development_cjs.assign({ stopReason: null }),
+    assignIdleReason: import_xstate_development_cjs.assign({ stopReason: "idle" }),
+    assignRequestedReason: import_xstate_development_cjs.assign({
+      stopReason: ({ event }) => event.type === "STOP_REQUESTED" ? event.reason : "requested"
+    })
+  }
+}).createMachine({
+  id: "daemonLifecycle",
+  initial: "starting",
+  context: { stopReason: null },
+  on: {
+    STOP_REQUESTED: {
+      target: ".stopping",
+      actions: "assignRequestedReason"
+    }
+  },
+  states: {
+    starting: {
+      on: {
+        STARTUP_COMPLETE: [
+          { guard: "startupHasDemand", target: "running" },
+          { target: "shutdown_grace", actions: "assignIdleReason" }
+        ]
+      }
+    },
+    running: {
+      on: {
+        DEMAND_CHANGED: [
+          { guard: "demandReturned" },
+          { target: "shutdown_grace", actions: "assignIdleReason" }
+        ]
+      }
+    },
+    shutdown_grace: {
+      on: {
+        DEMAND_CHANGED: [
+          {
+            guard: "demandReturned",
+            target: "running",
+            actions: "clearStopReason"
+          },
+          {}
+        ],
+        GRACE_EXPIRED: "stopping"
+      }
+    },
+    stopping: {
+      on: {
+        STOPPED: "stopped"
+      }
+    },
+    stopped: {
+      type: "final"
+    }
+  }
+});
+
+// src/daemon/lifecycle/daemon-lifecycle-runtime.ts
+var systemClock = {
+  setTimeout: (callback, delayMs) => setTimeout(callback, delayMs),
+  clearTimeout: (handle) => clearTimeout(handle),
+  setInterval: (callback, intervalMs) => setInterval(callback, intervalMs),
+  clearInterval: (handle) => clearInterval(handle)
+};
+
+class DaemonLifecycleRuntime {
+  options;
+  actor = import_xstate_development_cjs.createActor(daemonLifecycleMachine);
+  graceMs;
+  demandPollMs;
+  clock;
+  graceTimer = null;
+  demandPoll = null;
+  started = false;
+  stoppingStarted = false;
+  stoppedNotified = false;
+  stopReason = "requested";
+  subscription;
+  constructor(options) {
+    this.options = options;
+    this.graceMs = options.graceMs ?? PREMIND_IDLE_SHUTDOWN_GRACE_MS;
+    this.demandPollMs = options.demandPollMs ?? PREMIND_CLIENT_HEARTBEAT_MS;
+    this.clock = options.clock ?? systemClock;
+    this.subscription = this.actor.subscribe((snapshot) => {
+      this.handleSnapshot(snapshot.value, snapshot.context.stopReason);
+    });
+  }
+  start() {
+    if (this.started)
+      return;
+    this.started = true;
+    this.actor.start();
+    this.actor.send({
+      type: "STARTUP_COMPLETE",
+      hasDemand: this.options.hasDemand()
+    });
+    if (this.demandPollMs > 0) {
+      this.demandPoll = this.clock.setInterval(() => this.evaluateDemand(), this.demandPollMs);
+      if (typeof this.demandPoll === "object" && "unref" in this.demandPoll) {
+        this.demandPoll.unref();
+      }
+    }
+  }
+  evaluateDemand() {
+    if (!this.started)
+      return;
+    const state = this.actor.getSnapshot().value;
+    if (state === "stopping" || state === "stopped")
+      return;
+    this.actor.send({ type: "DEMAND_CHANGED", hasDemand: this.options.hasDemand() });
+  }
+  requestStop(reason) {
+    if (!this.started)
+      this.start();
+    this.actor.send({ type: "STOP_REQUESTED", reason });
+  }
+  getSnapshot() {
+    return this.actor.getSnapshot();
+  }
+  close() {
+    this.clearGraceTimer();
+    if (this.demandPoll) {
+      this.clock.clearInterval(this.demandPoll);
+      this.demandPoll = null;
+    }
+    this.subscription.unsubscribe();
+    this.actor.stop();
+  }
+  handleSnapshot(state, reason) {
+    if (state === "shutdown_grace") {
+      if (!this.graceTimer) {
+        this.graceTimer = this.clock.setTimeout(() => {
+          this.graceTimer = null;
+          this.actor.send({ type: "GRACE_EXPIRED" });
+        }, this.graceMs);
+        if (typeof this.graceTimer === "object" && "unref" in this.graceTimer) {
+          this.graceTimer.unref();
+        }
+      }
+      return;
+    }
+    this.clearGraceTimer();
+    if (state === "stopping" && !this.stoppingStarted) {
+      this.stoppingStarted = true;
+      this.stopReason = reason ?? "requested";
+      if (this.demandPoll) {
+        this.clock.clearInterval(this.demandPoll);
+        this.demandPoll = null;
+      }
+      Promise.resolve().then(() => this.options.onStopping(this.stopReason)).catch((error) => this.options.onError?.(error)).finally(() => this.actor.send({ type: "STOPPED" }));
+      return;
+    }
+    if (state === "stopped" && !this.stoppedNotified) {
+      this.stoppedNotified = true;
+      this.options.onStopped?.(this.stopReason);
+    }
+  }
+  clearGraceTimer() {
+    if (!this.graceTimer)
+      return;
+    this.clock.clearTimeout(this.graceTimer);
+    this.graceTimer = null;
+  }
+}
+
+// src/daemon/index.ts
+var logger = createLogger("daemon");
+var STALENESS_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
+async function main() {
+  logger.info("daemon starting", { pid: process.pid, logFile: PREMIND_DAEMON_LOG_PATH });
+  const server = new IpcServer;
+  const github = new GitHubClient;
+  const discoveryWatcher = new BranchDiscoveryWatcher(server.store, github, server.worktreeBindings);
+  const recovery = server.store.recoverFromRestart();
+  logger.info("startup recovery", {
+    prunedClients: recovery.prunedClients,
+    resetBatches: recovery.resetBatches,
+    dedupedSessions: recovery.dedupedSessions,
+    recoveredSessions: recovery.recoveredSessions,
+    recoveredBranchWatchers: recovery.recoveredBranchWatchers,
+    recoveredPrWatchers: recovery.recoveredPrWatchers
+  });
+  const suspendedAutomaticSubscriptions = server.store.suspendAutomaticSubscriptions();
+  if (suspendedAutomaticSubscriptions > 0) {
+    logger.info("suspended automatic subscriptions pending author verification", {
+      suspendedAutomaticSubscriptions
+    });
+  }
+  const prSchedule = new AdaptiveSchedule;
+  const pullRequestWatcher = new PullRequestWatcher(server.store, github, { schedule: prSchedule });
+  const startupReap = server.store.reapStaleSessions(PREMIND_SESSION_STALE_MS);
+  server.worktreeBindings.closeInactiveSessions();
+  if (startupReap.reaped > 0 || startupReap.oldestAgeMs !== null) {
+    logger.info("startup reap", {
+      reaped: startupReap.reaped,
+      oldestAgeMs: startupReap.oldestAgeMs,
+      thresholdMs: PREMIND_SESSION_STALE_MS
+    });
+  }
+  const startupPrunedSessions = server.store.pruneClosedSessions(PREMIND_CLOSED_SESSION_RETENTION_MS);
+  const startupPrunedEvents = server.store.pruneOrphanedPrEvents();
+  if (startupPrunedSessions > 0 || startupPrunedEvents > 0) {
+    logger.info("startup prune", {
+      prunedClosedSessions: startupPrunedSessions,
+      prunedOrphanedEvents: startupPrunedEvents
+    });
+  }
+  const detailFiles = new DetailFileWriter;
+  const cleanedFiles = detailFiles.cleanup();
+  if (cleanedFiles > 0) {
+    logger.info("detail file cleanup", { removed: cleanedFiles });
+  }
+  await server.listen();
+  const discoveryScheduler = new PollScheduler("branch-discovery", createDisableGatedTick("branch-discovery", server.store, () => discoveryWatcher.tick(), logger), { baseIntervalMs: 60000, maxIntervalMs: 180000, jitterFactor: 0.25 });
+  const prScheduler = new PollScheduler("pr-watcher", createDisableGatedTick("pr-watcher", server.store, () => pullRequestWatcher.tick(), logger), { baseIntervalMs: 20000, maxIntervalMs: 120000, jitterFactor: 0.2 });
+  github.rateLimit.onUpdate((snapshot) => {
+    if (!github.rateLimit.isThrottled(snapshot.resource))
+      return;
+    if (snapshot.resource === "core") {
+      discoveryScheduler.setRateLimitReset(snapshot.resetAtMs);
+      logger.warn("rate limit throttled; deferring branch discovery", {
+        resource: snapshot.resource,
+        remaining: snapshot.remaining,
+        resetAtMs: snapshot.resetAtMs
+      });
+    } else if (snapshot.resource === "graphql") {
+      pullRequestWatcher.setRateLimitReset(snapshot.resetAtMs);
+      prScheduler.setRateLimitReset(snapshot.resetAtMs);
+      logger.warn("rate limit throttled; deferring pr poll", {
+        resource: snapshot.resource,
+        remaining: snapshot.remaining,
+        resetAtMs: snapshot.resetAtMs
+      });
+    }
+  });
+  if (!server.store.isGloballyDisabled()) {
+    await discoveryWatcher.tick();
+  }
+  discoveryScheduler.start();
+  prScheduler.start();
+  const reapInterval = setInterval(() => {
+    const result = server.store.reapStaleSessions(PREMIND_SESSION_STALE_MS);
+    server.worktreeBindings.closeInactiveSessions();
+    const reclaimedHandoffs = server.store.expireStaleHandoffs();
+    if (reclaimedHandoffs > 0) {
+      logger.info("reclaimed abandoned reminder handoffs", {
+        reclaimed: reclaimedHandoffs,
+        thresholdMs: PREMIND_REMINDER_HANDOFF_STALE_MS
+      });
+    }
+    if (result.reaped > 0) {
+      logger.info("reaped stale sessions", {
+        reaped: result.reaped,
+        oldestAgeMs: result.oldestAgeMs,
+        thresholdMs: PREMIND_SESSION_STALE_MS
+      });
+    }
+    const prunedSessions = server.store.pruneClosedSessions(PREMIND_CLOSED_SESSION_RETENTION_MS);
+    const prunedEvents = server.store.pruneOrphanedPrEvents();
+    if (prunedSessions > 0 || prunedEvents > 0) {
+      logger.info("pruned closed sessions and orphaned events", {
+        prunedClosedSessions: prunedSessions,
+        prunedOrphanedEvents: prunedEvents
+      });
+    }
+  }, STALENESS_SWEEP_INTERVAL_MS);
+  if (typeof reapInterval.unref === "function")
+    reapInterval.unref();
+  const lifecycle = new DaemonLifecycleRuntime({
+    hasDemand: () => server.hasDemand(),
+    graceMs: PREMIND_IDLE_SHUTDOWN_GRACE_MS,
+    onStopping: async (reason) => {
+      clearInterval(reapInterval);
+      discoveryScheduler.stop();
+      prScheduler.stop();
+      pullRequestWatcher.close();
+      logger.info("graceful shutdown", { reason });
+      await server.close();
+    },
+    onStopped: () => process.exit(0),
+    onError: (error) => {
+      logger.error("graceful shutdown failed", {
+        error: error instanceof Error ? error.message : String(error)
+      });
+      process.exit(1);
+    }
+  });
+  server.setDemandChangeListener(() => lifecycle.evaluateDemand());
+  lifecycle.start();
+  const cleanup = () => lifecycle.requestStop("signal");
+  process.on("SIGINT", cleanup);
+  process.on("SIGTERM", cleanup);
+}
+main().catch((error) => {
+  logger.error("fatal error", { error: error instanceof Error ? error.message : String(error) });
+  process.exit(1);
+});

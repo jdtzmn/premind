@@ -28,6 +28,7 @@ const status: DebugStatusResponse = {
 	sessions: [
 		{
 			sessionId: "session-1",
+			host: "pi",
 			repo: "owner/repo",
 			branch: "feature/pi",
 			prNumber: 123,
@@ -184,19 +185,17 @@ const createClient = (
 	} = {},
 ) => {
 	const operations: string[] = [];
-	const registeredSessions: Array<Omit<RegisterSessionPayload, "clientId">> =
-		[];
+	const registeredSessions: Array<Omit<RegisterSessionPayload, "clientId">> = [];
 	const pendingBatches = [
-		...(options.pendingBatches ?? (options.pendingBatch ? [options.pendingBatch] : [])),
+		...(options.pendingBatches ??
+			(options.pendingBatch ? [options.pendingBatch] : [])),
 	];
 	return {
 		operations,
 		registeredSessions,
 		client: {
 			registerClient: async (projectRoot: string, sessionSource?: string) => {
-				operations.push(
-					`registerClient:${projectRoot}:${sessionSource ?? "none"}`,
-				);
+				operations.push(`registerClient:${projectRoot}:${sessionSource ?? "none"}`);
 				return { heartbeatMs: 1_000 };
 			},
 			heartbeat: async () => {
@@ -239,14 +238,18 @@ const createClient = (
 				prNumber: number;
 				repo?: string;
 			}) => {
-				operations.push(`subscribe:${payload.sessionId}:${payload.repo ?? "default"}:${payload.prNumber}`);
+				operations.push(
+					`subscribe:${payload.sessionId}:${payload.repo ?? "default"}:${payload.prNumber}`,
+				);
 			},
 			unsubscribe: async (payload: {
 				sessionId: string;
 				prNumber: number;
 				repo?: string;
 			}) => {
-				operations.push(`unsubscribe:${payload.sessionId}:${payload.repo ?? "default"}:${payload.prNumber}`);
+				operations.push(
+					`unsubscribe:${payload.sessionId}:${payload.repo ?? "default"}:${payload.prNumber}`,
+				);
 			},
 			updateSessionState: async (payload: {
 				sessionId: string;
@@ -366,16 +369,19 @@ describe("premind Pi extension", () => {
 
 	test("renders Pi status with a shortened session id", () => {
 		assert.equal(
-			renderPremindPiStatus({
-				...status,
-				sessions: [
-					{
-						...status.sessions[0],
-						sessionId:
-							"/Users/jacob/.pi/agent/sessions/project/2026-07-18T05-45-33-751Z_019f73c2-2f37-7098-88f3-a096cda8ea14.jsonl",
-					},
-				],
-			}, "v0.1.0 (abcdef)"),
+			renderPremindPiStatus(
+				{
+					...status,
+					sessions: [
+						{
+							...status.sessions[0],
+							sessionId:
+								"/Users/jacob/.pi/agent/sessions/project/2026-07-18T05-45-33-751Z_019f73c2-2f37-7098-88f3-a096cda8ea14.jsonl",
+						},
+					],
+				},
+				"v0.1.0 (abcdef)",
+			),
 			[
 				"premind: v0.1.0 (abcdef) · 1 active session",
 				"clients 1 · watchers 1",
@@ -386,28 +392,31 @@ describe("premind Pi extension", () => {
 
 	test("renders Pi status worktree and qualified subscriptions", () => {
 		assert.match(
-
 			renderPremindPiStatus({
 				...status,
-				sessions: [{
-					...status.sessions[0],
-					worktreeBinding: {
-						root: "/repo/.trees/pi",
-						gitDir: "/repo/.git/worktrees/pi",
-						repo: "owner/repo",
-						branch: "feature/pi",
-						headSha: "abc123",
-						state: "watching",
-						updatedAt: 1,
+				sessions: [
+					{
+						...status.sessions[0],
+						worktreeBinding: {
+							root: "/repo/.trees/pi",
+							gitDir: "/repo/.git/worktrees/pi",
+							repo: "owner/repo",
+							branch: "feature/pi",
+							headSha: "abc123",
+							state: "watching",
+							updatedAt: 1,
+						},
+						subscriptions: [
+							{
+								repo: "other/repo",
+								prNumber: 456,
+								source: "manual",
+								state: "active",
+								pendingEventCount: 4,
+							},
+						],
 					},
-					subscriptions: [{
-						repo: "other/repo",
-						prNumber: 456,
-						source: "manual",
-						state: "active",
-						pendingEventCount: 4,
-					}],
-				}],
+				],
 			}),
 			/worktree owner\/repo @ feature\/pi \(watching\) \| subscriptions other\/repo#456 \(manual\/active, pending 4\)/,
 		);
@@ -430,6 +439,7 @@ describe("premind Pi extension", () => {
 		assert.deepEqual(client.registeredSessions, [
 			{
 				sessionId: "/tmp/session.jsonl",
+				host: "pi",
 				repo: "owner/repo",
 				branch: "feature/pi",
 				isPrimary: true,
@@ -453,6 +463,7 @@ describe("premind Pi extension", () => {
 				sessions: [
 					{
 						sessionId: "/tmp/session.jsonl",
+						host: "pi",
 						repo: "owner/repo",
 						branch: "feature/pi",
 						prNumber: 123,
@@ -504,62 +515,59 @@ describe("premind Pi extension", () => {
 		assert.deepEqual(statuses.at(-1), { key: "premind", value: undefined });
 	});
 
-	test(
-		"in-flight status polling tolerates a context invalidated before shutdown",
-		async (t) => {
-			t.mock.timers.enable({ apis: ["setInterval"] });
-			const mock = createMockPi();
-			const client = createClient();
-			const { ctx, statuses } = createEventContext();
-			let statusCalls = 0;
-			let markPollStarted!: () => void;
-			let resolvePoll!: (value: DebugStatusResponse) => void;
-			const pollStarted = new Promise<void>((resolve) => {
-				markPollStarted = resolve;
-			});
-			const pollResult = new Promise<DebugStatusResponse>((resolve) => {
-				resolvePoll = resolve;
-			});
-			client.client.debugStatus = async () => {
-				statusCalls++;
-				if (statusCalls === 1) return status;
-				markPollStarted();
-				return pollResult;
-			};
+	test("in-flight status polling tolerates a context invalidated before shutdown", async (t) => {
+		t.mock.timers.enable({ apis: ["setInterval"] });
+		const mock = createMockPi();
+		const client = createClient();
+		const { ctx, statuses } = createEventContext();
+		let statusCalls = 0;
+		let markPollStarted!: () => void;
+		let resolvePoll!: (value: DebugStatusResponse) => void;
+		const pollStarted = new Promise<void>((resolve) => {
+			markPollStarted = resolve;
+		});
+		const pollResult = new Promise<DebugStatusResponse>((resolve) => {
+			resolvePoll = resolve;
+		});
+		client.client.debugStatus = async () => {
+			statusCalls++;
+			if (statusCalls === 1) return status;
+			markPollStarted();
+			return pollResult;
+		};
 
-			let contextIsStale = false;
-			Object.defineProperty(ctx, "hasUI", {
-				get() {
-					if (contextIsStale) {
-						throw new Error(
-							"This extension ctx is stale after session replacement or reload.",
-						);
-					}
-					return true;
-				},
-			});
-			createPremindPiExtension({
-				createDaemonClient: () => client.client,
-				config: { statusPollIntervalMs: 5_000 },
-				detectGit: async () => ({ repo: "owner/repo", branch: "feature/pi" }),
-			})(mock.pi as never);
+		let contextIsStale = false;
+		Object.defineProperty(ctx, "hasUI", {
+			get() {
+				if (contextIsStale) {
+					throw new Error(
+						"This extension ctx is stale after session replacement or reload.",
+					);
+				}
+				return true;
+			},
+		});
+		createPremindPiExtension({
+			createDaemonClient: () => client.client,
+			config: { statusPollIntervalMs: 5_000 },
+			detectGit: async () => ({ repo: "owner/repo", branch: "feature/pi" }),
+		})(mock.pi as never);
 
-			const start = mock.events.get("session_start");
-			const shutdown = mock.events.get("session_shutdown");
-			assert.ok(start);
-			assert.ok(shutdown);
-			await start({}, ctx);
-			t.mock.timers.tick(5_000);
-			await pollStarted;
-			const statusCountBeforeInvalidation = statuses.length;
-			contextIsStale = true;
-			resolvePoll(status);
-			await new Promise<void>((resolve) => setImmediate(resolve));
+		const start = mock.events.get("session_start");
+		const shutdown = mock.events.get("session_shutdown");
+		assert.ok(start);
+		assert.ok(shutdown);
+		await start({}, ctx);
+		t.mock.timers.tick(5_000);
+		await pollStarted;
+		const statusCountBeforeInvalidation = statuses.length;
+		contextIsStale = true;
+		resolvePoll(status);
+		await new Promise<void>((resolve) => setImmediate(resolve));
 
-			assert.equal(statuses.length, statusCountBeforeInvalidation);
-			await shutdown({}, ctx);
-		},
-	);
+		assert.equal(statuses.length, statusCountBeforeInvalidation);
+		await shutdown({}, ctx);
+	});
 
 	test("status polling does not deliver pending reminders", async (t) => {
 		t.mock.timers.enable({ apis: ["setInterval"] });
@@ -584,9 +592,10 @@ describe("premind Pi extension", () => {
 		assert.deepEqual(statuses, [{ key: "premind", value: undefined }]);
 		assert.equal(mock.sentMessages.length, 0);
 		assert.equal(
-			client.operations.some((operation) =>
-				operation.startsWith("getPendingReminder:") ||
-				operation.startsWith("ackReminder:"),
+			client.operations.some(
+				(operation) =>
+					operation.startsWith("getPendingReminder:") ||
+					operation.startsWith("ackReminder:"),
 			),
 			false,
 		);
@@ -670,9 +679,11 @@ describe("premind Pi extension", () => {
 		const client = createClient();
 		const { ctx } = createEventContext();
 		let resolvePending!: (value: { batch: ReminderBatch | null }) => void;
-		const pendingResult = new Promise<{ batch: ReminderBatch | null }>((resolve) => {
-			resolvePending = resolve;
-		});
+		const pendingResult = new Promise<{ batch: ReminderBatch | null }>(
+			(resolve) => {
+				resolvePending = resolve;
+			},
+		);
 		client.client.getPendingReminder = async (sessionId: string) => {
 			client.operations.push(`getPendingReminder:${sessionId}`);
 			return pendingResult;
@@ -725,9 +736,7 @@ describe("premind Pi extension", () => {
 		await turnEnd({}, ctx);
 
 		assert.ok(
-			client.operations.includes(
-				"ackReminder:batch-1:/tmp/session.jsonl:failed",
-			),
+			client.operations.includes("ackReminder:batch-1:/tmp/session.jsonl:failed"),
 		);
 		assert.deepEqual(statuses.at(-1), { key: "premind", value: " error" });
 		assert.deepEqual(notifications.at(-1), {
@@ -751,7 +760,10 @@ describe("premind Pi extension", () => {
 
 		assert.equal(notifications.length, 1);
 		assert.equal(notifications[0]?.level, "info");
-		assert.match(notifications[0]?.message ?? "", /premind: v\d+\.\d+\.\d+ \([0-9a-f]{6}\) · 1 active session/);
+		assert.match(
+			notifications[0]?.message ?? "",
+			/premind: v\d+\.\d+\.\d+ \([0-9a-f]{6}\) · 1 active session/,
+		);
 		assert.match(
 			notifications[0]?.message ?? "",
 			/owner\/repo @ feature\/pi \(PR #123\)/,
@@ -781,7 +793,6 @@ describe("premind Pi extension", () => {
 		);
 	});
 
-
 	test("worktree and subscription commands and tools target the current session", async () => {
 		const mock = createMockPi();
 		const client = createClient();
@@ -808,9 +819,27 @@ describe("premind Pi extension", () => {
 		await activate.handler("/tmp/other-worktree", ctx);
 		await subscribe.handler("42 owner/repo", ctx);
 		await unsubscribe.handler("42 owner/repo", ctx);
-		await activateTool.execute("tool-call-1", { path: "/tmp/tool-worktree" }, undefined, undefined, ctx);
-		await subscribeTool.execute("tool-call-2", { prNumber: 13 }, undefined, undefined, ctx);
-		await unsubscribeTool.execute("tool-call-3", { prNumber: 13 }, undefined, undefined, ctx);
+		await activateTool.execute(
+			"tool-call-1",
+			{ path: "/tmp/tool-worktree" },
+			undefined,
+			undefined,
+			ctx,
+		);
+		await subscribeTool.execute(
+			"tool-call-2",
+			{ prNumber: 13 },
+			undefined,
+			undefined,
+			ctx,
+		);
+		await unsubscribeTool.execute(
+			"tool-call-3",
+			{ prNumber: 13 },
+			undefined,
+			undefined,
+			ctx,
+		);
 
 		assert.deepEqual(client.operations, [
 			"activateWorktree:/tmp/session.jsonl:/tmp/other-worktree",
@@ -905,7 +934,10 @@ describe("premind Pi extension", () => {
 			undefined,
 			{},
 		);
-		assert.match(result.content[0].text, /premind: v\d+\.\d+\.\d+ \([0-9a-f]{6}\) · 1 active session/);
+		assert.match(
+			result.content[0].text,
+			/premind: v\d+\.\d+\.\d+ \([0-9a-f]{6}\) · 1 active session/,
+		);
 		assert.match(result.content[0].text, /pending 2/);
 	});
 });

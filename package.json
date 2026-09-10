@@ -1,63 +1,68 @@
 {
-	"name": "premind",
-	"version": "0.1.0",
-	"description": "Pi package and OpenCode plugin that keeps sessions up to date with pull request changes",
-	"type": "module",
-	"exports": {
-		".": "./src/plugin/index.ts"
-	},
-	"main": "./src/plugin/index.ts",
-	"files": [
-		"src",
-		"docs",
-		"extensions"
-	],
-	"scripts": {
-		"build": "tsc -p tsconfig.json",
-		"check": "tsc -p tsconfig.json --noEmit",
-		"daemon": "tsx src/daemon/index.ts",
-		"prepack": "node scripts/generate-version.mjs",
-		"postpack": "node scripts/generate-version.mjs --restore",
-		"test": "node --import tsx --test src/shared/config-loader.test.ts src/shared/version.test.ts src/daemon/github/client.test.ts src/daemon/github/diff.test.ts src/daemon/github/graphql.test.ts src/daemon/github/http.test.ts src/daemon/github/ratelimit.test.ts src/daemon/ipc/router.test.ts src/daemon/lifecycle/daemon-machine.test.ts src/daemon/lifecycle/daemon-lifecycle-runtime.test.ts src/daemon/persistence/store.test.ts src/daemon/watchers/adaptive-schedule.test.ts src/daemon/watchers/disable-gate.test.ts src/daemon/watchers/integration.test.ts src/daemon/watchers/pr-watcher-registry.test.ts src/daemon/watchers/poll-scheduler.test.ts src/daemon/worktrees/git-resolver.test.ts src/daemon/worktrees/worktree-binding-registry.test.ts src/daemon/worktrees/worktree-binding.test.ts src/daemon/reminders/detail-files.test.ts src/daemon/reminders/reminder-handoff-registry.test.ts src/daemon/reminders/render-reminder.test.ts src/extension/__tests__/index.test.ts src/plugin/daemon-client.test.ts src/plugin/__tests__/commands.test.ts src/plugin/__tests__/compatibility.test.ts src/plugin/__tests__/config-integration.test.ts src/plugin/__tests__/cross-session.test.ts src/plugin/__tests__/debug-state.test.ts src/plugin/__tests__/idle-delivery.test.ts src/plugin/__tests__/packaging.test.ts src/plugin/__tests__/reattach.test.ts src/codex/__tests__/contract-fixture.test.ts src/daemon/logging/logger.test.ts src/test/delivery-reliability.test.ts src/test/pr-update-delivery.test.ts src/test/delivery-conservation.test.ts",
-		"test:compat": "node --import tsx --test src/plugin/__tests__/compatibility.test.ts",
-		"test:codex:contract": "node --import tsx --test src/codex/__tests__/contract-fixture.test.ts",
-		"test:codex:install": "node scripts/validate-codex-contract-fixture.mjs",
-		"test:codex:live": "node scripts/validate-codex-live-contract.mjs",
-		"test:live": "node --import tsx src/test/live-validation.ts",
-		"test:live:contract": "node --import tsx src/test/live-validation.ts --contract-only",
-		"test:harness": "node --import tsx --test src/test/delivery-reliability.test.ts src/test/pr-update-delivery.test.ts src/test/delivery-conservation.test.ts"
-	},
-	"keywords": [
-		"pi-package",
-		"pi-extension",
-		"opencode",
-		"opencode-plugin",
-		"github",
-		"pull-request",
-		"pr",
-		"review",
-		"notifications"
-	],
-	"license": "MIT",
-	"dependencies": {
-		"@opencode-ai/plugin": "latest",
-		"@opencode-ai/sdk": "latest",
-		"tsx": "^4.20.6",
-		"xstate": "^5.32.6",
-		"zod": "^3.25.76"
-	},
-	"devDependencies": {
-		"@types/node": "^24.6.0",
-		"typescript": "^5.9.3"
-	},
-	"pi": {
-		"extensions": [
-			"./extensions/premind.ts"
-		]
-	},
-	"peerDependencies": {
-		"@earendil-works/pi-coding-agent": "*",
-		"@earendil-works/pi-tui": "*",
-		"typebox": "*"
-	}
+  "name": "premind",
+  "version": "0.1.0",
+  "description": "Pi package and OpenCode plugin that keeps sessions up to date with pull request changes",
+  "type": "module",
+  "exports": {
+    ".": "./src/plugin-opencode/index.ts",
+    "./opencode": "./src/plugin-opencode/index.ts"
+  },
+  "main": "./src/plugin-opencode/index.ts",
+  "files": [
+    "src",
+    "docs",
+    "extensions",
+    "plugin-claude"
+  ],
+  "scripts": {
+    "build": "node scripts/build-claude-runtime.mjs && tsc -p tsconfig.json",
+    "build:claude-runtime": "node scripts/build-claude-runtime.mjs",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "daemon": "tsx src/daemon/index.ts",
+    "prepack": "node scripts/generate-version.mjs",
+    "postpack": "node scripts/generate-version.mjs --restore",
+    "test": "node --import tsx --test src/shared/config-loader.test.ts src/shared/version.test.ts src/daemon/github/client.test.ts src/daemon/github/diff.test.ts src/daemon/github/graphql.test.ts src/daemon/github/http.test.ts src/daemon/github/ratelimit.test.ts src/daemon/ipc/router.test.ts src/daemon/lifecycle/daemon-machine.test.ts src/daemon/lifecycle/daemon-lifecycle-runtime.test.ts src/daemon/persistence/store.test.ts src/daemon/watchers/adaptive-schedule.test.ts src/daemon/watchers/disable-gate.test.ts src/daemon/watchers/integration.test.ts src/daemon/watchers/pr-watcher-registry.test.ts src/daemon/watchers/poll-scheduler.test.ts src/daemon/worktrees/git-resolver.test.ts src/daemon/worktrees/worktree-binding-registry.test.ts src/daemon/worktrees/worktree-binding.test.ts src/daemon/reminders/detail-files.test.ts src/daemon/reminders/reminder-handoff-registry.test.ts src/daemon/reminders/render-reminder.test.ts src/extension/__tests__/index.test.ts src/plugin-opencode/daemon-client.test.ts src/plugin-opencode/__tests__/commands.test.ts src/plugin-opencode/__tests__/compatibility.test.ts src/plugin-opencode/__tests__/config-integration.test.ts src/plugin-opencode/__tests__/cross-session.test.ts src/plugin-opencode/__tests__/debug-state.test.ts src/plugin-opencode/__tests__/idle-delivery.test.ts src/plugin-opencode/__tests__/packaging.test.ts src/plugin-opencode/__tests__/reattach.test.ts src/codex/__tests__/contract-fixture.test.ts src/daemon/logging/logger.test.ts src/test/delivery-reliability.test.ts plugin-claude/test/*.test.mjs src/test/pr-update-delivery.test.ts src/test/delivery-conservation.test.ts",
+    "test:compat": "node --import tsx --test src/plugin-opencode/__tests__/compatibility.test.ts",
+    "test:claude": "node --test plugin-claude/test/*.test.mjs",
+    "test:claude:live-contract": "node plugin-claude/live/session-id-contract.mjs",
+    "test:codex:contract": "node --import tsx --test src/codex/__tests__/contract-fixture.test.ts",
+    "test:codex:install": "node scripts/validate-codex-contract-fixture.mjs",
+    "test:codex:live": "node scripts/validate-codex-live-contract.mjs",
+    "test:live": "node --import tsx src/test/live-validation.ts",
+    "test:live:contract": "node --import tsx src/test/live-validation.ts --contract-only",
+    "test:harness": "node --import tsx --test src/test/delivery-reliability.test.ts src/test/pr-update-delivery.test.ts src/test/delivery-conservation.test.ts"
+  },
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "opencode",
+    "opencode-plugin",
+    "claude-code",
+    "github",
+    "pull-request",
+    "pr",
+    "notifications"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@opencode-ai/plugin": "latest",
+    "@opencode-ai/sdk": "latest",
+    "tsx": "^4.20.6",
+    "xstate": "^5.32.6",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^24.6.0",
+    "typescript": "^5.9.3"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions/premind.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  }
 }

@@ -208,13 +208,40 @@ describe("loadPremindConfig", () => {
     assert.equal(config.idleDeliveryThresholdMs, PREMIND_IDLE_DELIVERY_THRESHOLD_MS)
     assert.equal(logs.length, 0)
   })
+
+  test("uses legacy config only when no valid primary candidate exists", () => {
+    const primary = path.join(scratch, "premind", "premind.jsonc")
+    const legacy = path.join(scratch, "opencode", "premind.jsonc")
+    fs.mkdirSync(path.dirname(legacy), { recursive: true })
+    fs.writeFileSync(legacy, '{"idleDeliveryThresholdMs":30000}', "utf8")
+
+    const logs: string[] = []
+    assert.equal(
+      loadPremindConfig({ userConfigPath: primary, legacyUserConfigPath: legacy, env: {}, logger: (message) => logs.push(message) }).idleDeliveryThresholdMs,
+      30000,
+    )
+    assert.match(logs[0], /legacy config.*v0\.3/i)
+
+    fs.mkdirSync(path.dirname(primary), { recursive: true })
+    fs.writeFileSync(primary, "{}", "utf8")
+    assert.equal(
+      loadPremindConfig({ userConfigPath: primary, legacyUserConfigPath: legacy, env: {} }).idleDeliveryThresholdMs,
+      PREMIND_IDLE_DELIVERY_THRESHOLD_MS,
+    )
+
+    fs.writeFileSync(primary, "{ malformed", "utf8")
+    assert.equal(
+      loadPremindConfig({ userConfigPath: primary, legacyUserConfigPath: legacy, env: {} }).idleDeliveryThresholdMs,
+      30000,
+    )
+  })
 })
 
 describe("getDefaultUserConfigPath", () => {
-  test("returns a path inside the user's opencode config directory", () => {
+  test("returns a path inside Premind's config directory", () => {
     const p = getDefaultUserConfigPath()
-    // Must end in a premind.jsonc file inside an opencode-related directory.
-    assert.match(p, /opencode[\/\\]premind\.jsonc$/)
+    assert.match(p, /premind[/\\]premind\.jsonc$/)
+    assert.doesNotMatch(p, /opencode/)
   })
 })
 

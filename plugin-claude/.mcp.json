@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "premind": {
+      "command": "${CLAUDE_PLUGIN_ROOT}/bin/mcp-server.mjs"
+    }
+  }
+}

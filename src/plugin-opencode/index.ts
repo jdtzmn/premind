@@ -141,7 +141,7 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
   // dependencies.idleDeliveryThresholdMs (test injection) takes precedence
   // over the loaded config value. Strict undefined check so 0 (used in tests
   // for immediate delivery) is not overridden by the config default.
-  let idleDeliveryThreshold =
+  const idleDeliveryThreshold =
     dependencies.idleDeliveryThresholdMs ?? resolvedConfig.idleDeliveryThresholdMs ?? PREMIND_IDLE_DELIVERY_THRESHOLD_MS
 
   writePluginRuntimeState({ phase: "initializing", root })
@@ -293,11 +293,11 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
       try {
         const pending = await daemon.getPendingReminder(sessionID)
         if (pending.batch) {
-          if (!toastSessions.has(sessionID)) {
-            startToastCountdown(sessionID, pending.batch.events.length)
-          } else {
+          if (toastSessions.has(sessionID)) {
             const ref = pendingCountRefs.get(sessionID)
             if (ref) ref.value = pending.batch.events.length
+          } else {
+            startToastCountdown(sessionID, pending.batch.events.length)
           }
           scheduleDelivery(sessionID)
         }
@@ -567,14 +567,14 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
       // Check for a new batch and start toast countdown + schedule delivery.
       void daemon.getPendingReminder(sessionID).then((pending) => {
         if (!pending.batch) return
-        if (!toastSessions.has(sessionID)) {
-          // No countdown registered yet — start one.
-          startToastCountdown(sessionID, pending.batch.events.length)
-        } else {
+        if (toastSessions.has(sessionID)) {
           // Countdown already registered — update the count ref in place so the
           // next global tick displays the latest count.
           const ref = pendingCountRefs.get(sessionID)
           if (ref) ref.value = pending.batch.events.length
+        } else {
+          // No countdown registered yet — start one.
+          startToastCountdown(sessionID, pending.batch.events.length)
         }
         scheduleDelivery(sessionID)
       }).catch((err) => {

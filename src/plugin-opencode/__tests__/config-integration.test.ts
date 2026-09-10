@@ -57,9 +57,9 @@ const makePlugin = async (deps: {
     detectGit: async () => ({ repo: "acme/repo", branch: "feature/test" }),
     ensureDaemon: async () => {},
     ...(deps.loadConfig ? { loadConfig: deps.loadConfig } : {}),
-    ...(deps.idleDeliveryThresholdMs !== undefined
-      ? { idleDeliveryThresholdMs: deps.idleDeliveryThresholdMs }
-      : {}),
+    ...(deps.idleDeliveryThresholdMs === undefined
+      ? {}
+      : { idleDeliveryThresholdMs: deps.idleDeliveryThresholdMs }),
   })({
     directory: "/tmp/project",
     worktree: "/tmp/project",
