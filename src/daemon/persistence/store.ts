@@ -139,6 +139,15 @@ type ReminderEventWindow = {
 	maximumEventSequence: number;
 };
 
+function busyTimeoutPragma(timeoutMs: number): string {
+	switch (timeoutMs) {
+		case 5_000:
+			return "PRAGMA busy_timeout = 5000";
+		default:
+			throw new Error(`Unsupported SQLite busy timeout: ${timeoutMs}`);
+	}
+}
+
 export class StateStore {
 	private readonly db: DatabaseSync;
 	private readonly detailFiles = new DetailFileWriter();
@@ -149,7 +158,7 @@ export class StateStore {
 		fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 		fs.mkdirSync(PREMIND_STATE_DIR, { recursive: true });
 		this.db = new DatabaseSync(dbPath);
-		this.db.exec(`PRAGMA busy_timeout = ${PREMIND_DATABASE_BUSY_TIMEOUT_MS}`);
+		this.db.exec(busyTimeoutPragma(PREMIND_DATABASE_BUSY_TIMEOUT_MS));
 		this.db.exec("PRAGMA journal_mode = WAL");
 		this.db.exec("PRAGMA foreign_keys = ON");
 		this.migrate();
