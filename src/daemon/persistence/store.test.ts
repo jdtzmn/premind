@@ -1,4 +1,6 @@
 import assert from "node:assert/strict"
+import { spawn } from "node:child_process"
+import { once } from "node:events"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
@@ -52,6 +54,43 @@ afterEach(() => {
 })
 
 describe("StateStore", () => {
+  test("waits for a transient external database lock", { timeout: 5_000 }, async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "premind-store-lock-test-"))
+    const dbPath = path.join(dir, "premind.db")
+    tempPaths.push(dir)
+
+    const initialStore = new StateStore(dbPath)
+    initialStore.close()
+
+    const lockHolder = spawn(
+      process.execPath,
+      [
+        "-e",
+        `
+          const { DatabaseSync } = require("node:sqlite");
+          const db = new DatabaseSync(process.argv[1]);
+          db.exec("BEGIN EXCLUSIVE");
+          process.stdout.write("locked\\n");
+          setTimeout(() => { db.exec("COMMIT"); db.close(); }, 100);
+        `,
+        dbPath,
+      ],
+      { stdio: ["ignore", "pipe", "inherit"] },
+    )
+    await once(lockHolder.stdout!, "data")
+
+    const startedAt = Date.now()
+    const store = new StateStore(dbPath)
+    const elapsedMs = Date.now() - startedAt
+    try {
+      assert.ok(elapsedMs >= 75, `expected the store to wait for the lock, waited ${elapsedMs}ms`)
+    } finally {
+      store.close()
+    }
+    const [exitCode] = await once(lockHolder, "exit")
+    assert.equal(exitCode, 0)
+  })
+
   for (const scenario of [
     { name: "initial failing check", failing: true, conflict: false, manual: false, stale: false },
     { name: "initial conflict", failing: false, conflict: true, manual: false, stale: false },
@@ -1923,5 +1962,95 @@ describe("StateStore", () => {
     store.unsubscribe("session-demand", "external/repo", 99)
     assert.equal(store.hasDaemonDemand(), false)
     store.close()
+  })
+})
+
+describe("migrate: legacy pr_watchers upgrade", () => {
+  // A fresh database gets every watcher-lifecycle column from CREATE TABLE, so
+  // the ADD COLUMN path only ever runs against databases created before those
+  // columns existed — i.e. real installs, never the rest of this suite.
+  const legacyDbPath = () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "premind-legacy-migrate-"))
+    tempPaths.push(dir)
+    const dbPath = path.join(dir, "premind.db")
+    const legacy = new DatabaseSync(dbPath)
+    legacy.exec(`
+      CREATE TABLE pr_watchers (
+        repo TEXT NOT NULL,
+        pr_number INTEGER NOT NULL,
+        last_checked_at INTEGER,
+        active_session_count INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL DEFAULT 0,
+        updated_at INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (repo, pr_number)
+      );
+    `)
+    const insert = legacy.prepare(
+      `INSERT INTO pr_watchers (repo, pr_number, last_checked_at, active_session_count)
+       VALUES (?, ?, ?, ?)`,
+    )
+    insert.run("acme/repo", 42, 1_000, 1) // still has a subscriber
+    insert.run("acme/repo", 43, 1_000, 0) // no subscribers
+    legacy.close()
+    return dbPath
+  }
+
+  const columnsOf = (dbPath: string) => {
+    const probe = new DatabaseSync(dbPath)
+    const names = (probe.prepare(`PRAGMA table_info(pr_watchers)`).all() as Array<{
+      name: string
+    }>).map((column) => column.name)
+    probe.close()
+    return names
+  }
+
+  test("adds the watcher lifecycle columns and preserves existing rows", () => {
+    const dbPath = legacyDbPath()
+    assert.equal(columnsOf(dbPath).includes("state"), false, "precondition: legacy schema")
+
+    const store = new StateStore(dbPath)
+    store.close()
+
+    const names = columnsOf(dbPath)
+    for (const column of [
+      "state",
+      "idle_deadline_at",
+      "terminal_at",
+      "next_eligible_poll_at",
+      "consecutive_failures",
+      "last_failure_at",
+      "last_failure_message",
+      "rate_limit_reset_at",
+    ]) {
+      assert.ok(names.includes(column), `migrate must add ${column}`)
+    }
+
+    const probe = new DatabaseSync(dbPath)
+    const rows = probe
+      .prepare(
+        `SELECT pr_number, state, consecutive_failures FROM pr_watchers ORDER BY pr_number`,
+      )
+      .all() as Array<{ pr_number: number; state: string; consecutive_failures: number }>
+    probe.close()
+
+    assert.deepEqual(
+      rows.map((row) => ({ ...row })),
+      [
+        // A legacy watcher that still has a subscriber must resume, not sit
+        // stopped forever — a stopped watcher is never returned by
+        // pollingTargets, which would silently stop delivering for that PR.
+        { pr_number: 42, state: "warming_up", consecutive_failures: 0 },
+        { pr_number: 43, state: "stopped", consecutive_failures: 0 },
+      ],
+      "existing watcher rows survive the upgrade and take sensible states",
+    )
+  })
+
+  test("is idempotent when the columns already exist", () => {
+    const dbPath = legacyDbPath()
+    new StateStore(dbPath).close()
+    const first = columnsOf(dbPath)
+    new StateStore(dbPath).close()
+    assert.deepEqual(columnsOf(dbPath), first, "reopening must not re-add columns or throw")
   })
 })

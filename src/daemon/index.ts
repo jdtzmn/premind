@@ -1,4 +1,4 @@
-import { PREMIND_CLOSED_SESSION_RETENTION_MS, PREMIND_DAEMON_LOG_PATH, PREMIND_IDLE_SHUTDOWN_GRACE_MS, PREMIND_SESSION_STALE_MS } from "../shared/constants.ts"
+import { PREMIND_CLOSED_SESSION_RETENTION_MS, PREMIND_DAEMON_LOG_PATH, PREMIND_IDLE_SHUTDOWN_GRACE_MS, PREMIND_REMINDER_HANDOFF_STALE_MS, PREMIND_SESSION_STALE_MS } from "../shared/constants.ts"
 import { createLogger } from "./logging/logger.ts"
 import { IpcServer } from "./ipc/server.ts"
 import { GitHubClient } from "./github/client.ts"
@@ -122,6 +122,13 @@ async function main() {
   const reapInterval = setInterval(() => {
     const result = server.store.reapStaleSessions(PREMIND_SESSION_STALE_MS)
     server.worktreeBindings.closeInactiveSessions()
+    const reclaimedHandoffs = server.store.expireStaleHandoffs()
+    if (reclaimedHandoffs > 0) {
+      logger.info("reclaimed abandoned reminder handoffs", {
+        reclaimed: reclaimedHandoffs,
+        thresholdMs: PREMIND_REMINDER_HANDOFF_STALE_MS,
+      })
+    }
     if (result.reaped > 0) {
       logger.info("reaped stale sessions", {
         reaped: result.reaped,

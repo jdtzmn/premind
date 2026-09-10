@@ -5,7 +5,9 @@ import { randomUUID } from "node:crypto";
 import {
 	PREMIND_CLIENT_LEASE_TTL_MS,
 	PREMIND_DB_PATH,
+	PREMIND_DATABASE_BUSY_TIMEOUT_MS,
 	PREMIND_PR_STREAM_RETENTION_MS,
+	PREMIND_REMINDER_HANDOFF_STALE_MS,
 	PREMIND_STATE_DIR,
 	PREMIND_SUBSCRIPTION_RETENTION_MS,
 } from "../../shared/constants.ts";
@@ -138,6 +140,7 @@ export class StateStore {
 		fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 		fs.mkdirSync(PREMIND_STATE_DIR, { recursive: true });
 		this.db = new DatabaseSync(dbPath);
+		this.db.exec(`PRAGMA busy_timeout = ${PREMIND_DATABASE_BUSY_TIMEOUT_MS}`);
 		this.db.exec("PRAGMA journal_mode = WAL");
 		this.db.exec("PRAGMA foreign_keys = ON");
 		this.migrate();
@@ -617,10 +620,17 @@ export class StateStore {
 			const existing = this.getSubscription(input.sessionId, input.repo, input.prNumber);
 			if (existing?.source === "manual" || existing?.state === "active") return existing;
 
+			// A session that already held this subscription is re-attaching (every
+			// `activateWorktree` deactivates automatic subscriptions, so this happens
+			// on every session start). Keep its own cursor: baselining to the current
+			// high-water mark would silently skip events it had queued but not yet
+			// received. Only a genuinely new attachment starts at high water, so stale
+			// history is still not dumped on a first subscribe. This reads and writes
+			// one session's own cursor, so concurrent sessions stay independent.
 			const row = this.db
 				.prepare(`SELECT MAX(seq) AS max_seq FROM pr_events WHERE repo = :repo AND pr_number = :prNumber`)
 				.get({ repo: input.repo, prNumber: input.prNumber }) as { max_seq: number | null } | undefined;
-			const cursor = row?.max_seq ?? 0;
+			const cursor = existing ? existing.lastDeliveredEventSeq : (row?.max_seq ?? 0);
 			const subscriptionId = existing?.subscriptionId ?? randomUUID();
 			this.db
 				.prepare(
@@ -1608,6 +1618,49 @@ export class StateStore {
 		return this.toReminderBatchRecord(row);
 	}
 
+	/**
+	 * True when a batch is mid-handoff for this target. Such a row is invisible to
+	 * `getPendingReminderRecord` (which only surfaces `built`/`failed`) yet still
+	 * occupies the subscription's unique batch slot, so builders must treat it as
+	 * "already pending" rather than inserting a second row.
+	 */
+	hasInFlightHandoff(sessionId: string, subscriptionId: string | null): boolean {
+		const row = subscriptionId
+			? (this.db
+					.prepare(
+						`SELECT 1 FROM reminder_batches
+						 WHERE subscription_id = :subscriptionId AND state = 'handed_off' LIMIT 1`,
+					)
+					.get({ subscriptionId }) as { 1: number } | undefined)
+			: (this.db
+					.prepare(
+						`SELECT 1 FROM reminder_batches
+						 WHERE session_id = :sessionId AND subscription_id IS NULL
+						   AND state = 'handed_off' LIMIT 1`,
+					)
+					.get({ sessionId }) as { 1: number } | undefined);
+		return row !== undefined;
+	}
+
+	/**
+	 * Returns abandoned handoffs to `failed` so the handoff registry can retry
+	 * them. Without this, an adapter that dies between `handed_off` and
+	 * `confirmed` strands its batch until the next daemon restart runs
+	 * `recoverFromRestart`, and every queued event behind it goes undelivered.
+	 */
+	expireStaleHandoffs(
+		thresholdMs = PREMIND_REMINDER_HANDOFF_STALE_MS,
+		now = Date.now(),
+	): number {
+		const result = this.db
+			.prepare(
+				`UPDATE reminder_batches SET state = 'failed', updated_at = :now
+				 WHERE state = 'handed_off' AND updated_at < :cutoff`,
+			)
+			.run({ now, cutoff: now - thresholdMs });
+		return result.changes as number;
+	}
+
 	getReminderBatchRecord(
 		batchId: string,
 		sessionId?: string,
@@ -2038,6 +2091,16 @@ export class StateStore {
 			: this.getPendingReminder(sessionId);
 		if (existing) return existing;
 
+		// A batch already handed to an adapter still owns its events: the delivery
+		// cursor only advances on `confirmed`, so those events are still undelivered
+		// here. Building a replacement would violate the one-batch-per-subscription
+		// invariant (`reminder_batches.subscription_id` is UNIQUE) and, because
+		// callers such as `PullRequestWatcher.tick` swallow per-target errors, the
+		// throw would silently wedge every future poll for this PR. Wait for the
+		// handoff to resolve, or for `expireStaleHandoffs` to return it to `failed`.
+		if (this.hasInFlightHandoff(sessionId, subscription?.subscriptionId ?? null))
+			return null;
+
 		const events = subscription
 			? this.listUndeliveredEventsForSubscription(subscription.subscriptionId)
 			: this.listUndeliveredEvents(sessionId);
@@ -2349,19 +2412,43 @@ export class StateStore {
 		const prWatcherColumns = this.db
 			.prepare(`PRAGMA table_info(pr_watchers)`)
 			.all() as Array<{ name: string }>;
-		const ensurePrWatcherColumn = (name: string, definition: string) => {
-			if (!prWatcherColumns.some((column) => column.name === name)) {
-				this.db.exec(`ALTER TABLE pr_watchers ADD COLUMN ${name} ${definition}`);
-			}
-		};
-		ensurePrWatcherColumn("state", "TEXT NOT NULL DEFAULT 'stopped'");
-		ensurePrWatcherColumn("idle_deadline_at", "INTEGER");
-		ensurePrWatcherColumn("terminal_at", "INTEGER");
-		ensurePrWatcherColumn("next_eligible_poll_at", "INTEGER");
-		ensurePrWatcherColumn("consecutive_failures", "INTEGER NOT NULL DEFAULT 0");
-		ensurePrWatcherColumn("last_failure_at", "INTEGER");
-		ensurePrWatcherColumn("last_failure_message", "TEXT");
-		ensurePrWatcherColumn("rate_limit_reset_at", "INTEGER");
+		// SQLite cannot bind identifiers or type definitions in DDL, so each of these
+		// is a fully static statement rather than an interpolated one. Verbose, but it
+		// removes any possibility of a dynamically constructed ALTER.
+		const hasPrWatcherColumn = (name: string) =>
+			prWatcherColumns.some((column) => column.name === name);
+		if (!hasPrWatcherColumn("state")) {
+			this.db.exec(
+				"ALTER TABLE pr_watchers ADD COLUMN state TEXT NOT NULL DEFAULT 'stopped'",
+			);
+		}
+		if (!hasPrWatcherColumn("idle_deadline_at")) {
+			this.db.exec("ALTER TABLE pr_watchers ADD COLUMN idle_deadline_at INTEGER");
+		}
+		if (!hasPrWatcherColumn("terminal_at")) {
+			this.db.exec("ALTER TABLE pr_watchers ADD COLUMN terminal_at INTEGER");
+		}
+		if (!hasPrWatcherColumn("next_eligible_poll_at")) {
+			this.db.exec(
+				"ALTER TABLE pr_watchers ADD COLUMN next_eligible_poll_at INTEGER",
+			);
+		}
+		if (!hasPrWatcherColumn("consecutive_failures")) {
+			this.db.exec(
+				"ALTER TABLE pr_watchers ADD COLUMN consecutive_failures INTEGER NOT NULL DEFAULT 0",
+			);
+		}
+		if (!hasPrWatcherColumn("last_failure_at")) {
+			this.db.exec("ALTER TABLE pr_watchers ADD COLUMN last_failure_at INTEGER");
+		}
+		if (!hasPrWatcherColumn("last_failure_message")) {
+			this.db.exec("ALTER TABLE pr_watchers ADD COLUMN last_failure_message TEXT");
+		}
+		if (!hasPrWatcherColumn("rate_limit_reset_at")) {
+			this.db.exec(
+				"ALTER TABLE pr_watchers ADD COLUMN rate_limit_reset_at INTEGER",
+			);
+		}
 		this.db.exec(
 			`UPDATE pr_watchers
 			 SET state = 'warming_up'
