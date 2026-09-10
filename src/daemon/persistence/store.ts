@@ -454,6 +454,20 @@ export class StateStore {
 		return { updated: true, revived };
 	}
 
+	suspendClaudeSession(sessionId: string, now = Date.now()): boolean {
+		const session = this.getSession(sessionId);
+		if (!session || session.host !== "claude") return false;
+		this.db
+			.prepare(
+				`UPDATE sessions
+				 SET status = 'closed', busy_state = 'idle', updated_at = :now
+				 WHERE session_id = :sessionId`,
+			)
+			.run({ sessionId, now });
+		this.refreshWatcherCounts(now);
+		return true;
+	}
+
 	unregisterSession(sessionId: string) {
 		this.db.prepare(`DELETE FROM sessions WHERE session_id = ?`).run(sessionId);
 		this.db

@@ -101,7 +101,7 @@ export const handleHook = async (
   if (!sessionId) return undefined;
 
   if (eventName === "SessionEnd") {
-    await ipc("unregisterSession", { sessionId });
+    await ipc("suspendClaudeSession", { sessionId });
     return undefined;
   }
 

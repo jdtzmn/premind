@@ -4050,7 +4050,7 @@ class Logger {
 var createLogger = (service) => new Logger(service);
 
 // src/daemon/ipc/server.ts
-import net from "node:net";
+import net2 from "node:net";
 import fs4 from "node:fs";
 
 // node_modules/zod/v3/external.js
@@ -8081,6 +8081,7 @@ var ensureSessionControlPayloadSchema = exports_external.object({
 var sessionControlPayloadSchema = exports_external.object({
   sessionId: exports_external.string().min(1)
 }).strict();
+var suspendClaudeSessionPayloadSchema = sessionControlPayloadSchema;
 var claudeSessionPayloadSchema = exports_external.object({
   sessionId: exports_external.string().min(1),
   hostSessionId: exports_external.string().min(1).optional(),
@@ -8135,7 +8136,8 @@ var daemonInfoSchema = exports_external.object({
   protocolVersion: exports_external.literal(PREMIND_PROTOCOL_VERSION),
   heartbeatMs: exports_external.literal(PREMIND_CLIENT_HEARTBEAT_MS),
   leaseTtlMs: exports_external.literal(PREMIND_CLIENT_LEASE_TTL_MS),
-  idleShutdownGraceMs: exports_external.literal(PREMIND_IDLE_SHUTDOWN_GRACE_MS)
+  idleShutdownGraceMs: exports_external.literal(PREMIND_IDLE_SHUTDOWN_GRACE_MS),
+  operations: exports_external.array(exports_external.string().min(1)).optional()
 }).strict();
 var debugStatusResponseSchema = exports_external.object({
   daemon: daemonInfoSchema,
@@ -8223,6 +8225,11 @@ var requestSchema = exports_external.discriminatedUnion("type", [
     type: exports_external.literal("confirmClaudeHandoff"),
     protocolVersion: exports_external.literal(PREMIND_PROTOCOL_VERSION),
     payload: confirmClaudeHandoffPayloadSchema
+  }),
+  exports_external.object({
+    type: exports_external.literal("suspendClaudeSession"),
+    protocolVersion: exports_external.literal(PREMIND_PROTOCOL_VERSION),
+    payload: suspendClaudeSessionPayloadSchema
   }),
   exports_external.object({
     type: exports_external.literal("updateSessionState"),
@@ -8342,6 +8349,28 @@ var activateWorktreeResponseSchema = exports_external.object({ binding: worktree
 var subscribeResponseSchema = exports_external.object({ subscription: subscriptionResponseSchema }).strict();
 var unsubscribeResponseSchema = exports_external.object({ unsubscribed: exports_external.boolean(), automaticOptOutRecorded: exports_external.boolean() }).strict();
 
+// src/shared/daemon-startup.ts
+import net from "node:net";
+var DEFAULT_PROBE_TIMEOUT_MS = 250;
+var CLAUDE_REQUIRED_DAEMON_OPERATIONS = [
+  "registerClaudeSession",
+  "touchClaudeSession",
+  "claimClaudeReminder",
+  "confirmClaudeHandoff",
+  "suspendClaudeSession"
+];
+var isSocketReachable = (socketPath = PREMIND_SOCKET_PATH, timeoutMs = DEFAULT_PROBE_TIMEOUT_MS) => new Promise((resolve) => {
+  const connection = net.createConnection(socketPath);
+  const done = (reachable) => {
+    clearTimeout(timer);
+    connection.destroy();
+    resolve(reachable);
+  };
+  const timer = setTimeout(() => done(false), timeoutMs);
+  connection.once("connect", () => done(true));
+  connection.once("error", () => done(false));
+});
+
 // node_modules/xstate/dist/xstate.development.cjs.mjs
 var import_xstate_development_cjs = __toESM(require_xstate_development_cjs(), 1);
 
@@ -8434,7 +8463,11 @@ class ReminderHandoffRegistry {
   acknowledge(payload, now = Date.now()) {
     const record = this.store.getReminderBatchRecord(payload.batchId, payload.sessionId);
     if (!record) {
-      return { acknowledged: false, code: "BATCH_NOT_FOUND", message: "Reminder batch is missing or already confirmed" };
+      return {
+        acknowledged: false,
+        code: "BATCH_NOT_FOUND",
+        message: "Reminder batch is missing or already confirmed"
+      };
     }
     const actor = this.actorFor(record);
     actor.send(eventForReminderState(payload.state));
@@ -8449,11 +8482,18 @@ class ReminderHandoffRegistry {
       const persisted = this.store.ackReminder(payload, now);
       if (!persisted) {
         this.discard(payload.batchId);
-        return { acknowledged: false, code: "HANDOFF_CONFLICT", message: "Reminder batch changed concurrently" };
+        return {
+          acknowledged: false,
+          code: "HANDOFF_CONFLICT",
+          message: "Reminder batch changed concurrently"
+        };
       }
       if (payload.state === "confirmed")
         this.discard(payload.batchId);
-      return { acknowledged: true, retryable: payload.state === "failed" };
+      return {
+        acknowledged: true,
+        retryable: payload.state === "failed"
+      };
     } catch (error) {
       this.discard(payload.batchId);
       throw error;
@@ -9005,6 +9045,13 @@ class Router {
           return this.ok({
             confirmed: this.reminderHandoffs.confirmClaudeHandoff(request.payload.sessionId)
           });
+        case "suspendClaudeSession": {
+          const suspended = this.store.suspendClaudeSession(request.payload.sessionId);
+          if (!suspended)
+            return this.fail("SESSION_NOT_FOUND", `Unknown Claude session: ${request.payload.sessionId}`);
+          this.worktreeBindings.closeSession(request.payload.sessionId);
+          return this.ok({ suspended: true });
+        }
         case "updateSessionState": {
           const result = this.store.updateSessionState(request.payload);
           if (!result.updated)
@@ -9061,7 +9108,8 @@ class Router {
               protocolVersion: 1,
               heartbeatMs: PREMIND_CLIENT_HEARTBEAT_MS,
               leaseTtlMs: PREMIND_CLIENT_LEASE_TTL_MS,
-              idleShutdownGraceMs: PREMIND_IDLE_SHUTDOWN_GRACE_MS
+              idleShutdownGraceMs: PREMIND_IDLE_SHUTDOWN_GRACE_MS,
+              operations: [...CLAUDE_REQUIRED_DAEMON_OPERATIONS]
             },
             globallyDisabled: this.store.isGloballyDisabled(),
             activeClients: this.store.countActiveClients(),
@@ -9736,6 +9784,16 @@ class StateStore {
       this.refreshWatcherCounts(now);
     this.touchBranchWatcher(next.repo, next.branch, now);
     return { updated: true, revived };
+  }
+  suspendClaudeSession(sessionId, now = Date.now()) {
+    const session = this.getSession(sessionId);
+    if (!session || session.host !== "claude")
+      return false;
+    this.db.prepare(`UPDATE sessions
+				 SET status = 'closed', busy_state = 'idle', updated_at = :now
+				 WHERE session_id = :sessionId`).run({ sessionId, now });
+    this.refreshWatcherCounts(now);
+    return true;
   }
   unregisterSession(sessionId) {
     this.db.prepare(`DELETE FROM sessions WHERE session_id = ?`).run(sessionId);
@@ -10679,7 +10737,11 @@ class StateStore {
         if (row.subscription_id) {
           this.db.prepare(`UPDATE session_subscriptions
 							 SET last_delivered_event_seq = MAX(last_delivered_event_seq, :seq), updated_at = :now
-							 WHERE subscription_id = :subscriptionId`).run({ seq: row.max_event_seq, now, subscriptionId: row.subscription_id });
+							 WHERE subscription_id = :subscriptionId`).run({
+            seq: row.max_event_seq,
+            now,
+            subscriptionId: row.subscription_id
+          });
         }
         this.db.prepare(`UPDATE sessions
 						 SET last_delivered_event_seq = MAX(last_delivered_event_seq, :seq), updated_at = :now
@@ -10744,7 +10806,10 @@ class StateStore {
       sessionId,
       repo: targetRepo,
       ...targetPrNumber ? { prNumber: targetPrNumber } : {},
-      ...subscription ? { subscriptionId: subscription.subscriptionId, source: subscription.source } : {},
+      ...subscription ? {
+        subscriptionId: subscription.subscriptionId,
+        source: subscription.source
+      } : {},
       reminderText,
       events: condensed
     };
@@ -11112,7 +11177,7 @@ class IpcServer {
   reminderHandoffs;
   router;
   demandChangeListener = () => {};
-  server = net.createServer((socket) => {
+  server = net2.createServer((socket) => {
     let buffer = "";
     socket.setEncoding("utf8");
     socket.on("data", (chunk) => {
@@ -11140,8 +11205,12 @@ class IpcServer {
     this.router = new Router(store, undefined, worktreeBindings, reminderHandoffs, () => this.demandChangeListener());
   }
   async listen(socketPath = PREMIND_SOCKET_PATH) {
-    if (fs4.existsSync(socketPath))
+    if (fs4.existsSync(socketPath)) {
+      if (await isSocketReachable(socketPath)) {
+        throw new Error(`premind daemon already owns socket: ${socketPath}`);
+      }
       fs4.rmSync(socketPath);
+    }
     await new Promise((resolve, reject) => {
       this.server.once("error", reject);
       this.server.listen(socketPath, () => resolve());

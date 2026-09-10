@@ -4,6 +4,7 @@ import { createLogger } from "../logging/logger.ts";
 import { requestSchema } from "../../shared/ipc.ts";
 import type { PremindResponse } from "../../shared/ipc.ts";
 import { PREMIND_SOCKET_PATH } from "../../shared/constants.ts";
+import { isSocketReachable } from "../../shared/daemon-startup.ts";
 import { Router } from "./router.ts";
 import { StateStore } from "../persistence/store.ts";
 import { ReminderHandoffRegistry } from "../reminders/reminder-handoff-registry.ts";
@@ -54,7 +55,12 @@ export class IpcServer {
 	}
 
 	async listen(socketPath = PREMIND_SOCKET_PATH) {
-		if (fs.existsSync(socketPath)) fs.rmSync(socketPath);
+		if (fs.existsSync(socketPath)) {
+			if (await isSocketReachable(socketPath)) {
+				throw new Error(`premind daemon already owns socket: ${socketPath}`);
+			}
+			fs.rmSync(socketPath);
+		}
 		await new Promise<void>((resolve, reject) => {
 			this.server.once("error", reject);
 			this.server.listen(socketPath, () => resolve());

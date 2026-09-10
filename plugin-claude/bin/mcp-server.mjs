@@ -8,22 +8,41 @@ const tools = [
   {
     name: "status",
     description: "Return redacted Premind aggregate status.",
-    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    inputSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
   },
   {
     name: "probe",
-    description: "Check whether the Premind daemon is reachable without exposing session data.",
-    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    description:
+      "Check whether the Premind daemon is reachable without exposing session data.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
   },
   {
     name: "enable",
-    description: "Enable Premind polling globally across every active Premind session and project.",
-    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    description:
+      "Enable Premind polling globally across every active Premind session and project.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
   },
   {
     name: "disable",
-    description: "Disable Premind polling globally across every active Premind session and project.",
-    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    description:
+      "Disable Premind polling globally across every active Premind session and project.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
   },
   {
     name: "activate_worktree",
@@ -40,7 +59,10 @@ const tools = [
     description: "Subscribe the current Claude session to a pull request.",
     inputSchema: {
       type: "object",
-      properties: { prNumber: { type: "integer", minimum: 1 }, repo: { type: "string" } },
+      properties: {
+        prNumber: { type: "integer", minimum: 1 },
+        repo: { type: "string" },
+      },
       required: ["prNumber"],
       additionalProperties: false,
     },
@@ -50,7 +72,10 @@ const tools = [
     description: "Unsubscribe the current Claude session from a pull request.",
     inputSchema: {
       type: "object",
-      properties: { prNumber: { type: "integer", minimum: 1 }, repo: { type: "string" } },
+      properties: {
+        prNumber: { type: "integer", minimum: 1 },
+        repo: { type: "string" },
+      },
       required: ["prNumber"],
       additionalProperties: false,
     },
@@ -63,7 +88,9 @@ const getBoundClaudeSessionId = (environment = process.env) => {
   return typeof sessionId === "string" && sessionId ? sessionId : undefined;
 };
 const bindingError = () =>
-  text("Premind cannot verify this Claude session. Reload or restart the plugin, then try again.");
+  text(
+    "Premind cannot verify this Claude session. Reload or restart the plugin, then try again.",
+  );
 
 export const handleMcpRequest = async (
   message,
@@ -99,27 +126,40 @@ export const handleMcpRequest = async (
       JSON.stringify({
         reachable: true,
         globallyDisabled: Boolean(disabled.disabled),
-        delivery: "Stop-boundary only; inactive Claude sessions are not woken in v0.2",
+        delivery:
+          "Stop-boundary only; inactive Claude sessions are not woken in v0.2",
       }),
     );
   }
   if (name === "enable" || name === "disable") {
-    const result = await ipc("setGlobalDisabled", { disabled: name === "disable" });
-    return text(`Premind polling is ${result.disabled ? "disabled" : "enabled"} globally.`);
+    const result = await ipc("setGlobalDisabled", {
+      disabled: name === "disable",
+    });
+    return text(
+      `Premind polling is ${result.disabled ? "disabled" : "enabled"} globally.`,
+    );
   }
 
   const sessionId = getBoundClaudeSessionId(environment);
   if (!sessionId) return bindingError();
   if (name === "activate_worktree") {
-    const result = await ipc("activateWorktree", { sessionId, path: args.path });
-    return text(`Premind is watching ${result.binding.repo} from this Claude session.`);
+    const result = await ipc("activateWorktree", {
+      sessionId,
+      path: args.path,
+    });
+    return text(
+      `Premind is watching ${result.binding.repo} from this Claude session.`,
+    );
   }
   if (name === "subscribe" || name === "unsubscribe") {
-    const result = await ipc(name === "subscribe" ? "subscribe" : "unsubscribe", {
-      sessionId,
-      prNumber: args.prNumber,
-      ...(typeof args.repo === "string" ? { repo: args.repo } : {}),
-    });
+    const result = await ipc(
+      name === "subscribe" ? "subscribe" : "unsubscribe",
+      {
+        sessionId,
+        prNumber: args.prNumber,
+        ...(typeof args.repo === "string" ? { repo: args.repo } : {}),
+      },
+    );
     return text(
       name === "subscribe"
         ? `Premind subscribed this Claude session to ${result.subscription.repo}#${result.subscription.prNumber}.`
@@ -136,7 +176,10 @@ const reply = (id, result, error) =>
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   await ensureDaemonRunning();
-  const input = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+  const input = readline.createInterface({
+    input: process.stdin,
+    crlfDelay: Infinity,
+  });
   input.on("line", async (line) => {
     try {
       const message = JSON.parse(line);
@@ -148,7 +191,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
         if (message.id !== undefined)
           reply(message.id, undefined, {
             code: -32000,
-            message: error instanceof Error ? error.message : "Premind request failed",
+            message:
+              error instanceof Error ? error.message : "Premind request failed",
           });
       } catch {}
     }

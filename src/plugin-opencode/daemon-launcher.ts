@@ -1,9 +1,14 @@
 import fs from "node:fs";
-import net from "node:net";
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { PREMIND_SOCKET_PATH } from "../shared/constants.ts";
+import {
+  acquireDaemonStartLock,
+  probeDaemon,
+  releaseDaemonStartLock,
+  waitForDaemon,
+} from "../shared/daemon-startup.ts";
 import { writePluginRuntimeState } from "./debug-state.ts";
 
 // Resolve the daemon entry relative to this file's location.
@@ -20,30 +25,35 @@ const CONNECT_MAX_RETRIES = 20;
 const STDIO_BUFFER_LIMIT = 4096;
 
 async function isDaemonRunning(socketPath = PREMIND_SOCKET_PATH) {
-  return new Promise<boolean>((resolve) => {
-    const socket = net.createConnection(socketPath);
-    socket.once("connect", () => {
-      socket.end();
-      resolve(true);
-    });
-    socket.once("error", () => {
-      resolve(false);
-    });
-  });
+  return probeDaemon(socketPath);
 }
 
 async function waitForSocket(socketPath = PREMIND_SOCKET_PATH) {
-  for (let attempt = 0; attempt < CONNECT_MAX_RETRIES; attempt++) {
-    if (await isDaemonRunning(socketPath)) return true;
-    await new Promise((resolve) => setTimeout(resolve, CONNECT_RETRY_MS));
-  }
-  return false;
+  return waitForDaemon(
+    socketPath,
+    [],
+    CONNECT_MAX_RETRIES * CONNECT_RETRY_MS,
+    CONNECT_RETRY_MS,
+  );
 }
 
 export async function ensureDaemonRunning(socketPath = PREMIND_SOCKET_PATH) {
   if (await isDaemonRunning(socketPath)) return;
 
-  const runner = findRunner();
+  let lock = acquireDaemonStartLock();
+  if (!lock) {
+    if (await waitForSocket(socketPath)) return;
+    lock = acquireDaemonStartLock();
+    if (!lock) {
+      if (await waitForSocket(socketPath)) return;
+      throw new Error("premind daemon startup remains locked");
+    }
+  }
+
+  try {
+    if (await isDaemonRunning(socketPath)) return;
+
+    const runner = findRunner();
   if (!runner) {
     const diag = {
       timedOut: false,
@@ -135,6 +145,9 @@ export async function ensureDaemonRunning(socketPath = PREMIND_SOCKET_PATH) {
         (stderrBuf ? `\nstderr: ${stderrBuf.trim()}` : "") +
         (spawnError ? `\nspawn error: ${spawnError}` : ""),
     );
+  }
+  } finally {
+    releaseDaemonStartLock(lock);
   }
 }
 

@@ -22,6 +22,7 @@ import {
   reminderBatchSchema,
   sessionControlPayloadSchema,
   setGlobalDisabledPayloadSchema,
+  suspendClaudeSessionPayloadSchema,
   subscribePayloadSchema,
   unsubscribePayloadSchema,
   unregisterSessionPayloadSchema,
@@ -76,6 +77,11 @@ export const requestSchema = z.discriminatedUnion("type", [
     type: z.literal("confirmClaudeHandoff"),
     protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION),
     payload: confirmClaudeHandoffPayloadSchema,
+  }),
+  z.object({
+    type: z.literal("suspendClaudeSession"),
+    protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION),
+    payload: suspendClaudeSessionPayloadSchema,
   }),
   z.object({
     type: z.literal("updateSessionState"),

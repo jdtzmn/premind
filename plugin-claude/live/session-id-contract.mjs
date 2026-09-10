@@ -12,7 +12,9 @@ import { spawnSync } from "node:child_process";
 const claude = process.env.CLAUDE_BINARY ?? "claude";
 const auth = spawnSync(claude, ["auth", "status"], { stdio: "ignore" });
 if (auth.error || auth.status !== 0) {
-  console.log("SKIP: Claude Code is unavailable or unauthenticated; live contract was not run.");
+  console.log(
+    "SKIP: Claude Code is unavailable or unauthenticated; live contract was not run.",
+  );
   process.exit(0);
 }
 
@@ -33,14 +35,22 @@ write(
   "hooks/hooks.json",
   JSON.stringify({
     hooks: {
-      SessionStart: [{ hooks: [{ type: "command", command: "${CLAUDE_PLUGIN_ROOT}/hook.mjs" }] }],
+      SessionStart: [
+        {
+          hooks: [
+            { type: "command", command: "${CLAUDE_PLUGIN_ROOT}/hook.mjs" },
+          ],
+        },
+      ],
     },
   }),
 );
 write(
   ".mcp.json",
   JSON.stringify({
-    mcpServers: { premind_contract: { command: "${CLAUDE_PLUGIN_ROOT}/mcp.mjs" } },
+    mcpServers: {
+      premind_contract: { command: "${CLAUDE_PLUGIN_ROOT}/mcp.mjs" },
+    },
   }),
 );
 write(
@@ -77,9 +87,20 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 const run = (scenario, args) => {
   const result = spawnSync(
     claude,
-    ["-p", "--dangerously-skip-permissions", "--plugin-dir", root, ...args, "Use the available record_session MCP tool exactly once, then reply with recorded."],
+    [
+      "-p",
+      "--dangerously-skip-permissions",
+      "--plugin-dir",
+      root,
+      ...args,
+      "Use the available record_session MCP tool exactly once, then reply with recorded.",
+    ],
     {
-      env: { ...process.env, PREMIND_LIVE_CONTRACT_LOG: logPath, PREMIND_CONTRACT_SCENARIO: scenario },
+      env: {
+        ...process.env,
+        PREMIND_LIVE_CONTRACT_LOG: logPath,
+        PREMIND_CONTRACT_SCENARIO: scenario,
+      },
       encoding: "utf8",
       timeout: 120_000,
     },
@@ -90,19 +111,53 @@ const run = (scenario, args) => {
 
 try {
   run("fresh", []);
-  const rows = fs.readFileSync(logPath, "utf8").trim().split("\n").filter(Boolean).map(JSON.parse);
-  const freshHook = rows.find((row) => row.scenario === "fresh" && row.kind === "hook");
-  const freshMcp = rows.find((row) => row.scenario === "fresh" && row.kind === "mcp");
+  const rows = fs
+    .readFileSync(logPath, "utf8")
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map(JSON.parse);
+  const freshHook = rows.find(
+    (row) => row.scenario === "fresh" && row.kind === "hook",
+  );
+  const freshMcp = rows.find(
+    (row) => row.scenario === "fresh" && row.kind === "mcp",
+  );
   assert.ok(freshHook?.sessionId, "fresh hook must record event.session_id");
-  assert.equal(freshHook.environmentSessionId, freshHook.sessionId, "fresh hook env ID must match event ID");
-  assert.equal(freshMcp?.sessionId, freshHook.sessionId, "fresh MCP ID must match hook ID");
+  assert.equal(
+    freshHook.environmentSessionId,
+    freshHook.sessionId,
+    "fresh hook env ID must match event ID",
+  );
+  assert.equal(
+    freshMcp?.sessionId,
+    freshHook.sessionId,
+    "fresh MCP ID must match hook ID",
+  );
 
   run("resume", ["--resume", freshHook.sessionId]);
-  const resumedRows = fs.readFileSync(logPath, "utf8").trim().split("\n").filter(Boolean).map(JSON.parse);
-  const resumeHook = resumedRows.find((row) => row.scenario === "resume" && row.kind === "hook");
-  const resumeMcp = resumedRows.find((row) => row.scenario === "resume" && row.kind === "mcp");
-  assert.equal(resumeHook?.sessionId, freshHook.sessionId, "resumed hook must retain the session ID");
-  assert.equal(resumeMcp?.sessionId, freshHook.sessionId, "resumed MCP ID must match hook ID");
+  const resumedRows = fs
+    .readFileSync(logPath, "utf8")
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map(JSON.parse);
+  const resumeHook = resumedRows.find(
+    (row) => row.scenario === "resume" && row.kind === "hook",
+  );
+  const resumeMcp = resumedRows.find(
+    (row) => row.scenario === "resume" && row.kind === "mcp",
+  );
+  assert.equal(
+    resumeHook?.sessionId,
+    freshHook.sessionId,
+    "resumed hook must retain the session ID",
+  );
+  assert.equal(
+    resumeMcp?.sessionId,
+    freshHook.sessionId,
+    "resumed MCP ID must match hook ID",
+  );
   console.log("PASS: fresh and resumed hook/MCP Claude session IDs match.");
 } finally {
   fs.rmSync(root, { recursive: true, force: true });

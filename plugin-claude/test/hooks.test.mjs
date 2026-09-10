@@ -9,13 +9,20 @@ test("Stop atomically claims a reminder and returns additionalContext without co
     { session_id: "claude-1" },
     async (type, payload) => {
       calls.push({ type, payload });
-      if (type === "claimClaudeReminder") return { batch: { reminderText: "Review changed" } };
+      if (type === "claimClaudeReminder")
+        return { batch: { reminderText: "Review changed" } };
       return { updated: true };
     },
     {},
   );
-  assert.deepEqual(calls.map(({ type }) => type), ["touchClaudeSession", "claimClaudeReminder"]);
-  assert.match(output.hookSpecificOutput.additionalContext, /cannot wake an otherwise inactive session/i);
+  assert.deepEqual(
+    calls.map(({ type }) => type),
+    ["touchClaudeSession", "claimClaudeReminder"],
+  );
+  assert.match(
+    output.hookSpecificOutput.additionalContext,
+    /cannot wake an otherwise inactive session/i,
+  );
   assert.match(output.hookSpecificOutput.additionalContext, /Review changed/);
 });
 
@@ -32,7 +39,10 @@ test("post-continuation Stop confirms only the prior handoff", async () => {
   );
   assert.equal(output, undefined);
   assert.deepEqual(calls, [
-    { type: "touchClaudeSession", payload: { sessionId: "claude-1", busyState: "idle" } },
+    {
+      type: "touchClaudeSession",
+      payload: { sessionId: "claude-1", busyState: "idle" },
+    },
     { type: "confirmClaudeHandoff", payload: { sessionId: "claude-1" } },
   ]);
 });
@@ -49,7 +59,10 @@ test("UserPromptSubmit marks the environment-bound Claude session busy", async (
     { CLAUDE_CODE_SESSION_ID: "claude-1" },
   );
   assert.deepEqual(calls, [
-    { type: "touchClaudeSession", payload: { sessionId: "claude-1", busyState: "busy" } },
+    {
+      type: "touchClaudeSession",
+      payload: { sessionId: "claude-1", busyState: "busy" },
+    },
   ]);
 });
 
@@ -64,12 +77,15 @@ test("hook binding fails closed when CLAUDE_CODE_SESSION_ID mismatches event.ses
   assert.equal(output, undefined);
   assert.deepEqual(calls, []);
   assert.equal(
-    getBoundClaudeSessionId({ session_id: "claude-hook" }, { CLAUDE_CODE_SESSION_ID: "claude-mcp" }),
+    getBoundClaudeSessionId(
+      { session_id: "claude-hook" },
+      { CLAUDE_CODE_SESSION_ID: "claude-mcp" },
+    ),
     undefined,
   );
 });
 
-test("SessionEnd closes the durable environment-bound Claude session", async () => {
+test("SessionEnd suspends the durable environment-bound Claude session", async () => {
   const calls = [];
   await handleHook(
     "SessionEnd",
@@ -80,5 +96,7 @@ test("SessionEnd closes the durable environment-bound Claude session", async () 
     },
     { CLAUDE_CODE_SESSION_ID: "claude-1" },
   );
-  assert.deepEqual(calls, [{ type: "unregisterSession", payload: { sessionId: "claude-1" } }]);
+  assert.deepEqual(calls, [
+    { type: "suspendClaudeSession", payload: { sessionId: "claude-1" } },
+  ]);
 });

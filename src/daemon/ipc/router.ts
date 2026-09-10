@@ -3,6 +3,7 @@ import {
 	PREMIND_CLIENT_LEASE_TTL_MS,
 	PREMIND_IDLE_SHUTDOWN_GRACE_MS,
 } from "../../shared/constants.ts";
+import { CLAUDE_REQUIRED_DAEMON_OPERATIONS } from "../../shared/daemon-startup.ts";
 import {
 	debugStatusResponseSchema,
 	type AckReminderPayload,
@@ -121,6 +122,18 @@ export class Router {
 							request.payload.sessionId,
 						),
 					});
+				case "suspendClaudeSession": {
+					const suspended = this.store.suspendClaudeSession(
+						request.payload.sessionId,
+					);
+					if (!suspended)
+						return this.fail(
+							"SESSION_NOT_FOUND",
+							`Unknown Claude session: ${request.payload.sessionId}`,
+						);
+					this.worktreeBindings.closeSession(request.payload.sessionId);
+					return this.ok({ suspended: true });
+				}
 				case "updateSessionState": {
 					const result = this.store.updateSessionState(request.payload);
 					if (!result.updated)
@@ -196,6 +209,7 @@ export class Router {
 								heartbeatMs: PREMIND_CLIENT_HEARTBEAT_MS,
 								leaseTtlMs: PREMIND_CLIENT_LEASE_TTL_MS,
 								idleShutdownGraceMs: PREMIND_IDLE_SHUTDOWN_GRACE_MS,
+								operations: [...CLAUDE_REQUIRED_DAEMON_OPERATIONS],
 							},
 							globallyDisabled: this.store.isGloballyDisabled(),
 							activeClients: this.store.countActiveClients(),

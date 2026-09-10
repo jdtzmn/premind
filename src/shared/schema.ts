@@ -104,6 +104,7 @@ export const sessionControlPayloadSchema = z
     sessionId: z.string().min(1),
   })
   .strict();
+export const suspendClaudeSessionPayloadSchema = sessionControlPayloadSchema;
 
 // Claude hook processes are short lived, so this deliberately has no clientId.
 // The daemon owns the stable identity derived from Claude's session_id.
@@ -191,6 +192,7 @@ export const daemonInfoSchema = z
     heartbeatMs: z.literal(PREMIND_CLIENT_HEARTBEAT_MS),
     leaseTtlMs: z.literal(PREMIND_CLIENT_LEASE_TTL_MS),
     idleShutdownGraceMs: z.literal(PREMIND_IDLE_SHUTDOWN_GRACE_MS),
+    operations: z.array(z.string().min(1)).optional(),
   })
   .strict();
 
@@ -286,7 +288,7 @@ export type ReminderEvent = z.infer<typeof reminderEventSchema>;
 export type ReminderBatch = z.infer<typeof reminderBatchSchema>;
 export type AckReminderPayload = z.infer<typeof ackReminderPayloadSchema>;
 export type ConfirmClaudeHandoffPayload = z.infer<
-	typeof confirmClaudeHandoffPayloadSchema
+  typeof confirmClaudeHandoffPayloadSchema
 >;
 export type SetGlobalDisabledPayload = z.infer<
   typeof setGlobalDisabledPayloadSchema
