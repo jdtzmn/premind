@@ -1,4 +1,6 @@
 import assert from "node:assert/strict"
+import { spawn } from "node:child_process"
+import { once } from "node:events"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
@@ -52,6 +54,43 @@ afterEach(() => {
 })
 
 describe("StateStore", () => {
+  test("waits for a transient external database lock", { timeout: 5_000 }, async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "premind-store-lock-test-"))
+    const dbPath = path.join(dir, "premind.db")
+    tempPaths.push(dir)
+
+    const initialStore = new StateStore(dbPath)
+    initialStore.close()
+
+    const lockHolder = spawn(
+      process.execPath,
+      [
+        "-e",
+        `
+          const { DatabaseSync } = require("node:sqlite");
+          const db = new DatabaseSync(process.argv[1]);
+          db.exec("BEGIN EXCLUSIVE");
+          process.stdout.write("locked\\n");
+          setTimeout(() => { db.exec("COMMIT"); db.close(); }, 100);
+        `,
+        dbPath,
+      ],
+      { stdio: ["ignore", "pipe", "inherit"] },
+    )
+    await once(lockHolder.stdout!, "data")
+
+    const startedAt = Date.now()
+    const store = new StateStore(dbPath)
+    const elapsedMs = Date.now() - startedAt
+    try {
+      assert.ok(elapsedMs >= 75, `expected the store to wait for the lock, waited ${elapsedMs}ms`)
+    } finally {
+      store.close()
+    }
+    const [exitCode] = await once(lockHolder, "exit")
+    assert.equal(exitCode, 0)
+  })
+
   for (const scenario of [
     { name: "initial failing check", failing: true, conflict: false, manual: false, stale: false },
     { name: "initial conflict", failing: false, conflict: true, manual: false, stale: false },
