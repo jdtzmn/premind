@@ -275,7 +275,13 @@ export class PremindDaemonClient {
       })
     })
 
-    const parsed = responseSchema.parse(JSON.parse(line))
+    let payload: unknown
+    try {
+      payload = JSON.parse(line)
+    } catch (error) {
+      throw new Error("premind daemon returned invalid JSON", { cause: error })
+    }
+    const parsed = responseSchema.parse(payload)
     if (!parsed.ok) throw new Error(`${parsed.error.code}: ${parsed.error.message}`)
     return parsed.result
   }

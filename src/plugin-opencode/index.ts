@@ -109,6 +109,7 @@ const extractText = (value: unknown): string => {
 }
 
 export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}): Plugin => async (input) => {
+  // SAFETY: OpenCode's Plugin callback supplies this runtime shape, but its published generic omits the concrete fields used here.
   const { directory, worktree, client } = input as unknown as PluginContext
   const root = worktree || directory
   const gitDetector = dependencies.detectGit ?? detectGitContext
@@ -902,7 +903,9 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
       if (event.type === "session.created") {
         // Extract parentID from the event payload without a network round-trip.
         // EventSessionCreated.properties.info is the full Session object.
-        const info = (event.properties as Record<string, any>)?.info
+        const info = (event.properties as {
+          info?: { parentID?: unknown }
+        }).info
         const parentID = info?.parentID
         if (typeof parentID === "string" && parentID.length > 0) {
           // This is an ephemeral child session (e.g. a delegated-access classifier).
@@ -929,7 +932,9 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
       }
 
       if (event.type === "session.status") {
-        const statusType = (event.properties as Record<string, any>)?.status?.type
+        const statusType = (event.properties as {
+          status?: { type?: unknown }
+        }).status?.type
         if (statusType === "busy" || statusType === "retry") {
           // Any event we receive scoped to sessionID comes from the opencode
           // client this plugin is attached to — adopt ownership (after we've
