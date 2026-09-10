@@ -88,6 +88,16 @@ assert.equal(
 const temporaryDir = fs.mkdtempSync(
   path.join(os.tmpdir(), "premind codex contract "),
 );
+const liveMarketplaceRoot = path.join(temporaryDir, "legacy marketplace")
+fs.cpSync(MARKETPLACE_ROOT, liveMarketplaceRoot, { recursive: true })
+fs.rmSync(
+  path.join(
+    liveMarketplaceRoot,
+    "plugins",
+    "premind-contract",
+    "plugin.json",
+  ),
+)
 const capturePath = path.join(temporaryDir, "events.jsonl");
 let marketplaceAdded = false;
 let pluginAdded = false;
@@ -95,11 +105,14 @@ const hookTrustBypassProvidedByWrapper =
   process.env.CMUX_CODEX_WRAPPER_SHIM !== undefined;
 
 try {
-  runCodex(["plugin", "marketplace", "add", MARKETPLACE_ROOT, "--json"]);
+  runCodex(["plugin", "marketplace", "add", liveMarketplaceRoot, "--json"]);
   marketplaceAdded = true;
   runCodex(["plugin", "add", PLUGIN_ID, "--json"]);
   pluginAdded = true;
 
+  console.log(
+    "Codex 0.150.1 live hooks use the .codex-plugin compatibility manifest.",
+  );
   console.log("Starting an interactive Codex contract session.");
   console.log("Review the injected fixture context, then use /exit when idle.");
   const execution = runCodex(
