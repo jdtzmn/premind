@@ -58,6 +58,10 @@ export type CodexLifecycleDependencies = {
 		sessionId: string,
 		cleanupBoundary: boolean,
 	): Promise<SessionLifecycleLock>;
+	ensureSessionBinding?: (
+		sessionId: string,
+		cwd: string,
+	) => Promise<{ sessionHandle: string }>;
 	writeOutput(output: string): Promise<void>;
 	now?: () => number;
 	reportError?: (eventName: string, stage: string) => void;
@@ -65,6 +69,12 @@ export type CodexLifecycleDependencies = {
 };
 
 const namespacedSessionId = (hostSessionId: string) => `codex:${hostSessionId}`;
+const sessionHandleContext = (sessionHandle: string) =>
+	`Premind session handle: ${sessionHandle}\nUse this exact handle for premind MCP tools in this session; never invent or reuse another session's handle.`;
+const withSessionHandleContext = (reminder: string, sessionHandle?: string) =>
+	sessionHandle
+		? `${sessionHandleContext(sessionHandle)}\n\n${reminder}`
+		: reminder;
 const withTimeout = async <T>(operation: Promise<T>, timeoutMs: number) => {
 	let timer: NodeJS.Timeout | undefined;
 	try {
@@ -196,15 +206,20 @@ const emitClaim = async (
 	now: () => number,
 	expectedSessionId: string,
 	onFlushed: () => void,
+	sessionHandle?: string,
 	sourceTurnId?: string,
 ) => {
 	if (claim.batch.sessionId !== expectedSessionId) {
 		throw new Error("Codex reminder claim belongs to another session");
 	}
+	const reminderText =
+		eventName === "SessionStart"
+			? withSessionHandleContext(claim.batch.reminderText, sessionHandle)
+			: claim.batch.reminderText;
 	const output =
 		eventName === "Stop"
 			? stopOutput(claim.batch.reminderText)
-			: contextOutput(eventName, claim.batch.reminderText);
+			: contextOutput(eventName, reminderText);
 	const serialized = `${JSON.stringify(output)}\n`;
 	await dependencies.writeOutput(serialized);
 	onFlushed();
@@ -248,7 +263,13 @@ const handleDeliveryBoundary = async (
 	let outputAttempted = false;
 	let outputFlushed = false;
 	let activeClaim: ReminderClaim | undefined;
+	let sessionHandle: string | undefined;
 	try {
+		if (dependencies.ensureSessionBinding) {
+			sessionHandle = (
+				await dependencies.ensureSessionBinding(sessionId, input.cwd)
+			).sessionHandle;
+		}
 		await reconcileReceipts(
 			dependencies.client,
 			lock,
@@ -303,12 +324,18 @@ const handleDeliveryBoundary = async (
 					? "user_prompt_submit"
 					: "stop";
 		activeClaim =
-			(await dependencies.client.claimReminder({ sessionId, boundary }))
-				.claim ?? undefined;
+			(await dependencies.client.claimReminder({ sessionId, boundary })).claim ??
+			undefined;
 		if (!activeClaim) {
 			lock.release();
 			outputAttempted = true;
-			await writeNoOp(dependencies);
+			if (eventName === "SessionStart" && sessionHandle) {
+				await dependencies.writeOutput(
+					`${JSON.stringify(contextOutput("SessionStart", sessionHandleContext(sessionHandle)))}\n`,
+				);
+			} else {
+				await writeNoOp(dependencies);
+			}
 			outputFlushed = true;
 			return;
 		}
@@ -324,6 +351,7 @@ const handleDeliveryBoundary = async (
 			() => {
 				outputFlushed = true;
 			},
+			sessionHandle,
 			eventName === "UserPromptSubmit" ? input.turn_id : undefined,
 		);
 		return;
@@ -339,6 +367,7 @@ const handleDeliveryBoundary = async (
 					failureReason: "Codex hook failed before output flush",
 				});
 			} catch {
+				dependencies.reportError?.(eventName, "claim settlement");
 				// Lease expiry provides the retry path when settlement is unavailable.
 			}
 		}
@@ -348,6 +377,7 @@ const handleDeliveryBoundary = async (
 				await writeNoOp(dependencies);
 				outputFlushed = true;
 			} catch {
+				dependencies.reportError?.(eventName, "protocol flush");
 				// A broken stdout cannot be recovered with another protocol write.
 			}
 		}
@@ -360,6 +390,7 @@ const handleDeliveryBoundary = async (
 				lock.release();
 			} catch {
 				// Fail open; stale-lock recovery is bounded.
+				dependencies.reportError?.(eventName, "lifecycle lock release");
 			}
 		}
 	}

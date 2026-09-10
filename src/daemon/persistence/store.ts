@@ -1215,7 +1215,7 @@ export class StateStore {
 			)
 			.all() as Array<{
 			session_id: string;
-			host: "opencode" | "pi" | "claude";
+			host: "opencode" | "pi" | "claude" | "codex";
 			repo: string;
 			branch: string;
 			pr_number: number | null;

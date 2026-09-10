@@ -9,6 +9,7 @@ import { test } from "node:test";
 const ROOT = path.resolve(import.meta.dirname, "..", "..", "..");
 const HOOK_BUNDLE = path.join(ROOT, "runtime", "premind-hook.mjs");
 const DAEMON_BUNDLE = path.join(ROOT, "runtime", "premind-daemon.mjs");
+const MCP_BUNDLE = path.join(ROOT, "runtime", "premind-mcp.mjs");
 
 test("Codex hook bundle runs outside repository node_modules", () => {
 	const directory = fs.mkdtempSync(
@@ -39,6 +40,36 @@ test("Codex hook bundle runs outside repository node_modules", () => {
 		const bundle = fs.readFileSync(hookPath, "utf8");
 		assert.equal(/from\s+["'](?:zod|xstate|tsx)["']/.test(bundle), false);
 		assert.equal(bundle.includes(ROOT), false);
+	} finally {
+		fs.rmSync(directory, { recursive: true, force: true });
+	}
+});
+
+test("Codex MCP bundle initializes outside repository node_modules", () => {
+	const directory = fs.mkdtempSync(
+		path.join(os.tmpdir(), "premind-codex-mcp-bundle-"),
+	);
+	try {
+		const mcpPath = path.join(directory, "premind-mcp.mjs");
+		fs.copyFileSync(MCP_BUNDLE, mcpPath);
+		fs.copyFileSync(DAEMON_BUNDLE, path.join(directory, "premind-daemon.mjs"));
+		const result = spawnSync(process.execPath, [mcpPath], {
+			cwd: directory,
+			env: {
+				...process.env,
+				NODE_PATH: "",
+				PLUGIN_DATA: path.join(directory, "plugin-data"),
+			},
+			input:
+				'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05"}}\n',
+			encoding: "utf8",
+			timeout: 10_000,
+		});
+		assert.equal(result.status, 0, result.stderr);
+		const response = JSON.parse(result.stdout);
+		assert.equal(response.id, 1);
+		assert.equal(response.result.serverInfo.name, "premind");
+		assert.equal(response.result.capabilities.tools instanceof Object, true);
 	} finally {
 		fs.rmSync(directory, { recursive: true, force: true });
 	}
@@ -95,9 +126,7 @@ test("relocated hook starts its adjacent daemon and registers a session", async 
 		assert.ok(fs.existsSync(pidPath), "adjacent daemon did not start");
 		const database = new DatabaseSync(path.join(stateDirectory, "premind.db"));
 		const session = database
-			.prepare(
-				"SELECT host, host_session_id FROM sessions WHERE session_id = ?",
-			)
+			.prepare("SELECT host, host_session_id FROM sessions WHERE session_id = ?")
 			.get("codex:thread-relocated") as
 			| { host: string; host_session_id: string }
 			| undefined;

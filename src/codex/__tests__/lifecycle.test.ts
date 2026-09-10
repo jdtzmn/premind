@@ -194,10 +194,22 @@ describe("Codex lifecycle adapter", () => {
 		});
 		assert.equal(harness.published[0]?.boundary, "session_start");
 		assert.ok(
-			callTypes(harness).indexOf("write") <
-				callTypes(harness).indexOf("publish"),
+			callTypes(harness).indexOf("write") < callTypes(harness).indexOf("publish"),
 		);
 		assert.equal(callTypes(harness).includes("activate"), true);
+	});
+
+	test("SessionStart supplies a stable MCP session handle without a reminder", async () => {
+		const harness = createHarness({ claims: [null] });
+		harness.dependencies.ensureSessionBinding = async () => ({
+			sessionHandle: "00000000-0000-4000-8000-000000000099",
+		});
+		await runCodexLifecycle("SessionStart", startInput(), harness.dependencies);
+		const output = JSON.parse(harness.outputs[0]);
+		assert.match(
+			output.hookSpecificOutput.additionalContext,
+			/00000000-0000-4000-8000-000000000099/,
+		);
 	});
 
 	test("reconciles compact starts without reactivation, worktree activation, or delivery", async () => {
@@ -216,8 +228,7 @@ describe("Codex lifecycle adapter", () => {
 		assert.equal(callTypes(harness).includes("claim"), false);
 		assert.deepEqual(JSON.parse(harness.outputs[0]), {});
 		assert.ok(
-			callTypes(harness).indexOf("release") <
-				callTypes(harness).indexOf("write"),
+			callTypes(harness).indexOf("release") < callTypes(harness).indexOf("write"),
 		);
 	});
 
@@ -401,8 +412,7 @@ describe("Codex lifecycle adapter", () => {
 	test("keeps malformed input fail-open without persisting sensitive fields", async () => {
 		const harness = createHarness();
 		const stages: string[] = [];
-		harness.dependencies.reportError = (_eventName, stage) =>
-			stages.push(stage);
+		harness.dependencies.reportError = (_eventName, stage) => stages.push(stage);
 		await runCodexLifecycle(
 			"UserPromptSubmit",
 			{ ...promptInput(), unknown: "secret" },
