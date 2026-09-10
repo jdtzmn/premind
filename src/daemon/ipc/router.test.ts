@@ -313,3 +313,88 @@ describe("ensureSessionControl router", () => {
     store.close()
   })
 })
+
+describe("Claude session IPC", () => {
+  test("uses Claude session_id without a client lease and leaves Stop handoffs recoverable", async () => {
+    const store = createStore()
+    const router = new Router(store)
+    const registered = await router.handle({
+      type: "registerClaudeSession",
+      protocolVersion: PREMIND_PROTOCOL_VERSION,
+      payload: { sessionId: "claude-1", repo: "acme/repo", branch: "feature/claude", busyState: "idle" },
+    })
+    assert.equal(registered.ok, true)
+    assert.equal(store.getSession("claude-1")?.client_id, "claude:claude-1")
+    assert.equal(store.getSession("claude-1")?.host, "claude")
+    assert.equal(store.getSession("claude-1")?.host_session_id, "claude-1")
+    assert.equal(store.countActiveClients(), 0)
+    const batchId = store.createOrReplaceReminder("claude-1", null, "Review changed", [], 0)
+    const claimed = await router.handle({
+      type: "claimClaudeReminder",
+      protocolVersion: PREMIND_PROTOCOL_VERSION,
+      payload: { sessionId: "claude-1" },
+    })
+    assert.equal(claimed.ok, true)
+    assert.equal(store.getReminderBatchRecord(batchId, "claude-1")?.state, "handed_off")
+    assert.notEqual(store.getReminderBatchRecord(batchId, "claude-1")?.state, "confirmed")
+    const touched = await router.handle({
+      type: "touchClaudeSession",
+      protocolVersion: PREMIND_PROTOCOL_VERSION,
+      payload: { sessionId: "claude-1", busyState: "busy" },
+    })
+    assert.equal(touched.ok, true)
+    assert.equal(store.getSession("claude-1")?.busy_state, "busy")
+    store.close()
+})
+
+test("claims Claude handoffs atomically, retries stale handoffs, and confirms once", async () => {
+    const store = createStore()
+    const router = new Router(store)
+    await router.handle({
+        type: "registerClaudeSession",
+        protocolVersion: PREMIND_PROTOCOL_VERSION,
+        payload: { sessionId: "claude-atomic", repo: "acme/repo", branch: "feature/claude", busyState: "idle" },
+    })
+    const batchId = store.createOrReplaceReminder("claude-atomic", null, "Review changed", [], 0)
+    const claims = await Promise.all([
+        router.handle({ type: "claimClaudeReminder", protocolVersion: PREMIND_PROTOCOL_VERSION, payload: { sessionId: "claude-atomic" } }),
+        router.handle({ type: "claimClaudeReminder", protocolVersion: PREMIND_PROTOCOL_VERSION, payload: { sessionId: "claude-atomic" } }),
+    ])
+    const claimed = claims.filter((response) => response.ok && (response.result as { batch: unknown }).batch)
+    assert.equal(claimed.length, 1)
+    assert.equal(store.getReminderBatchRecord(batchId, "claude-atomic")?.state, "handed_off")
+
+    // An interrupted handoff remains durable and becomes retryable rather than lost.
+    store.expireStaleHandoffs(0, Date.now() + 1)
+    const retried = await router.handle({
+        type: "claimClaudeReminder",
+        protocolVersion: PREMIND_PROTOCOL_VERSION,
+        payload: { sessionId: "claude-atomic" },
+    })
+    assert.equal(retried.ok, true)
+    assert.equal(store.getReminderBatchRecord(batchId, "claude-atomic")?.state, "handed_off")
+
+    const confirmed = await router.handle({
+        type: "confirmClaudeHandoff",
+        protocolVersion: PREMIND_PROTOCOL_VERSION,
+        payload: { sessionId: "claude-atomic" },
+    })
+    assert.deepEqual(confirmed, {
+        ok: true,
+        protocolVersion: PREMIND_PROTOCOL_VERSION,
+        result: { confirmed: true },
+    })
+    const doubleConfirm = await router.handle({
+        type: "confirmClaudeHandoff",
+        protocolVersion: PREMIND_PROTOCOL_VERSION,
+        payload: { sessionId: "claude-atomic" },
+    })
+    assert.deepEqual(doubleConfirm, {
+        ok: true,
+        protocolVersion: PREMIND_PROTOCOL_VERSION,
+        result: { confirmed: false },
+    })
+    assert.equal(store.getReminderBatchRecord(batchId, "claude-atomic"), null)
+    store.close()
+})
+})

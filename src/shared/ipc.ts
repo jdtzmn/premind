@@ -1,13 +1,15 @@
-import { z } from "zod"
+import { z } from "zod";
 import {
   PREMIND_CLIENT_HEARTBEAT_MS,
   PREMIND_CLIENT_LEASE_TTL_MS,
   PREMIND_IDLE_SHUTDOWN_GRACE_MS,
   PREMIND_PROTOCOL_VERSION,
-} from "./constants.ts"
+} from "./constants.ts";
 import {
   ackReminderPayloadSchema,
   activateWorktreePayloadSchema,
+  confirmClaudeHandoffPayloadSchema,
+  claudeSessionPayloadSchema,
   debugStatusPayloadSchema,
   debugStatusResponseSchema,
   ensureSessionControlPayloadSchema,
@@ -24,34 +26,129 @@ import {
   unsubscribePayloadSchema,
   unregisterSessionPayloadSchema,
   updateSessionStatePayloadSchema,
-} from "./schema.ts"
+} from "./schema.ts";
 
 export const requestSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("registerClient"), protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION), payload: registerClientPayloadSchema }),
-  z.object({ type: z.literal("heartbeatClient"), protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION), payload: heartbeatClientPayloadSchema }),
-  z.object({ type: z.literal("releaseClient"), protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION), payload: releaseClientPayloadSchema }),
-  z.object({ type: z.literal("registerSession"), protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION), payload: registerSessionPayloadSchema }),
-  z.object({ type: z.literal("ensureSessionControl"), protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION), payload: ensureSessionControlPayloadSchema }),
-  z.object({ type: z.literal("updateSessionState"), protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION), payload: updateSessionStatePayloadSchema }),
-  z.object({ type: z.literal("unregisterSession"), protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION), payload: unregisterSessionPayloadSchema }),
-  z.object({ type: z.literal("pauseSession"), protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION), payload: sessionControlPayloadSchema }),
-  z.object({ type: z.literal("resumeSession"), protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION), payload: sessionControlPayloadSchema }),
-  z.object({ type: z.literal("activateWorktree"), protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION), payload: activateWorktreePayloadSchema }),
-  z.object({ type: z.literal("subscribe"), protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION), payload: subscribePayloadSchema }),
-  z.object({ type: z.literal("unsubscribe"), protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION), payload: unsubscribePayloadSchema }),
-  z.object({ type: z.literal("getPendingReminder"), protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION), payload: getPendingReminderPayloadSchema }),
-  z.object({ type: z.literal("ackReminder"), protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION), payload: ackReminderPayloadSchema }),
-  z.object({ type: z.literal("setGlobalDisabled"), protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION), payload: setGlobalDisabledPayloadSchema }),
-  z.object({ type: z.literal("getGlobalDisabled"), protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION), payload: getGlobalDisabledPayloadSchema }),
-  z.object({ type: z.literal("debugStatus"), protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION), payload: debugStatusPayloadSchema }),
-  z.object({ type: z.literal("pruneClosedSessions"), protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION), payload: debugStatusPayloadSchema }),
-])
+  z.object({
+    type: z.literal("registerClient"),
+    protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION),
+    payload: registerClientPayloadSchema,
+  }),
+  z.object({
+    type: z.literal("heartbeatClient"),
+    protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION),
+    payload: heartbeatClientPayloadSchema,
+  }),
+  z.object({
+    type: z.literal("releaseClient"),
+    protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION),
+    payload: releaseClientPayloadSchema,
+  }),
+  z.object({
+    type: z.literal("registerSession"),
+    protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION),
+    payload: registerSessionPayloadSchema,
+  }),
+  z.object({
+    type: z.literal("ensureSessionControl"),
+    protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION),
+    payload: ensureSessionControlPayloadSchema,
+  }),
+  z.object({
+    type: z.literal("registerClaudeSession"),
+    protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION),
+    payload: claudeSessionPayloadSchema,
+  }),
+  z.object({
+    type: z.literal("touchClaudeSession"),
+    protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION),
+    payload: claudeSessionPayloadSchema.pick({
+      sessionId: true,
+      busyState: true,
+    }),
+  }),
+  z.object({
+    type: z.literal("claimClaudeReminder"),
+    protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION),
+    payload: claudeSessionPayloadSchema.pick({ sessionId: true }),
+  }),
+  z.object({
+    type: z.literal("confirmClaudeHandoff"),
+    protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION),
+    payload: confirmClaudeHandoffPayloadSchema,
+  }),
+  z.object({
+    type: z.literal("updateSessionState"),
+    protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION),
+    payload: updateSessionStatePayloadSchema,
+  }),
+  z.object({
+    type: z.literal("unregisterSession"),
+    protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION),
+    payload: unregisterSessionPayloadSchema,
+  }),
+  z.object({
+    type: z.literal("pauseSession"),
+    protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION),
+    payload: sessionControlPayloadSchema,
+  }),
+  z.object({
+    type: z.literal("resumeSession"),
+    protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION),
+    payload: sessionControlPayloadSchema,
+  }),
+  z.object({
+    type: z.literal("activateWorktree"),
+    protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION),
+    payload: activateWorktreePayloadSchema,
+  }),
+  z.object({
+    type: z.literal("subscribe"),
+    protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION),
+    payload: subscribePayloadSchema,
+  }),
+  z.object({
+    type: z.literal("unsubscribe"),
+    protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION),
+    payload: unsubscribePayloadSchema,
+  }),
+  z.object({
+    type: z.literal("getPendingReminder"),
+    protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION),
+    payload: getPendingReminderPayloadSchema,
+  }),
+  z.object({
+    type: z.literal("ackReminder"),
+    protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION),
+    payload: ackReminderPayloadSchema,
+  }),
+  z.object({
+    type: z.literal("setGlobalDisabled"),
+    protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION),
+    payload: setGlobalDisabledPayloadSchema,
+  }),
+  z.object({
+    type: z.literal("getGlobalDisabled"),
+    protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION),
+    payload: getGlobalDisabledPayloadSchema,
+  }),
+  z.object({
+    type: z.literal("debugStatus"),
+    protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION),
+    payload: debugStatusPayloadSchema,
+  }),
+  z.object({
+    type: z.literal("pruneClosedSessions"),
+    protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION),
+    payload: debugStatusPayloadSchema,
+  }),
+]);
 
 export const successResponseSchema = z.object({
   ok: z.literal(true),
   protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION),
   result: z.unknown(),
-})
+});
 
 export const errorResponseSchema = z.object({
   ok: z.literal(false),
@@ -60,23 +157,26 @@ export const errorResponseSchema = z.object({
     code: z.string().min(1),
     message: z.string().min(1),
   }),
-})
+});
 
-export const responseSchema = z.union([successResponseSchema, errorResponseSchema])
+export const responseSchema = z.union([
+  successResponseSchema,
+  errorResponseSchema,
+]);
 
 export const registerClientResponseSchema = z.object({
   heartbeatMs: z.literal(PREMIND_CLIENT_HEARTBEAT_MS),
   leaseTtlMs: z.literal(PREMIND_CLIENT_LEASE_TTL_MS),
   idleShutdownGraceMs: z.literal(PREMIND_IDLE_SHUTDOWN_GRACE_MS),
-})
+});
 
 export const getPendingReminderResponseSchema = z.object({
   batch: reminderBatchSchema.nullable(),
-})
+});
 
 export const globalDisabledResponseSchema = z.object({
   disabled: z.boolean(),
-})
+});
 
 const worktreeBindingResponseSchema = z
   .object({
@@ -89,7 +189,7 @@ const worktreeBindingResponseSchema = z
     state: z.string().min(1),
     updatedAt: z.number().int(),
   })
-  .strict()
+  .strict();
 
 const subscriptionResponseSchema = z
   .object({
@@ -102,21 +202,21 @@ const subscriptionResponseSchema = z
     lastDeliveredEventSeq: z.number().int().nonnegative(),
     updatedAt: z.number().int(),
   })
-  .strict()
+  .strict();
 
 export const activateWorktreeResponseSchema = z
   .object({ binding: worktreeBindingResponseSchema, watching: z.boolean() })
-  .strict()
+  .strict();
 
 export const subscribeResponseSchema = z
   .object({ subscription: subscriptionResponseSchema })
-  .strict()
+  .strict();
 
 export const unsubscribeResponseSchema = z
   .object({ unsubscribed: z.boolean(), automaticOptOutRecorded: z.boolean() })
-  .strict()
+  .strict();
 
-export { debugStatusResponseSchema }
+export { debugStatusResponseSchema };
 
-export type PremindRequest = z.infer<typeof requestSchema>
-export type PremindResponse = z.infer<typeof responseSchema>
+export type PremindRequest = z.infer<typeof requestSchema>;
+export type PremindResponse = z.infer<typeof responseSchema>;

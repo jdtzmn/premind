@@ -1,4 +1,4 @@
-import { PREMIND_VERSION_LABEL } from "../shared/version.ts"
+import { PREMIND_VERSION_LABEL } from "../shared/version.ts";
 import {
 	CONFIG_DIR_NAME,
 	type ExtensionAPI,
@@ -8,8 +8,8 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { PremindDaemonClient } from "../plugin/daemon-client.ts";
-import { detectGitContext } from "../plugin/git-context.ts";
+import { PremindDaemonClient } from "../plugin-opencode/daemon-client.ts";
+import { detectGitContext } from "../plugin-opencode/git-context.ts";
 import type {
 	AckReminderPayload,
 	ActivateWorktreePayload,
@@ -226,8 +226,7 @@ export const renderPremindReminderText = (
 	)}`;
 	const visibleEvents = [...events]
 		.sort(
-			(left, right) =>
-				priorityRank[left.priority] - priorityRank[right.priority],
+			(left, right) => priorityRank[left.priority] - priorityRank[right.priority],
 		)
 		.slice(0, REMINDER_VISIBLE_EVENT_LIMIT);
 	const bullets = visibleEvents.map((event) =>
@@ -313,7 +312,6 @@ export const createPremindPiExtension = (
 			return result as PruneClosedSessionsResult;
 		};
 
-
 		const setStatus = (
 			ctx: {
 				hasUI?: boolean;
@@ -323,10 +321,7 @@ export const createPremindPiExtension = (
 		) => {
 			try {
 				if (!ctx.hasUI) return;
-				ctx.ui?.setStatus?.(
-					"premind",
-					config.showStatusbar ? value : undefined,
-				);
+				ctx.ui?.setStatus?.("premind", config.showStatusbar ? value : undefined);
 			} catch (error) {
 				if (!isStaleExtensionContextError(error)) throw error;
 			}
@@ -336,10 +331,7 @@ export const createPremindPiExtension = (
 			ctx: {
 				hasUI?: boolean;
 				ui?: {
-					notify?: (
-						message: string,
-						level: "info" | "warning" | "error",
-					) => void;
+					notify?: (message: string, level: "info" | "warning" | "error") => void;
 				};
 			},
 			message: string,
@@ -371,9 +363,7 @@ export const createPremindPiExtension = (
 			setStatus(
 				ctx,
 				formatStatusbar(
-					status.sessions.find(
-						(session) => session.sessionId === currentSessionId,
-					),
+					status.sessions.find((session) => session.sessionId === currentSessionId),
 				),
 			);
 		};
@@ -460,11 +450,7 @@ export const createPremindPiExtension = (
 		) => {
 			let delivered = false;
 			while (generation === sessionGeneration) {
-				const result = await deliverPendingReminder(
-					sessionId,
-					{},
-					generation,
-				);
+				const result = await deliverPendingReminder(sessionId, {}, generation);
 				if (!result.delivered) break;
 				delivered = true;
 			}
@@ -549,6 +535,7 @@ export const createPremindPiExtension = (
 				const git = await detectGit(ctx.cwd);
 				await client.registerSession({
 					sessionId: currentSessionId,
+					host: "pi",
 					repo: git.repo,
 					branch: git.branch,
 					isPrimary: true,
@@ -600,10 +587,7 @@ export const createPremindPiExtension = (
 				if (result.delivered) setStatus(ctx, undefined);
 				else await refreshStatusbar(ctx, generation);
 			} catch (error) {
-				if (
-					generation !== sessionGeneration ||
-					isStaleExtensionContextError(error)
-				)
+				if (generation !== sessionGeneration || isStaleExtensionContextError(error))
 					return;
 				setStatus(ctx, `${PR_ICON} error`);
 				notify(
@@ -696,7 +680,7 @@ export const createPremindPiExtension = (
 						...subscription,
 					});
 					ctx.ui.notify(
-						`premind subscribed to ${(subscription.repo ?? "active worktree")}#${subscription.prNumber}.`,
+						`premind subscribed to ${subscription.repo ?? "active worktree"}#${subscription.prNumber}.`,
 						"info",
 					);
 				} catch (error) {
@@ -718,7 +702,7 @@ export const createPremindPiExtension = (
 						...subscription,
 					});
 					ctx.ui.notify(
-						`premind unsubscribed from ${(subscription.repo ?? "active worktree")}#${subscription.prNumber}.`,
+						`premind unsubscribed from ${subscription.repo ?? "active worktree"}#${subscription.prNumber}.`,
 						"info",
 					);
 				} catch (error) {
@@ -729,7 +713,6 @@ export const createPremindPiExtension = (
 				}
 			},
 		});
-
 
 		pi.registerCommand("premind:flush", {
 			description:
@@ -757,12 +740,12 @@ export const createPremindPiExtension = (
 			},
 		});
 
-
 		pi.registerTool({
 			name: "premind_activate_worktree",
 			label: "Premind Activate Worktree",
 			description: "Activate a Git worktree for the current premind session.",
-			promptSnippet: "Tell premind which Git worktree this session is actively using.",
+			promptSnippet:
+				"Tell premind which Git worktree this session is actively using.",
 			promptGuidelines: [
 				"Call premind_activate_worktree whenever you begin working in a different linked or nested Git worktree than the session's startup directory, including before that branch has a pull request.",
 			],
@@ -771,7 +754,12 @@ export const createPremindPiExtension = (
 				const sessionId = currentSessionId ?? getPiSessionId(ctx);
 				await getClient().activateWorktree({ sessionId, path: params.path });
 				return {
-					content: [{ type: "text" as const, text: `premind activated worktree ${params.path}.` }],
+					content: [
+						{
+							type: "text" as const,
+							text: `premind activated worktree ${params.path}.`,
+						},
+					],
 					details: {},
 				};
 			},
@@ -790,7 +778,9 @@ export const createPremindPiExtension = (
 				await getClient().subscribe({ sessionId, ...params });
 				const target = `${params.repo ?? "active worktree"}#${params.prNumber}`;
 				return {
-					content: [{ type: "text" as const, text: `premind subscribed to ${target}.` }],
+					content: [
+						{ type: "text" as const, text: `premind subscribed to ${target}.` },
+					],
 					details: {},
 				};
 			},
@@ -809,7 +799,9 @@ export const createPremindPiExtension = (
 				await getClient().unsubscribe({ sessionId, ...params });
 				const target = `${params.repo ?? "active worktree"}#${params.prNumber}`;
 				return {
-					content: [{ type: "text" as const, text: `premind unsubscribed from ${target}.` }],
+					content: [
+						{ type: "text" as const, text: `premind unsubscribed from ${target}.` },
+					],
 					details: {},
 				};
 			},

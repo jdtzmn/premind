@@ -39,11 +39,33 @@ git clone https://github.com/jdtzmn/premind.git
 cd premind && bun install
 
 # Option A: symlink into global plugins
-ln -s "$(pwd)/src/plugin/index.ts" ~/.config/opencode/plugins/premind.ts
+ln -s "$(pwd)/src/plugin-opencode/index.ts" ~/.config/opencode/plugins/premind.ts
 
 # Option B: symlink into project plugins
-ln -s "$(pwd)/src/plugin/index.ts" .opencode/plugins/premind.ts
+ln -s "$(pwd)/src/plugin-opencode/index.ts" .opencode/plugins/premind.ts
 ```
+
+## Claude Code plugin (v0.2)
+
+Install the self-contained Claude plugin from a checkout or released package root:
+
+```sh
+claude plugin install /path/to/premind/plugin-claude
+```
+
+The plugin requires **Node 22.13+** for `node:sqlite`. Its hooks start or reuse a shared local daemon from `plugin-claude/runtime/premind-daemon.mjs`; a Claude install does not need Bun, `tsx`, a repository checkout, or repository-root `node_modules` at runtime. The launcher probes the shared socket, coordinates startup with a state-directory lock, and fails open if the daemon cannot start.
+
+Claude reminders are delivered only at a `Stop` boundary. A delivered batch is confirmed on Claude's next continuation Stop hook; interrupted handoffs become retryable, so duplicates are preferred to lost reminders. Inactive Claude sessions are not woken in v0.2.
+
+The plugin exposes namespaced MCP tools for `status`, `probe`, global `enable`/`disable`, and session-scoped `activate_worktree`, `subscribe`, and `unsubscribe`. Session-scoped tools derive the session solely from `CLAUDE_CODE_SESSION_ID`; missing or mismatched hook/MCP identity fails closed and asks you to reload the plugin. Claude commands are `/premind:status`, `/premind:doctor`, `/premind:enable`, `/premind:disable`, `/premind:subscribe`, and `/premind:unsubscribe`.
+
+For an opt-in authenticated Claude CLI compatibility check (not part of CI), run:
+
+```sh
+bun run test:claude:live-contract
+```
+
+It creates a temporary plugin and verifies fresh and resumed hook/MCP session IDs. It reports a skip when the Claude CLI is unavailable or unauthenticated.
 
 ## How it works
 
@@ -129,7 +151,8 @@ ls /var/folders/*/*/*/T/premind.sock 2>/dev/null
 
 - OpenCode
 - `gh` CLI authenticated with access to your repository
-- `bun` or `tsx` available in PATH (for the daemon process)
+- OpenCode: `bun` or `tsx` available in PATH (for the development daemon process)
+- Claude Code: Node 22.13+; the installed plugin uses its bundled daemon and does not require Bun or `tsx` at runtime
 
 ## Architecture
 

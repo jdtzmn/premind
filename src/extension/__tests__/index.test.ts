@@ -28,6 +28,7 @@ const status: DebugStatusResponse = {
 	sessions: [
 		{
 			sessionId: "session-1",
+			host: "pi",
 			repo: "owner/repo",
 			branch: "feature/pi",
 			prNumber: 123,
@@ -430,6 +431,7 @@ describe("premind Pi extension", () => {
 		assert.deepEqual(client.registeredSessions, [
 			{
 				sessionId: "/tmp/session.jsonl",
+				host: "pi",
 				repo: "owner/repo",
 				branch: "feature/pi",
 				isPrimary: true,
@@ -453,6 +455,7 @@ describe("premind Pi extension", () => {
 				sessions: [
 					{
 						sessionId: "/tmp/session.jsonl",
+						host: "pi",
 						repo: "owner/repo",
 						branch: "feature/pi",
 						prNumber: 123,

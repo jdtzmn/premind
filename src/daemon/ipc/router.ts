@@ -13,7 +13,7 @@ import {
 } from "../../shared/schema.ts";
 import type { PremindRequest, PremindResponse } from "../../shared/ipc.ts";
 import { createLogger } from "../logging/logger.ts";
-import { StateStore } from "../persistence/store.ts";
+import type { StateStore } from "../persistence/store.ts";
 import { ReminderHandoffRegistry } from "../reminders/reminder-handoff-registry.ts";
 import { resolveGitWorktree } from "../worktrees/git-resolver.ts";
 import { WorktreeBindingRegistry } from "../worktrees/worktree-binding-registry.ts";
@@ -37,144 +37,178 @@ export class Router {
 	async handle(request: PremindRequest): Promise<PremindResponse> {
 		try {
 			switch (request.type) {
-			case "registerClient":
-				return this.ok(this.handleRegisterClient(request.payload));
-			case "heartbeatClient": {
-				const renewed = this.store.heartbeatClient(request.payload.clientId);
-				if (!renewed)
-					return this.fail(
-						"CLIENT_NOT_FOUND",
-						`Unknown client: ${request.payload.clientId}`,
-					);
-				return this.ok({ renewed: true });
-			}
-			case "releaseClient":
-				this.store.releaseClient(request.payload.clientId);
-				return this.ok({ released: true });
-			case "registerSession": {
-				const { created, superseded } = this.store.registerSession(
-					request.payload,
-				);
-				this.logger.info(
-					created ? "session registered" : "session re-registered",
-					{
-						sessionId: request.payload.sessionId,
-						repo: request.payload.repo,
-						branch: request.payload.branch,
-						reattach: !created,
-						...(superseded > 0 ? { superseded } : {}),
-					},
-				);
-				return this.ok({ registered: true, created });
-			}
-			case "ensureSessionControl": {
-				if (!this.store.hasActiveClient(request.payload.clientId)) {
-					return this.fail(
-						"CLIENT_NOT_FOUND",
-						`Unknown client: ${request.payload.clientId}`,
-					);
+				case "registerClient":
+					return this.ok(this.handleRegisterClient(request.payload));
+				case "heartbeatClient": {
+					const renewed = this.store.heartbeatClient(request.payload.clientId);
+					if (!renewed)
+						return this.fail(
+							"CLIENT_NOT_FOUND",
+							`Unknown client: ${request.payload.clientId}`,
+						);
+					return this.ok({ renewed: true });
 				}
-				const { created, superseded } = this.store.ensureSessionControl(
-					request.payload,
-				);
-				this.logger.info(
-					created ? "session control attached" : "session control refreshed",
-					{
-						sessionId: request.payload.sessionId,
-						repo: request.payload.repo,
-						branch: request.payload.branch,
-						paused: request.payload.paused,
-						...(superseded > 0 ? { superseded } : {}),
-					},
-				);
-				return this.ok({ attached: true, created, superseded });
-			}
-			case "updateSessionState": {
-				const result = this.store.updateSessionState(request.payload);
-				if (!result.updated)
-					return this.fail(
-						"SESSION_NOT_FOUND",
-						`Unknown session: ${request.payload.sessionId}`,
+				case "releaseClient":
+					this.store.releaseClient(request.payload.clientId);
+					return this.ok({ released: true });
+				case "registerSession": {
+					const { created, superseded } = this.store.registerSession(
+						request.payload,
 					);
-				if (result.revived) {
-					this.logger.info("session revived from closed to active", {
-						sessionId: request.payload.sessionId,
-						trigger: request.payload.busyState,
-					});
-				} else if (request.payload.busyState) {
-					this.logger.info("session state updated", {
-						sessionId: request.payload.sessionId,
-						busyState: request.payload.busyState,
-					});
-				}
-				return this.ok({ updated: true, revived: result.revived });
-			}
-			case "unregisterSession":
-				this.worktreeBindings.closeSession(request.payload.sessionId);
-				this.store.unregisterSession(request.payload.sessionId);
-				return this.ok({ unregistered: true });
-			case "pauseSession": {
-				const paused = this.store.setSessionPaused(
-					request.payload.sessionId,
-					true,
-				);
-				if (!paused)
-					return this.fail(
-						"SESSION_NOT_FOUND",
-						`Unknown session: ${request.payload.sessionId}`,
-					);
-				return this.ok({ paused: true });
-			}
-			case "resumeSession": {
-				const resumed = this.store.setSessionPaused(
-					request.payload.sessionId,
-					false,
-				);
-				if (!resumed)
-					return this.fail(
-						"SESSION_NOT_FOUND",
-						`Unknown session: ${request.payload.sessionId}`,
-					);
-				return this.ok({ resumed: true });
-			}
-			case "activateWorktree":
-				return await this.handleActivateWorktree(request.payload);
-			case "subscribe":
-				return this.handleSubscribe(request.payload);
-			case "unsubscribe":
-				return this.handleUnsubscribe(request.payload);
-			case "getPendingReminder":
-				return this.ok({
-					batch: this.reminderHandoffs.getPendingReminder(request.payload.sessionId),
-				});
-			case "ackReminder":
-				return this.handleAckReminder(request.payload);
-			case "setGlobalDisabled":
-				this.store.setGloballyDisabled(request.payload.disabled);
-				return this.ok({ disabled: request.payload.disabled });
-			case "getGlobalDisabled":
-				return this.ok({ disabled: this.store.isGloballyDisabled() });
-			case "debugStatus":
-				return this.ok(
-					debugStatusResponseSchema.parse({
-						daemon: {
-							protocolVersion: 1,
-							heartbeatMs: PREMIND_CLIENT_HEARTBEAT_MS,
-							leaseTtlMs: PREMIND_CLIENT_LEASE_TTL_MS,
-							idleShutdownGraceMs: PREMIND_IDLE_SHUTDOWN_GRACE_MS,
+					this.logger.info(
+						created ? "session registered" : "session re-registered",
+						{
+							sessionId: request.payload.sessionId,
+							repo: request.payload.repo,
+							branch: request.payload.branch,
+							reattach: !created,
+							...(superseded > 0 ? { superseded } : {}),
 						},
-						globallyDisabled: this.store.isGloballyDisabled(),
-						activeClients: this.store.countActiveClients(),
-						activeSessions: this.store.countActiveSessions(),
-						closedSessions: this.store.countClosedSessions(),
-						activeWatchers: this.store.countActiveWatchers(),
-						lastReapAt: this.store.getLastReapAt(),
-						lastReapCount: this.store.getLastReapCount(),
-						sessions: this.store.listSessionSummaries(),
-					}),
-				);
-			case "pruneClosedSessions":
-				return this.ok(this.store.pruneClosedOrOrphanedSessions());
+					);
+					return this.ok({ registered: true, created });
+				}
+				case "ensureSessionControl": {
+					if (!this.store.hasActiveClient(request.payload.clientId)) {
+						return this.fail(
+							"CLIENT_NOT_FOUND",
+							`Unknown client: ${request.payload.clientId}`,
+						);
+					}
+					const { created, superseded } = this.store.ensureSessionControl(
+						request.payload,
+					);
+					this.logger.info(
+						created ? "session control attached" : "session control refreshed",
+						{
+							sessionId: request.payload.sessionId,
+							repo: request.payload.repo,
+							branch: request.payload.branch,
+							paused: request.payload.paused,
+							...(superseded > 0 ? { superseded } : {}),
+						},
+					);
+					return this.ok({ attached: true, created, superseded });
+				}
+				case "registerClaudeSession": {
+					const { created } = this.store.registerSession({
+						...request.payload,
+						host: "claude",
+						hostSessionId: request.payload.hostSessionId ?? request.payload.sessionId,
+						clientId: `claude:${request.payload.sessionId}`,
+						isPrimary: true,
+						status: "active",
+					});
+					return this.ok({ registered: true, created });
+				}
+				case "touchClaudeSession": {
+					const result = this.store.updateSessionState(request.payload);
+					if (!result.updated)
+						return this.fail(
+							"SESSION_NOT_FOUND",
+							`Unknown session: ${request.payload.sessionId}`,
+						);
+					return this.ok({ updated: true, revived: result.revived });
+				}
+				case "claimClaudeReminder":
+					return this.ok({
+						batch: this.reminderHandoffs.claimClaudeReminder(
+							request.payload.sessionId,
+						),
+					});
+				case "confirmClaudeHandoff":
+					return this.ok({
+						confirmed: this.reminderHandoffs.confirmClaudeHandoff(
+							request.payload.sessionId,
+						),
+					});
+				case "updateSessionState": {
+					const result = this.store.updateSessionState(request.payload);
+					if (!result.updated)
+						return this.fail(
+							"SESSION_NOT_FOUND",
+							`Unknown session: ${request.payload.sessionId}`,
+						);
+					if (result.revived) {
+						this.logger.info("session revived from closed to active", {
+							sessionId: request.payload.sessionId,
+							trigger: request.payload.busyState,
+						});
+					} else if (request.payload.busyState) {
+						this.logger.info("session state updated", {
+							sessionId: request.payload.sessionId,
+							busyState: request.payload.busyState,
+						});
+					}
+					return this.ok({ updated: true, revived: result.revived });
+				}
+				case "unregisterSession":
+					this.worktreeBindings.closeSession(request.payload.sessionId);
+					this.store.unregisterSession(request.payload.sessionId);
+					return this.ok({ unregistered: true });
+				case "pauseSession": {
+					const paused = this.store.setSessionPaused(
+						request.payload.sessionId,
+						true,
+					);
+					if (!paused)
+						return this.fail(
+							"SESSION_NOT_FOUND",
+							`Unknown session: ${request.payload.sessionId}`,
+						);
+					return this.ok({ paused: true });
+				}
+				case "resumeSession": {
+					const resumed = this.store.setSessionPaused(
+						request.payload.sessionId,
+						false,
+					);
+					if (!resumed)
+						return this.fail(
+							"SESSION_NOT_FOUND",
+							`Unknown session: ${request.payload.sessionId}`,
+						);
+					return this.ok({ resumed: true });
+				}
+				case "activateWorktree":
+					return await this.handleActivateWorktree(request.payload);
+				case "subscribe":
+					return this.handleSubscribe(request.payload);
+				case "unsubscribe":
+					return this.handleUnsubscribe(request.payload);
+				case "getPendingReminder":
+					return this.ok({
+						batch: this.reminderHandoffs.getPendingReminder(
+							request.payload.sessionId,
+						),
+					});
+				case "ackReminder":
+					return this.handleAckReminder(request.payload);
+				case "setGlobalDisabled":
+					this.store.setGloballyDisabled(request.payload.disabled);
+					return this.ok({ disabled: request.payload.disabled });
+				case "getGlobalDisabled":
+					return this.ok({ disabled: this.store.isGloballyDisabled() });
+				case "debugStatus":
+					return this.ok(
+						debugStatusResponseSchema.parse({
+							daemon: {
+								protocolVersion: 1,
+								heartbeatMs: PREMIND_CLIENT_HEARTBEAT_MS,
+								leaseTtlMs: PREMIND_CLIENT_LEASE_TTL_MS,
+								idleShutdownGraceMs: PREMIND_IDLE_SHUTDOWN_GRACE_MS,
+							},
+							globallyDisabled: this.store.isGloballyDisabled(),
+							activeClients: this.store.countActiveClients(),
+							activeSessions: this.store.countActiveSessions(),
+							closedSessions: this.store.countClosedSessions(),
+							activeWatchers: this.store.countActiveWatchers(),
+							lastReapAt: this.store.getLastReapAt(),
+							lastReapCount: this.store.getLastReapCount(),
+							sessions: this.store.listSessionSummaries(),
+						}),
+					);
+				case "pruneClosedSessions":
+					return this.ok(this.store.pruneClosedOrOrphanedSessions());
 			}
 		} finally {
 			this.onDemandChanged();
