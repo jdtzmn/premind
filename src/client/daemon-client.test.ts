@@ -1,4 +1,8 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import net from "node:net";
+import os from "node:os";
+import path from "node:path";
 import { describe, test } from "node:test";
 import { PremindDaemonClient } from "./daemon-client.ts";
 
@@ -137,5 +141,34 @@ describe("PremindDaemonClient Codex operations", () => {
       client.debugStatus(),
       /Premind requires Node\.js 22\.13\.0 or newer/,
     );
+  });
+
+  test("bounds no-retry cleanup requests", async () => {
+    const temporaryRoot = process.platform === "win32" ? os.tmpdir() : "/tmp";
+    const directory = fs.mkdtempSync(
+      path.join(temporaryRoot, "premind-client-timeout-"),
+    );
+    const socketPath = path.join(directory, "premind.sock");
+    const server = net.createServer((socket) => {
+      socket.once("data", () => undefined);
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(socketPath, resolve);
+    });
+    try {
+      const client = new PremindDaemonClient({
+        socketPath,
+        ensureDaemon: async () => undefined,
+        maxRetries: 0,
+        requestTimeoutMs: 25,
+      });
+      const startedAt = Date.now();
+      await assert.rejects(client.debugStatus(), /timed out after 25ms/);
+      assert.ok(Date.now() - startedAt < 200);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
   });
 });

@@ -211,6 +211,7 @@ export const claimReminderResponseSchema = z.object({
 export const registerSessionResponseSchema = z.object({
   registered: z.boolean(),
   created: z.boolean(),
+  active: z.boolean().optional(),
 });
 export const settleReminderClaimResponseSchema = z.object({
   settled: z.boolean(),

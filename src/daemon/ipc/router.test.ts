@@ -855,6 +855,14 @@ describe("generic reminder claim IPC", () => {
       "built",
     );
 
+    const compactReconciliation = await router.handle({
+      type: "registerCodexSession",
+      protocolVersion: PREMIND_PROTOCOL_VERSION,
+      payload: { ...session, reactivate: false },
+    });
+    assert.equal(compactReconciliation.ok, true);
+    assert.equal(store.getSession(sessionId)?.status, "dormant");
+
     const resumed = await router.handle({
       type: "registerCodexSession",
       protocolVersion: PREMIND_PROTOCOL_VERSION,
