@@ -1,6 +1,58 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { getBoundClaudeSessionId, handleHook } from "../bin/lib.mjs";
+import net from "node:net";
+import os from "node:os";
+import path from "node:path";
+import { getBoundClaudeSessionId, handleHook, request } from "../bin/lib.mjs";
+
+test("request rejects when a connected daemon does not respond", async () => {
+  const socket = path.join(os.tmpdir(), `p-${process.pid}-${Date.now()}.sock`);
+  const server = net.createServer((connection) => connection.resume());
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(socket, resolve);
+  });
+
+  try {
+    await assert.rejects(
+      request("debugStatus", {}, socket, 20),
+      /timed out after 20ms/,
+    );
+  } finally {
+    await new Promise((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve())),
+    );
+  }
+});
+
+test("request deadline is not extended by an incomplete response", async () => {
+  const socket = path.join(os.tmpdir(), `d-${process.pid}-${Date.now()}.sock`);
+  const server = net.createServer((connection) => {
+    connection.resume();
+    const stopDripping = () => clearInterval(drip);
+    const drip = setInterval(() => {
+      if (!connection.destroyed && connection.writable) connection.write("{");
+    }, 5);
+    connection.once("error", stopDripping);
+    connection.once("close", stopDripping);
+  });
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(socket, resolve);
+  });
+
+  try {
+    await assert.rejects(
+      request("debugStatus", {}, socket, 30),
+      /timed out after 30ms/,
+    );
+  } finally {
+    await new Promise((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve())),
+    );
+  }
+});
+
 
 test("Stop atomically claims a reminder and returns additionalContext without confirming it", async () => {
   const calls = [];
