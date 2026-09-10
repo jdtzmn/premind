@@ -4,7 +4,7 @@ import os from "node:os"
 import path from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { afterEach, describe, test } from "node:test"
-import { PREMIND_PR_STREAM_RETENTION_MS } from "../../shared/constants.ts"
+import { PREMIND_DATABASE_BUSY_TIMEOUT_MS, PREMIND_PR_STREAM_RETENTION_MS } from "../../shared/constants.ts"
 import { StateStore } from "./store.ts"
 import type { PullRequestSnapshot } from "../github/types.ts"
 import { diffSnapshot } from "../github/diff.ts"
@@ -52,6 +52,17 @@ afterEach(() => {
 })
 
 describe("StateStore", () => {
+  test("configures a busy timeout for concurrent database access", () => {
+    const store = createStore()
+    try {
+      const db = (store as unknown as { db: DatabaseSync }).db
+      const timeout = db.prepare("PRAGMA busy_timeout").get() as { timeout: number }
+      assert.equal(timeout.timeout, PREMIND_DATABASE_BUSY_TIMEOUT_MS)
+    } finally {
+      store.close()
+    }
+  })
+
   for (const scenario of [
     { name: "initial failing check", failing: true, conflict: false, manual: false, stale: false },
     { name: "initial conflict", failing: false, conflict: true, manual: false, stale: false },

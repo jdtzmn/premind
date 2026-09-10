@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import {
 	PREMIND_CLIENT_LEASE_TTL_MS,
 	PREMIND_DB_PATH,
+	PREMIND_DATABASE_BUSY_TIMEOUT_MS,
 	PREMIND_PR_STREAM_RETENTION_MS,
 	PREMIND_STATE_DIR,
 	PREMIND_SUBSCRIPTION_RETENTION_MS,
@@ -138,6 +139,7 @@ export class StateStore {
 		fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 		fs.mkdirSync(PREMIND_STATE_DIR, { recursive: true });
 		this.db = new DatabaseSync(dbPath);
+		this.db.exec(`PRAGMA busy_timeout = ${PREMIND_DATABASE_BUSY_TIMEOUT_MS}`);
 		this.db.exec("PRAGMA journal_mode = WAL");
 		this.db.exec("PRAGMA foreign_keys = ON");
 		this.migrate();
