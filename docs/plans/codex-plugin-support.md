@@ -20,7 +20,7 @@ This issue does not attempt to wake an idle Codex thread.
 4. **No `PostToolUse` hook.** Premind will not spawn a process after every command, edit, or MCP call merely to reduce reminder latency.
 5. **Immediate delivery at `Stop`.** The Codex adapter does not apply Pi/OpenCode's idle delay. Once `Stop` returns, another hook is not guaranteed until the next user action.
 6. **One reminder per continuation chain.** `stop_hook_active` prevents recursively draining another batch after a premind-triggered continuation.
-7. **At-least-once semantics.** A crash may cause a duplicate reminder, but must not silently lose or permanently strand one.
+7. **At-least-once delivery target.** A crash should cause a duplicate rather than loss. Codex does not acknowledge hook-context consumption, so the remaining process-exit ambiguity must be documented and bounded rather than presented as an absolute guarantee.
 8. **Portable package format.** Use root `plugin.json`, root `mcp.json`, `hooks/hooks.json`, and `skills/`. Do not make `.codex-plugin/plugin.json` the canonical manifest.
 9. **Explicit controls through MCP.** Keep the current worktree and subscription controls available as MCP tools, but lifecycle delivery must not depend on the model calling them correctly.
 10. **App Server is out of scope.** A remote-TUI/App Server integration may be explored in a separate issue if automatic idle revival is later required.
@@ -30,8 +30,8 @@ This issue does not attempt to wake an idle Codex thread.
 | Premind need | Codex mechanism | v1 behavior |
 | --- | --- | --- |
 | Register/reconcile a root thread | `SessionStart` | Ensure daemon, register namespaced session ID, reconcile `cwd`, and recover prior delivery receipts. |
-| Handle startup/resume/clear/compact | `SessionStart.source` | Use idempotent handling for every source supported by the pinned Codex release. |
-| Mark an active turn busy | `UserPromptSubmit` | Reconcile the session, confirm prior delivery, mark busy, then claim and inject one idle-period reminder as additional context. |
+| Handle startup/resume/clear/compact | `SessionStart.source` | Use idempotent handling for every source supported by the pinned Codex release. `compact` performs lifecycle reconciliation only and never claims a reminder because it may fire mid-turn. |
+| Mark an active turn busy | `UserPromptSubmit` | Reconcile the session, mark busy, then claim and inject one idle-period reminder as additional context. |
 | Detect normal turn completion | `Stop` | Mark idle, confirm a prior continuation, and inject at most one newly claimed batch. |
 | Avoid continuation loops | `Stop.stop_hook_active` | Confirm the prior continuation but do not claim another batch. |
 | Handle interruption | `Interrupt` | Best-effort mark idle within Codex's three-second maximum; never inject a reminder. |
@@ -93,7 +93,7 @@ type SettleReminderClaimPayload = {
 
 ### 4.2 Adapter delivery receipts
 
-A hook cannot prove that Codex acted on stdout. Use a receipt under `PLUGIN_DATA` to avoid claiming otherwise:
+Codex does not acknowledge that hook context was consumed. Persist one namespaced receipt per `sessionId` and `handoffId` under `PLUGIN_DATA` to record the strongest evidence available:
 
 ```ts
 type CodexDeliveryReceipt = {
@@ -101,18 +101,30 @@ type CodexDeliveryReceipt = {
   batchId: string
   handoffId: string
   boundary: "session_start" | "user_prompt_submit" | "stop"
-  emittedAt: number
+  sourceTurnId?: string
+  outputFlushedAt: number
 }
 ```
 
-Write receipts atomically using temporary-file-plus-rename. On the next applicable lifecycle event:
+For each claim, use this order:
 
-- confirm the previous receipt with the daemon;
-- remove it only after confirmation succeeds;
-- allow an expired or failed claim to retry;
-- tolerate duplicate model-visible delivery rather than risking silent loss.
+1. render and validate the complete hook response in memory;
+2. write it to stdout and await the stream write/drain callback;
+3. atomically persist the receipt with temporary-file-plus-rename;
+4. perform no further fallible work and exit successfully.
 
-For a `Stop` continuation, the next `Stop` with `stop_hook_active: true` is the strongest available confirmation boundary. For `SessionStart` and `UserPromptSubmit` context injection, confirm at the next observed lifecycle boundary.
+If the process dies before step 3, the lease expires and the batch is retried, even if that can duplicate already-written context. The narrow crash window after receipt persistence but before successful process exit cannot be eliminated without a Codex host acknowledgement; document it explicitly.
+
+Receipts must use safe encoded filenames and separate records per session/handoff. Serialize lifecycle handling with an exclusive per-session lock that has bounded stale-lock recovery. Settlement and deletion use compare-and-delete semantics so one hook cannot consume another hook's receipt.
+
+Confirmation is boundary-specific:
+
+- a `stop` receipt is confirmed only by a later `Stop` with `stop_hook_active: true` for the same session;
+- a `user_prompt_submit` receipt is confirmed by the downstream `Stop` with the same `turn_id`;
+- a `session_start` receipt is confirmed only after the next root turn reaches `Stop`;
+- an unrelated start or prompt event never confirms a prior receipt.
+
+If the expected proof never arrives, leave the claim unsettled and allow its lease to expire for retry.
 
 ### 4.3 Boundary ordering
 
@@ -121,33 +133,31 @@ For a `Stop` continuation, the next `Stop` with `stop_hook_active: true` is the 
 1. Validate the Codex input.
 2. Ensure the daemon is running.
 3. Register/reconcile `codex:<session_id>`.
-4. Confirm any prior receipt.
+4. Acquire the per-session lifecycle lock and reconcile expired receipts without confirming unrelated claims.
 5. Reconcile the current `cwd` as the active worktree when appropriate for the start source.
-6. Claim at most one batch.
-7. Persist its receipt.
-8. Return it through `hookSpecificOutput.additionalContext`.
+6. If `source` is `compact`, stop after lifecycle reconciliation because compaction may occur mid-turn.
+7. Otherwise claim at most one batch.
+8. Render and flush `hookSpecificOutput.additionalContext`, then persist its receipt.
 9. Fail open on all premind errors.
 
 #### `UserPromptSubmit`
 
 1. Validate input and reconcile the session in case a long idle period made it stale.
-2. Confirm any prior receipt.
+2. Acquire the per-session lock and reconcile expired receipts without confirming unrelated claims.
 3. Mark the session busy.
 4. Claim at most one batch queued during idle.
-5. Persist its receipt.
-6. Return it through `hookSpecificOutput.additionalContext` before the user's prompt reaches the model.
-7. Never block the user's prompt because premind is unavailable.
+5. Render and flush `hookSpecificOutput.additionalContext`, recording the current `turn_id`, then persist its receipt.
+6. Never block the user's prompt because premind is unavailable.
 
 #### `Stop`
 
 1. Validate input and reconcile the session.
-2. Mark the session idle even when `stop_hook_active` is true.
-3. Confirm any prior receipt.
+2. Acquire the per-session lock and mark the session idle even when `stop_hook_active` is true.
+3. Confirm only receipts proven by this boundary: the same-turn prompt receipt, the prior root-session start receipt, or the outstanding Stop receipt when `stop_hook_active` is true.
 4. If `stop_hook_active` is true, return empty success.
 5. Otherwise claim at most one batch.
-6. Persist its receipt.
-7. Return `{ "decision": "block", "reason": reminderText }` to create one continuation.
-8. Leave updates arriving after the claim queued for the next boundary.
+6. Render and flush `{ "decision": "block", "reason": reminderText }`, then persist its receipt.
+7. Leave updates arriving after the claim queued for the next boundary.
 
 #### `Interrupt`
 
@@ -155,21 +165,22 @@ Mark idle on a best-effort basis. Do not claim a batch because Interrupt output 
 
 #### `SessionEnd`
 
-Close the root session and clean stale local binding files on a best-effort basis. The daemon's stale-session recovery remains necessary because `SessionEnd` can be delayed or skipped.
+Release the current owner and mark the root session dormant on a best-effort basis. Do not call destructive `unregisterSession`; Codex may emit `SessionEnd` after a thread has merely been unopened, so durable subscriptions, cursors, batches, and bindings must remain available for resume.
 
 ## 5. Long-Idle Behavior
 
-Premind currently reaps stale sessions and watcher demand is tied to active sessions/subscriptions. Codex has no long-lived lifecycle callback while a stock thread sits idle.
+Codex threads can remain idle longer than premind's current six-hour stale-session threshold, while current closed-session cleanup can delete the session and its reminder batches later. Recreating a deleted session at the current event high-water mark would skip the intervening updates.
 
-For v1:
+Separate session liveness from durable delivery state:
 
-1. Preserve pending events and reminder batches durably.
-2. Re-register and reconcile on every `UserPromptSubmit` and `SessionStart`, not only initial startup.
-3. If a long-idle session was reaped, restart branch/PR watching immediately.
-4. Do not promise that a newly discovered update will always be available before the first post-idle prompt. If reconciliation requires a new GitHub poll, delivery may occur at that turn's `Stop` instead.
-5. Document the guarantee as **next available lifecycle boundary after detection**, not necessarily the first user prompt after an arbitrarily long sleep.
+1. Add a dormant Codex session state that stops contributing active watcher demand but retains worktree binding, subscriptions, delivery cursor, batches, and the last canonical PR snapshot.
+2. `SessionEnd` releases the current owner and marks the session dormant; it must not call the destructive `unregisterSession` path.
+3. On `UserPromptSubmit` or non-compact `SessionStart`, reactivate the dormant session and reconcile the PR from its retained snapshot/cursor rather than baselining at the current high-water mark.
+4. Dormant sessions do not require continuous GitHub polling. The first resumed turn may trigger reconciliation, so a newly discovered update may arrive at that turn's `Stop` rather than before its prompt.
+5. Automatic deletion requires an explicit retention policy separate from liveness. For v1, preserve dormant Codex delivery state until the tracked PR is closed and the existing closed-PR retention expires, or until an explicit maintenance action removes it.
+6. Test resume after both the stale-session threshold and the closed-session retention interval to prove that cursor history is retained.
 
-Do not keep an async hook alive as a pseudo-monitor. It consumes resources without gaining wake capability.
+Document the guarantee as **the next available lifecycle boundary after detection**. Do not keep an async hook alive as a pseudo-monitor; it consumes resources without gaining wake capability.
 
 ## 6. Session Identity and Ownership
 
@@ -265,7 +276,9 @@ The current source launcher depends on TypeScript runners and points at `src/dae
 - the stdio MCP bridge;
 - the premind daemon.
 
-Use `node` to execute the bundles. Pin and document the minimum Node version required by `node:sqlite`—currently Node 22.5 or later unless implementation changes remove that requirement.
+Use `node` to execute the bundles. Pin Node 22.13 or later so `node:sqlite` works without the earlier `--experimental-sqlite` flag. Enforce the same minimum in `package.json.engines`, launcher preflight, documentation, and clean-cache tests.
+
+The JavaScript bundles are dependency-closed, but the existing runtime still shells out to `git` and authenticated GitHub CLI (`gh`). Treat both as explicit external prerequisites: preflight their availability and `gh auth status`, return actionable setup errors, document them in onboarding, and include clean-install tests for missing or unauthenticated executables.
 
 Keep stdout protocol-only. Send diagnostics to the premind log or stderr where the relevant Codex event permits it.
 
@@ -388,7 +401,7 @@ Prove against an exact Codex version:
 
 Assert that the fixture contains no `PostToolUse` hook.
 
-**Validation:** one trusted fixture session injects context at all three boundaries and produces exactly one Stop continuation.
+**Validation:** one trusted fixture session injects context at non-compact SessionStart, UserPromptSubmit, and Stop; compact performs no delivery; Stop produces exactly one continuation.
 
 ### Phase 1 — Add atomic reminder claims
 
@@ -407,11 +420,13 @@ Implement:
 - handoff leases and live expiry;
 - settle-by-token validation;
 - recovery after hook crash and daemon restart;
+- dormant Codex sessions that preserve subscriptions, cursor, batches, and PR snapshots without contributing watcher demand;
+- a non-destructive owner-release operation for `SessionEnd`;
 - protocol/capability negotiation for a daemon started by an older Pi/OpenCode package.
 
 Never fall back silently to non-atomic read-plus-ack when Codex delivery requires a claim.
 
-**Validation:** simultaneous claimers, stale settlement, abandoned lease, retry, restart, and mixed-version daemon tests. Commit.
+**Validation:** simultaneous claimers, stale settlement, abandoned lease, retry, restart, mixed-version daemon behavior, and resume after both stale and closed-session retention thresholds. Commit.
 
 ### Phase 2 — Build a packageable host-neutral runtime
 
@@ -428,10 +443,13 @@ Never fall back silently to non-atomic read-plus-ack when Codex delivery require
 
 - Add strict schemas generated or transcribed from the pinned Codex contract fixture.
 - Implement the boundary ordering from Section 4.
-- Add namespaced session IDs and atomic delivery receipts under `PLUGIN_DATA`.
+- Add namespaced session IDs and one atomic delivery receipt per session/handoff under `PLUGIN_DATA`.
+- Add exclusive per-session lifecycle locks with stale-lock recovery and compare-and-delete settlement.
+- Flush protocol output before persisting an emission receipt, then perform no fallible work before successful exit.
+- Correlate prompt receipts by `turn_id` and settle Stop receipts only from `stop_hook_active`.
 - Keep errors fail-open and output protocol-valid.
-- Reconcile stale sessions on every start/prompt/stop boundary.
-- Ensure Interrupt and SessionEnd stay within their timeout budgets.
+- Reactivate dormant sessions on non-compact start/prompt boundaries; compact performs lifecycle reconciliation without delivery.
+- Ensure Interrupt and SessionEnd stay within their timeout budgets and use non-destructive owner release.
 
 **Validation:** malformed input, daemon unavailable, every start source, prior-receipt confirmation, concurrent boundaries, `stop_hook_active`, crash before output, crash after output, oversized reminder, and timeout tests. Commit.
 
@@ -452,9 +470,11 @@ Never fall back silently to non-atomic read-plus-ack when Codex delivery require
 - Produce version-synchronized dependency-closed bundles.
 - Include `plugins/` in `package.json.files` and package tests.
 - Validate manifests against their published schemas.
-- Document hook trust, Node requirements, GitHub authentication, network access, writable directories, cache refresh, and uninstall behavior.
+- Pin Node 22.13+ consistently in package metadata, launcher preflight, and documentation.
+- Preflight and document `git`, GitHub CLI, and `gh auth` as external prerequisites.
+- Document hook trust, network access, writable directories, cache refresh, and uninstall behavior.
 
-**Validation:** install into a clean Codex home from the local marketplace; no source checkout, Bun, `tsx`, or repository `node_modules` may be required. Commit.
+**Validation:** install into a clean Codex home from the local marketplace using only Node 22.13+, `git`, and authenticated `gh`; no source checkout, Bun, `tsx`, or repository `node_modules` may be required. Verify actionable failures when each prerequisite is absent. Commit.
 
 ### Phase 6 — End-to-end acceptance and release docs
 
@@ -462,19 +482,21 @@ Test with real PR events:
 
 1. An update detected during a busy turn is claimed once and delivered by `Stop`.
 2. An update detected after Stop remains queued and is injected by the next `UserPromptSubmit`.
-3. A pending update is injected by `SessionStart` on resume.
-4. A premind continuation does not recursively drain another batch.
-5. A crash before output retries without loss.
-6. A crash after output may duplicate but does not lose the batch.
-7. Concurrent boundaries cannot claim the same handoff.
-8. A long-idle reaped session reconciles and delivers no later than the next available boundary after detection.
-9. Two Codex sessions share one PR watcher but keep independent cursors.
-10. Two sessions in one cwd cannot cross-route MCP operations.
-11. Linked-worktree activation preserves manual subscriptions.
-12. An older daemon produces an actionable compatibility result rather than silent fallback.
-13. Hook trust changes are recoverable through `/hooks`.
-14. The manifest contains no `PostToolUse` hook.
-15. Documentation contains no idle-wake promise.
+3. A pending update is injected by non-compact `SessionStart` on resume.
+4. `SessionStart(source: "compact")` reconciles lifecycle state but does not claim or inject a reminder.
+5. A premind continuation does not recursively drain another batch.
+6. A crash before stdout flush retries without loss.
+7. A crash after stdout flush may duplicate; test and document the narrow post-receipt/pre-exit ambiguity.
+8. Concurrent boundaries for one session cannot claim or settle each other's handoff.
+9. Concurrent hooks for different sessions cannot overwrite receipts or locks.
+10. A dormant session resumed after both retention thresholds reconstructs from its durable cursor without skipping events.
+11. Two Codex sessions share one PR watcher but keep independent cursors.
+12. Two sessions in one cwd cannot cross-route MCP operations.
+13. Linked-worktree activation preserves manual subscriptions.
+14. An older daemon produces an actionable compatibility result rather than silent fallback.
+15. Hook trust changes are recoverable through `/hooks`.
+16. Missing Node, `git`, `gh`, or GitHub authentication produces an actionable preflight failure.
+17. The manifest contains no `PostToolUse` hook and documentation contains no idle-wake promise.
 
 **Validation:** targeted live test, complete unit suite, typecheck, manifest validation, and package dry run. Commit.
 
@@ -488,10 +510,10 @@ Codex plugin support is complete when:
 - registration and worktree reconciliation are idempotent;
 - pending updates survive hook, daemon, and Codex restarts;
 - an active-turn update produces at most one Stop continuation;
-- an idle-period update is injected at the next available start or prompt boundary;
-- delivery is at-least-once, with bounded duplicate risk and no silent loss;
+- an idle-period update is delivered at the next available lifecycle boundary after it is detected;
+- leased claims and correlated receipts target at-least-once delivery while documenting the irreducible Codex process-exit acknowledgement gap;
 - MCP mutations route to the intended Codex root session or fail as ambiguous;
-- bundled scripts run from Codex's plugin cache with only the documented Node runtime;
+- bundled scripts run from Codex's plugin cache with Node 22.13+, `git`, and authenticated `gh` as the only external runtime prerequisites;
 - no `PostToolUse` hook is installed;
 - the docs clearly describe turn-boundary delivery and its long-idle limitation.
 
