@@ -29,8 +29,12 @@ test("request deadline is not extended by an incomplete response", async () => {
   const socket = path.join(os.tmpdir(), `d-${process.pid}-${Date.now()}.sock`);
   const server = net.createServer((connection) => {
     connection.resume();
-    const drip = setInterval(() => connection.write("{"), 5);
-    connection.once("close", () => clearInterval(drip));
+    const stopDripping = () => clearInterval(drip);
+    const drip = setInterval(() => {
+      if (!connection.destroyed && connection.writable) connection.write("{");
+    }, 5);
+    connection.once("error", stopDripping);
+    connection.once("close", stopDripping);
   });
   await new Promise((resolve, reject) => {
     server.once("error", reject);
