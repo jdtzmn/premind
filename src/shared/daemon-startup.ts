@@ -19,6 +19,17 @@ export const CLAUDE_REQUIRED_DAEMON_OPERATIONS = [
   "suspendClaudeSession",
 ] as const;
 
+export const CODEX_REQUIRED_DAEMON_OPERATIONS = [
+  "registerCodexSession",
+  "claimReminder",
+  "settleReminderClaim",
+  "releaseSessionOwner",
+] as const;
+
+export const PREMIND_DAEMON_OPERATIONS = [
+  ...CLAUDE_REQUIRED_DAEMON_OPERATIONS,
+  ...CODEX_REQUIRED_DAEMON_OPERATIONS,
+] as const;
 type StartLockOwner = {
   pid: number;
   createdAt: number;
@@ -41,7 +52,9 @@ const isProcessAlive = (pid: number) => {
 
 const readLockOwner = (lockPath: string): StartLockOwner | undefined => {
   try {
-    const [pid, createdAt, token] = fs.readFileSync(lockPath, "utf8").split(":");
+    const [pid, createdAt, token] = fs
+      .readFileSync(lockPath, "utf8")
+      .split(":");
     const parsedPid = Number(pid);
     const parsedCreatedAt = Number(createdAt);
     return Number.isSafeInteger(parsedPid) &&
@@ -77,7 +90,11 @@ export const acquireDaemonStartLock = ({
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       const fd = fs.openSync(lockPath, "wx");
-      const owner = { pid: process.pid, createdAt: Date.now(), token: randomUUID() };
+      const owner = {
+        pid: process.pid,
+        createdAt: Date.now(),
+        token: randomUUID(),
+      };
       fs.writeFileSync(fd, `${owner.pid}:${owner.createdAt}:${owner.token}`);
       return { ...owner, fd, path: lockPath };
     } catch (error) {
@@ -86,7 +103,8 @@ export const acquireDaemonStartLock = ({
       try {
         fs.unlinkSync(lockPath);
       } catch (unlinkError) {
-        if ((unlinkError as NodeJS.ErrnoException).code !== "ENOENT") return undefined;
+        if ((unlinkError as NodeJS.ErrnoException).code !== "ENOENT")
+          return undefined;
       }
     }
   }
@@ -101,7 +119,8 @@ export const releaseDaemonStartLock = (lock: DaemonStartLock) => {
     // The descriptor may already have been closed during shutdown.
   }
   try {
-    if (readLockOwner(lock.path)?.token === lock.token) fs.unlinkSync(lock.path);
+    if (readLockOwner(lock.path)?.token === lock.token)
+      fs.unlinkSync(lock.path);
   } catch {
     // A stale-lock cleanup may have already removed or replaced the lock.
   }
@@ -157,7 +176,8 @@ export const probeDaemon = (
         done(
           response?.ok === true &&
             response?.protocolVersion === PREMIND_PROTOCOL_VERSION &&
-            response?.result?.daemon?.protocolVersion === PREMIND_PROTOCOL_VERSION &&
+            response?.result?.daemon?.protocolVersion ===
+              PREMIND_PROTOCOL_VERSION &&
             requiredOperations.every(
               (operation) =>
                 Array.isArray(operations) && operations.includes(operation),

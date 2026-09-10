@@ -7,9 +7,11 @@ import {
 } from "./constants.ts";
 import {
   ackReminderPayloadSchema,
+  claimReminderPayloadSchema,
   activateWorktreePayloadSchema,
   confirmClaudeHandoffPayloadSchema,
   claudeSessionPayloadSchema,
+  codexSessionPayloadSchema,
   debugStatusPayloadSchema,
   debugStatusResponseSchema,
   ensureSessionControlPayloadSchema,
@@ -19,7 +21,10 @@ import {
   registerClientPayloadSchema,
   registerSessionPayloadSchema,
   releaseClientPayloadSchema,
+  releaseSessionOwnerPayloadSchema,
   reminderBatchSchema,
+  reminderClaimSchema,
+  settleReminderClaimPayloadSchema,
   sessionControlPayloadSchema,
   setGlobalDisabledPayloadSchema,
   suspendClaudeSessionPayloadSchema,
@@ -61,12 +66,27 @@ export const requestSchema = z.discriminatedUnion("type", [
     payload: claudeSessionPayloadSchema,
   }),
   z.object({
+    type: z.literal("registerCodexSession"),
+    protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION),
+    payload: codexSessionPayloadSchema,
+  }),
+  z.object({
     type: z.literal("touchClaudeSession"),
     protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION),
     payload: claudeSessionPayloadSchema.pick({
       sessionId: true,
       busyState: true,
     }),
+  }),
+  z.object({
+    type: z.literal("claimReminder"),
+    protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION),
+    payload: claimReminderPayloadSchema,
+  }),
+  z.object({
+    type: z.literal("settleReminderClaim"),
+    protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION),
+    payload: settleReminderClaimPayloadSchema,
   }),
   z.object({
     type: z.literal("claimClaudeReminder"),
@@ -77,6 +97,11 @@ export const requestSchema = z.discriminatedUnion("type", [
     type: z.literal("confirmClaudeHandoff"),
     protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION),
     payload: confirmClaudeHandoffPayloadSchema,
+  }),
+  z.object({
+    type: z.literal("releaseSessionOwner"),
+    protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION),
+    payload: releaseSessionOwnerPayloadSchema,
   }),
   z.object({
     type: z.literal("suspendClaudeSession"),
@@ -180,6 +205,9 @@ export const getPendingReminderResponseSchema = z.object({
   batch: reminderBatchSchema.nullable(),
 });
 
+export const claimReminderResponseSchema = z.object({
+  claim: reminderClaimSchema.nullable(),
+});
 export const globalDisabledResponseSchema = z.object({
   disabled: z.boolean(),
 });

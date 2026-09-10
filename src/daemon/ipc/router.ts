@@ -3,7 +3,7 @@ import {
 	PREMIND_CLIENT_LEASE_TTL_MS,
 	PREMIND_IDLE_SHUTDOWN_GRACE_MS,
 } from "../../shared/constants.ts";
-import { CLAUDE_REQUIRED_DAEMON_OPERATIONS } from "../../shared/daemon-startup.ts";
+import { PREMIND_DAEMON_OPERATIONS } from "../../shared/daemon-startup.ts";
 import {
 	debugStatusResponseSchema,
 	type AckReminderPayload,
@@ -101,6 +101,17 @@ export class Router {
 					});
 					return this.ok({ registered: true, created });
 				}
+				case "registerCodexSession": {
+					const { created } = this.store.registerSession({
+						...request.payload,
+						host: "codex",
+						hostSessionId: request.payload.hostSessionId ?? request.payload.sessionId,
+						clientId: `codex:${request.payload.sessionId}`,
+						isPrimary: true,
+						status: "active",
+					});
+					return this.ok({ registered: true, created });
+				}
 				case "touchClaudeSession": {
 					const result = this.store.updateSessionState(request.payload);
 					if (!result.updated)
@@ -110,6 +121,16 @@ export class Router {
 						);
 					return this.ok({ updated: true, revived: result.revived });
 				}
+				case "claimReminder":
+					return this.ok({
+						claim: this.reminderHandoffs.claimReminder(request.payload),
+					});
+				case "settleReminderClaim":
+					return this.ok({
+						settled: this.reminderHandoffs.settleReminderClaim(
+							request.payload,
+						),
+					});
 				case "claimClaudeReminder":
 					return this.ok({
 						batch: this.reminderHandoffs.claimClaudeReminder(
@@ -122,6 +143,17 @@ export class Router {
 							request.payload.sessionId,
 						),
 					});
+				case "releaseSessionOwner": {
+					const released = this.store.releaseSessionOwner(
+						request.payload.sessionId,
+					);
+					if (!released)
+						return this.fail(
+							"SESSION_NOT_FOUND",
+							`Unknown session: ${request.payload.sessionId}`,
+						);
+					return this.ok({ released: true });
+				}
 				case "suspendClaudeSession": {
 					const suspended = this.store.suspendClaudeSession(
 						request.payload.sessionId,
@@ -209,7 +241,7 @@ export class Router {
 								heartbeatMs: PREMIND_CLIENT_HEARTBEAT_MS,
 								leaseTtlMs: PREMIND_CLIENT_LEASE_TTL_MS,
 								idleShutdownGraceMs: PREMIND_IDLE_SHUTDOWN_GRACE_MS,
-								operations: [...CLAUDE_REQUIRED_DAEMON_OPERATIONS],
+								operations: [...PREMIND_DAEMON_OPERATIONS],
 							},
 							globallyDisabled: this.store.isGloballyDisabled(),
 							activeClients: this.store.countActiveClients(),
