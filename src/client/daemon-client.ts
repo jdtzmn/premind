@@ -40,20 +40,40 @@ const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 500;
 const isUnsupportedOperation = (error: unknown) =>
   error instanceof Error && error.message.startsWith("BAD_REQUEST:");
+const REQUEST_TIMEOUT_MS = 2_000;
 
 export type PremindDaemonClientOptions = {
   socketPath?: string;
   ensureDaemon?: () => Promise<void>;
+  maxRetries?: number;
+  retryDelayMs?: number;
+  requestTimeoutMs?: number;
 };
 
 export class PremindDaemonClient {
   readonly clientId = randomUUID();
   private readonly socketPath: string;
   private readonly ensureDaemon: () => Promise<void>;
+  private readonly maxRetries: number;
+  private readonly retryDelayMs: number;
+  private readonly requestTimeoutMs: number;
 
   constructor(options: PremindDaemonClientOptions = {}) {
     this.socketPath = options.socketPath ?? PREMIND_SOCKET_PATH;
     this.ensureDaemon = options.ensureDaemon ?? ensureDefaultDaemon;
+    this.maxRetries = options.maxRetries ?? MAX_RETRIES;
+    this.retryDelayMs = options.retryDelayMs ?? RETRY_DELAY_MS;
+    this.requestTimeoutMs = options.requestTimeoutMs ?? REQUEST_TIMEOUT_MS;
+    if (
+      !Number.isInteger(this.maxRetries) ||
+      this.maxRetries < 0 ||
+      !Number.isFinite(this.retryDelayMs) ||
+      this.retryDelayMs < 0 ||
+      !Number.isFinite(this.requestTimeoutMs) ||
+      this.requestTimeoutMs <= 0
+    ) {
+      throw new Error("Invalid premind daemon client retry or timeout options");
+    }
   }
   private registered = false;
   private projectRoot?: string;
@@ -375,7 +395,7 @@ export class PremindDaemonClient {
     try {
       return await this.request(message);
     } catch (error) {
-      if (attempt >= MAX_RETRIES) throw error;
+      if (attempt >= this.maxRetries) throw error;
 
       const isSocketError =
         error instanceof Error &&
@@ -410,7 +430,7 @@ export class PremindDaemonClient {
       }
 
       await new Promise((resolve) =>
-        setTimeout(resolve, RETRY_DELAY_MS * (attempt + 1)),
+        setTimeout(resolve, this.retryDelayMs * (attempt + 1)),
       );
       return this.requestWithRetry(message, attempt + 1);
     }
@@ -422,6 +442,15 @@ export class PremindDaemonClient {
       let buffer = "";
 
       socket.setEncoding("utf8");
+      socket.setTimeout(this.requestTimeoutMs, () => {
+        const error = Object.assign(
+          new Error(
+            `Premind daemon request timed out after ${this.requestTimeoutMs}ms`,
+          ),
+          { code: "ETIMEDOUT" },
+        );
+        socket.destroy(error);
+      });
       socket.once("error", reject);
       socket.once("connect", () => {
         socket.write(`${JSON.stringify(message)}\n`);

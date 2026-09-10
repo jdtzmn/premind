@@ -102,15 +102,21 @@ export class Router {
 					return this.ok({ registered: true, created });
 				}
 				case "registerCodexSession": {
+					const { reactivate, ...payload } = request.payload;
+					const existingStatus = this.store.getSession(payload.sessionId)?.status;
 					const { created } = this.store.registerSession({
-						...request.payload,
+						...payload,
 						host: "codex",
-						hostSessionId: request.payload.hostSessionId ?? request.payload.sessionId,
-						clientId: `codex:${request.payload.sessionId}`,
+						hostSessionId: payload.hostSessionId ?? payload.sessionId,
+						clientId: `codex:${payload.sessionId}`,
 						isPrimary: true,
-						status: "active",
+						status: reactivate === false && existingStatus ? existingStatus : "active",
 					});
-					return this.ok({ registered: true, created });
+					return this.ok({
+						registered: true,
+						created,
+						active: this.store.getSession(payload.sessionId)?.status === "active",
+					});
 				}
 				case "touchClaudeSession": {
 					const result = this.store.updateSessionState(request.payload);

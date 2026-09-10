@@ -128,7 +128,9 @@ export const claudeSessionPayloadSchema = z
     busyState: busyStateSchema.default("idle"),
   })
   .strict();
-export const codexSessionPayloadSchema = claudeSessionPayloadSchema;
+export const codexSessionPayloadSchema = claudeSessionPayloadSchema.extend({
+  reactivate: z.boolean().optional(),
+});
 
 export const activateWorktreePayloadSchema = z
   .object({
