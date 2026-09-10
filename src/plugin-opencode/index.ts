@@ -3,10 +3,10 @@ import { PREMIND_CLIENT_HEARTBEAT_MS, PREMIND_IDLE_DELIVERY_THRESHOLD_MS } from 
 import type { PremindConfig } from "../shared/schema.ts"
 import { PREMIND_VERSION_LABEL } from "../shared/version.ts"
 import { ensureUserConfigTemplate, getDefaultUserConfigPath, getLegacyUserConfigPath, loadPremindConfig } from "../shared/config-loader.ts"
-import { PremindDaemonClient } from "./daemon-client.ts"
+import { PremindDaemonClient } from "../client/daemon-client.ts"
 import { renderPremindStatus } from "./commands.ts"
 import { getPluginRuntimeStatePath, readPluginInstances, readPluginRuntimeState, registerPluginInstance, writePluginRuntimeState } from "./debug-state.ts"
-import { detectGitContext } from "./git-context.ts"
+import { detectGitContext } from "../client/git-context.ts"
 import { ensureDaemonRunning } from "./daemon-launcher.ts"
 
 const COMMAND_MARKERS = {
@@ -178,7 +178,9 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
     throw error
   }
 
-  const daemon = dependencies.createDaemonClient?.() ?? new PremindDaemonClient()
+  const daemon =
+    dependencies.createDaemonClient?.() ??
+    new PremindDaemonClient({ ensureDaemon: startDaemon })
   const lease = await daemon.registerClient(root, "opencode-plugin")
   writePluginRuntimeState({ phase: "client-registered", root, daemonStarted: true, clientRegistered: true })
   // Tracks reminders currently being handed off via promptAsync. Acts as a

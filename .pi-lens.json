@@ -1,0 +1,6 @@
+{
+  "ignore": [
+    "runtime/**",
+    "plugin-claude/runtime/**"
+  ]
+}
