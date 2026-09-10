@@ -1,0 +1,20 @@
+{
+  "name": "premind-contract",
+  "interface": {
+    "displayName": "premind contract fixtures"
+  },
+  "plugins": [
+    {
+      "name": "premind-contract",
+      "source": {
+        "source": "local",
+        "path": "./plugins/premind-contract"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_USE"
+      },
+      "category": "Developer Tools"
+    }
+  ]
+}
