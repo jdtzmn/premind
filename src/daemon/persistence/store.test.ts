@@ -1,10 +1,12 @@
 import assert from "node:assert/strict"
+import { spawn } from "node:child_process"
+import { once } from "node:events"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { afterEach, describe, test } from "node:test"
-import { PREMIND_DATABASE_BUSY_TIMEOUT_MS, PREMIND_PR_STREAM_RETENTION_MS } from "../../shared/constants.ts"
+import { PREMIND_PR_STREAM_RETENTION_MS } from "../../shared/constants.ts"
 import { StateStore } from "./store.ts"
 import type { PullRequestSnapshot } from "../github/types.ts"
 import { diffSnapshot } from "../github/diff.ts"
@@ -52,15 +54,41 @@ afterEach(() => {
 })
 
 describe("StateStore", () => {
-  test("configures a busy timeout for concurrent database access", () => {
-    const store = createStore()
+  test("waits for a transient external database lock", { timeout: 5_000 }, async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "premind-store-lock-test-"))
+    const dbPath = path.join(dir, "premind.db")
+    tempPaths.push(dir)
+
+    const initialStore = new StateStore(dbPath)
+    initialStore.close()
+
+    const lockHolder = spawn(
+      process.execPath,
+      [
+        "-e",
+        `
+          const { DatabaseSync } = require("node:sqlite");
+          const db = new DatabaseSync(process.argv[1]);
+          db.exec("BEGIN EXCLUSIVE");
+          process.stdout.write("locked\\n");
+          setTimeout(() => { db.exec("COMMIT"); db.close(); }, 100);
+        `,
+        dbPath,
+      ],
+      { stdio: ["ignore", "pipe", "inherit"] },
+    )
+    await once(lockHolder.stdout!, "data")
+
+    const startedAt = Date.now()
+    const store = new StateStore(dbPath)
+    const elapsedMs = Date.now() - startedAt
     try {
-      const db = (store as unknown as { db: DatabaseSync }).db
-      const timeout = db.prepare("PRAGMA busy_timeout").get() as { timeout: number }
-      assert.equal(timeout.timeout, PREMIND_DATABASE_BUSY_TIMEOUT_MS)
+      assert.ok(elapsedMs >= 75, `expected the store to wait for the lock, waited ${elapsedMs}ms`)
     } finally {
       store.close()
     }
+    const [exitCode] = await once(lockHolder, "exit")
+    assert.equal(exitCode, 0)
   })
 
   for (const scenario of [
