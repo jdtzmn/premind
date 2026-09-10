@@ -53,6 +53,11 @@ try {
   assert.ok(fs.existsSync(path.join(installed.installedPath, "plugin.json")))
   assert.ok(
     fs.existsSync(
+      path.join(installed.installedPath, ".codex-plugin", "plugin.json"),
+    ),
+  )
+  assert.ok(
+    fs.existsSync(
       path.join(installed.installedPath, "hooks", "contract-hook.mjs"),
     ),
   )

@@ -40,26 +40,28 @@ if (!pluginData) {
 const sessionId = typeof input.session_id === "string" ? input.session_id : "unknown"
 const captureDir = path.join(pluginData, "premind-contract")
 const capturePath = path.join(captureDir, "events.jsonl")
+const externalCapturePath = process.env.PREMIND_CODEX_CONTRACT_OUTPUT
 const safeSessionId = Buffer.from(sessionId).toString("base64url")
 const stopMarkerPath = path.join(captureDir, `stop-${safeSessionId}.json`)
 
 await fs.mkdir(captureDir, { recursive: true })
-await fs.appendFile(
-  capturePath,
-  `${JSON.stringify({
-    event: eventName,
-    keys: Object.keys(input).sort(),
-    types: Object.fromEntries(
-      Object.entries(input).map(([key, value]) => [key, valueType(value)]),
-    ),
-    source: typeof input.source === "string" ? input.source : undefined,
-    stopHookActive:
-      typeof input.stop_hook_active === "boolean"
-        ? input.stop_hook_active
-        : undefined,
-  })}\n`,
-  "utf8",
-)
+const captureRecord = `${JSON.stringify({
+  event: eventName,
+  keys: Object.keys(input).sort(),
+  types: Object.fromEntries(
+    Object.entries(input).map(([key, value]) => [key, valueType(value)]),
+  ),
+  source: typeof input.source === "string" ? input.source : undefined,
+  stopHookActive:
+    typeof input.stop_hook_active === "boolean"
+      ? input.stop_hook_active
+      : undefined,
+})}\n`
+await fs.appendFile(capturePath, captureRecord, "utf8")
+if (externalCapturePath) {
+  await fs.mkdir(path.dirname(externalCapturePath), { recursive: true })
+  await fs.appendFile(externalCapturePath, captureRecord, "utf8")
+}
 
 if (eventName === "SessionStart") {
   process.stdout.write(

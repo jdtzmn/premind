@@ -35,6 +35,10 @@ async function runHook(
         ...process.env,
         PLUGIN_ROOT,
         PLUGIN_DATA: pluginData,
+        PREMIND_CODEX_CONTRACT_OUTPUT: path.join(
+          pluginData,
+          "external-events.jsonl",
+        ),
       },
       stdio: ["pipe", "pipe", "pipe"],
     })
@@ -65,6 +69,12 @@ describe("Codex contract fixture", () => {
     const plugin = JSON.parse(
       await fs.readFile(path.join(PLUGIN_ROOT, "plugin.json"), "utf8"),
     )
+    const codexOverlay = JSON.parse(
+      await fs.readFile(
+        path.join(PLUGIN_ROOT, ".codex-plugin", "plugin.json"),
+        "utf8",
+      ),
+    )
     const hooks = JSON.parse(
       await fs.readFile(path.join(PLUGIN_ROOT, "hooks", "hooks.json"), "utf8"),
     )
@@ -75,7 +85,8 @@ describe("Codex contract fixture", () => {
       marketplace.plugins[0].source.path,
       "./plugins/premind-contract",
     )
-    assert.equal(plugin.extensions["com.openai"].hooks, "./hooks/hooks.json")
+    assert.equal("extensions" in plugin, false)
+    assert.equal(codexOverlay.hooks, "./hooks/hooks.json")
     assert.deepEqual(Object.keys(hooks.hooks).sort(), [
       "SessionStart",
       "Stop",
@@ -136,6 +147,11 @@ describe("Codex contract fixture", () => {
         path.join(pluginData, "premind-contract", "events.jsonl"),
         "utf8",
       )
+      const externalCapture = await fs.readFile(
+        path.join(pluginData, "external-events.jsonl"),
+        "utf8",
+      )
+      assert.equal(externalCapture, capture)
       assert.equal(capture.includes("secret prompt text"), false)
       assert.equal(capture.includes("/private/transcript.jsonl"), false)
       const events = capture
