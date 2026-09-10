@@ -6,7 +6,7 @@ import path from "node:path";
 import { getBoundClaudeSessionId, handleHook, request } from "../bin/lib.mjs";
 
 test("request rejects when a connected daemon does not respond", async () => {
-  const socket = path.join(os.tmpdir(), `premind-hook-test-${process.pid}-${Date.now()}.sock`);
+  const socket = path.join(os.tmpdir(), `p-${process.pid}-${Date.now()}.sock`);
   const server = net.createServer((connection) => connection.resume());
   await new Promise((resolve, reject) => {
     server.once("error", reject);
@@ -26,7 +26,7 @@ test("request rejects when a connected daemon does not respond", async () => {
 });
 
 test("request deadline is not extended by an incomplete response", async () => {
-  const socket = path.join(os.tmpdir(), `premind-hook-drip-${process.pid}-${Date.now()}.sock`);
+  const socket = path.join(os.tmpdir(), `d-${process.pid}-${Date.now()}.sock`);
   const server = net.createServer((connection) => {
     connection.resume();
     const drip = setInterval(() => connection.write("{"), 5);
