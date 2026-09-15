@@ -10622,6 +10622,21 @@ class StateStore {
       if (payload.state === "failed") {
         this.db.prepare(`UPDATE reminder_batches SET handoff_id = NULL, handoff_size = NULL
 						 WHERE session_id = :sessionId AND handoff_id = :handoffId`).run({ sessionId: payload.sessionId, handoffId: payload.handoffId });
+        this.db.prepare(`DELETE FROM reminder_batches
+						 WHERE session_id = :sessionId AND state = 'failed'
+						   AND (
+						     subscription_id IN (
+						       SELECT subscription_id FROM session_subscriptions
+						       WHERE session_id = :sessionId AND state != 'active'
+						     )
+						     OR (
+						       subscription_id IS NULL
+						       AND NOT EXISTS (
+						         SELECT 1 FROM sessions
+						         WHERE session_id = :sessionId AND pr_number IS NOT NULL
+						       )
+						     )
+						   )`).run({ sessionId: payload.sessionId });
       }
       return records.length;
     });

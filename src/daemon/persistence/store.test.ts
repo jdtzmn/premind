@@ -480,6 +480,60 @@ describe("StateStore", () => {
     store.close()
   })
 
+  test("failed bundle acknowledgement removes members canceled in flight", () => {
+    const store = createStore()
+    store.registerClient("bundle-client", { pid: 1, projectRoot: "/tmp/project" })
+    store.registerSession({
+      clientId: "bundle-client",
+      sessionId: "bundle-session",
+      repo: "acme/repo",
+      branch: "feature/bundle",
+      isPrimary: true,
+      status: "active",
+      busyState: "idle",
+    })
+    const subscriptions = [7, 8].map((prNumber) =>
+      store.upsertSubscription({
+        sessionId: "bundle-session",
+        repo: "acme/repo",
+        prNumber,
+        source: "manual",
+      }),
+    )
+    const batchIds = subscriptions.map((subscription) =>
+      store.createOrReplaceReminder(
+        "bundle-session",
+        subscription.subscriptionId,
+        `Reminder ${subscription.prNumber}`,
+        [],
+        0,
+      ),
+    )
+    const bundle = store.claimReminderBundle("bundle-session")
+    assert.ok(bundle)
+    assert.equal(store.unsubscribe("bundle-session", "acme/repo", 8), true)
+
+    assert.equal(
+      store.ackReminderBundle({
+        sessionId: "bundle-session",
+        handoffId: bundle.handoffId,
+        state: "failed",
+        error: "host injection failed",
+      }),
+      2,
+    )
+    assert.equal(store.getReminderBatchRecord(batchIds[1]), null)
+    assert.equal(store.getReminderBatchRecord(batchIds[0])?.state, "failed")
+
+    const retry = store.claimReminderBundle("bundle-session")
+    assert.ok(retry)
+    assert.deepEqual(
+      retry.batches.map(({ batchId }) => batchId),
+      [batchIds[0]],
+    )
+    store.close()
+  })
+
   test("paused sessions block delivery and resumed sessions recover", () => {
     const store = createStore()
 

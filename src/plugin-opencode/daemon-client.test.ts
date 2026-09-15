@@ -134,9 +134,13 @@ describe("reminder bundle compatibility", () => {
     testClient.requestWithRetry = async (request) => {
       requests.push(request)
       if (request.type === "claimReminderBundle") return { batches }
-      if (request.type === "ackReminderBundle") {
+      if (
+        request.type === "ackReminderBundle" &&
+        "handoffId" in request.payload
+      ) {
         throw new Error("BAD_REQUEST: legacy acknowledgement shape")
       }
+      if (request.type === "ackReminderBundle") return { acknowledged: 2 }
       return undefined
     }
 
@@ -150,13 +154,12 @@ describe("reminder bundle compatibility", () => {
     })
 
     assert.equal(acknowledged.acknowledged, 2)
-    assert.deepEqual(
-      requests.filter(({ type }) => type === "ackReminder").map(({ payload }) => payload),
-      batches.map(({ batchId }) => ({
-        batchId,
-        sessionId: "session-1",
-        state: "confirmed",
-      })),
-    )
+    const acknowledgements = requests.filter(({ type }) => type === "ackReminderBundle")
+    assert.equal(acknowledgements.length, 2)
+    assert.deepEqual(acknowledgements.at(-1)?.payload, {
+      sessionId: "session-1",
+      state: "confirmed",
+    })
+    assert.equal(requests.some(({ type }) => type === "ackReminder"), false)
   })
 })

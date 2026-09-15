@@ -360,3 +360,25 @@ test("SessionEnd suspends the durable environment-bound Claude session", async (
     { type: "suspendClaudeSession", payload: { sessionId: "claude-1" } },
   ]);
 });
+
+test("SessionEnd clears its handoff when daemon suspension fails", async () => {
+  const handoffs = createMemoryHandoffs();
+  await handoffs.replace("claude-1", {
+    handoffId: "00000000-0000-4000-8000-000000000001",
+    mode: "bundle",
+  });
+
+  await assert.rejects(
+    handleHook(
+      "SessionEnd",
+      { session_id: "claude-1" },
+      async () => {
+        throw new Error("daemon unavailable");
+      },
+      { CLAUDE_CODE_SESSION_ID: "claude-1" },
+      handoffs,
+    ),
+    /daemon unavailable/,
+  );
+  assert.equal(await handoffs.peek("claude-1"), undefined);
+});

@@ -39,7 +39,11 @@ export class PremindDaemonClient {
 
   private readonly legacyBundleClaims = new Map<
     string,
-    { handoffId: string; batchIds: string[] }
+    {
+      handoffId: string
+      batchIds: string[]
+      mode: "single" | "legacy-bundle"
+    }
   >()
   async registerClient(projectRoot: string, sessionSource?: string) {
     this.projectRoot = projectRoot
@@ -185,6 +189,7 @@ export class PremindDaemonClient {
       this.legacyBundleClaims.set(sessionId, {
         handoffId,
         batchIds: legacy.data.batches.map(({ batchId }) => batchId),
+        mode: "legacy-bundle",
       })
       return { bundle: { handoffId, batches: legacy.data.batches } }
     } catch (error) {
@@ -201,6 +206,7 @@ export class PremindDaemonClient {
       this.legacyBundleClaims.set(sessionId, {
         handoffId,
         batchIds: [pending.batch.batchId],
+        mode: "single",
       })
       return { bundle: { handoffId, batches: [pending.batch] } }
     }
@@ -219,6 +225,21 @@ export class PremindDaemonClient {
       const claim = this.legacyBundleClaims.get(payload.sessionId)
       if (!claim || claim.handoffId !== payload.handoffId) {
         return { acknowledged: 0 }
+      }
+
+      if (claim.mode === "legacy-bundle") {
+        const response = await this.requestWithRetry({
+          type: "ackReminderBundle",
+          protocolVersion: PREMIND_PROTOCOL_VERSION,
+          payload: {
+            sessionId: payload.sessionId,
+            state: payload.state,
+            ...(payload.error ? { error: payload.error } : {}),
+          },
+        })
+        const acknowledged = ackReminderBundleResponseSchema.parse(response)
+        this.legacyBundleClaims.delete(payload.sessionId)
+        return acknowledged
       }
 
       for (const batchId of claim.batchIds) {
