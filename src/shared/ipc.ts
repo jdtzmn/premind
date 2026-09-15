@@ -7,6 +7,7 @@ import {
 } from "./constants.ts";
 import {
   ackReminderPayloadSchema,
+  ackReminderBundlePayloadSchema,
   activateWorktreePayloadSchema,
   confirmClaudeHandoffPayloadSchema,
   claudeSessionPayloadSchema,
@@ -119,6 +120,16 @@ export const requestSchema = z.discriminatedUnion("type", [
     payload: unsubscribePayloadSchema,
   }),
   z.object({
+    type: z.literal("claimReminderBundle"),
+    protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION),
+    payload: sessionControlPayloadSchema,
+  }),
+  z.object({
+    type: z.literal("ackReminderBundle"),
+    protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION),
+    payload: ackReminderBundlePayloadSchema,
+  }),
+  z.object({
     type: z.literal("getPendingReminder"),
     protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION),
     payload: getPendingReminderPayloadSchema,
@@ -178,6 +189,14 @@ export const registerClientResponseSchema = z.object({
 
 export const getPendingReminderResponseSchema = z.object({
   batch: reminderBatchSchema.nullable(),
+});
+
+export const claimReminderBundleResponseSchema = z.object({
+  batches: z.array(reminderBatchSchema),
+});
+
+export const ackReminderBundleResponseSchema = z.object({
+  acknowledged: z.number().int().nonnegative(),
 });
 
 export const globalDisabledResponseSchema = z.object({

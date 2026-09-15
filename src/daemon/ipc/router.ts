@@ -188,6 +188,18 @@ export class Router {
 					return this.handleSubscribe(request.payload);
 				case "unsubscribe":
 					return this.handleUnsubscribe(request.payload);
+				case "claimReminderBundle":
+					return this.ok({
+						batches: this.reminderHandoffs.claimReminderBundle(
+							request.payload.sessionId,
+						),
+					});
+				case "ackReminderBundle":
+					return this.ok({
+						acknowledged: this.reminderHandoffs.acknowledgeBundle(
+							request.payload,
+						),
+					});
 				case "getPendingReminder":
 					return this.ok({
 						batch: this.reminderHandoffs.getPendingReminder(

@@ -174,6 +174,14 @@ export const ackReminderPayloadSchema = z
   })
   .strict();
 
+export const ackReminderBundlePayloadSchema = z
+  .object({
+    sessionId: z.string().min(1),
+    state: z.enum(["confirmed", "failed"]),
+    error: z.string().min(1).optional(),
+  })
+  .strict();
+
 export const confirmClaudeHandoffPayloadSchema = sessionControlPayloadSchema;
 
 export const setGlobalDisabledPayloadSchema = z
@@ -287,6 +295,9 @@ export type UnsubscribePayload = z.infer<typeof unsubscribePayloadSchema>;
 export type ReminderEvent = z.infer<typeof reminderEventSchema>;
 export type ReminderBatch = z.infer<typeof reminderBatchSchema>;
 export type AckReminderPayload = z.infer<typeof ackReminderPayloadSchema>;
+export type AckReminderBundlePayload = z.infer<
+  typeof ackReminderBundlePayloadSchema
+>;
 export type ConfirmClaudeHandoffPayload = z.infer<
   typeof confirmClaudeHandoffPayloadSchema
 >;

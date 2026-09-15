@@ -1,4 +1,8 @@
-import type { AckReminderPayload, ReminderBatch } from "../../shared/schema.ts";
+import type {
+  AckReminderBundlePayload,
+  AckReminderPayload,
+  ReminderBatch,
+} from "../../shared/schema.ts";
 import type { ReminderBatchRecord, StateStore } from "../persistence/store.ts";
 import {
   createReminderHandoffActor,
@@ -44,6 +48,36 @@ export class ReminderHandoffRegistry {
     return this.store.getPendingReminder(sessionId);
   }
 
+
+  claimReminderBundle(sessionId: string, now = Date.now()): ReminderBatch[] {
+    const batches = this.store.claimReminderBundle(sessionId, now);
+    for (const batch of batches) {
+      const record = this.store.getReminderBatchRecord(batch.batchId, sessionId);
+      if (record) this.actorFor(record);
+    }
+    return batches;
+  }
+
+  acknowledgeBundle(payload: AckReminderBundlePayload, now = Date.now()): number {
+    const records = this.store.listInFlightReminderBatchRecords(payload.sessionId);
+    try {
+      const acknowledged = this.store.ackReminderBundle(payload, now);
+      for (const record of records) {
+        if (payload.state === "confirmed") this.discard(record.batchId);
+        else {
+          const updated = this.store.getReminderBatchRecord(
+            record.batchId,
+            payload.sessionId,
+          );
+          if (updated) this.actorFor(updated);
+        }
+      }
+      return acknowledged;
+    } catch (error) {
+      for (const record of records) this.discard(record.batchId);
+      throw error;
+    }
+  }
   claimClaudeReminder(
     sessionId: string,
     now = Date.now(),

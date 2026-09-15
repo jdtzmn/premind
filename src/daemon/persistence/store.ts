@@ -13,6 +13,7 @@ import {
 } from "../../shared/constants.ts";
 import type {
 	AckReminderPayload,
+	AckReminderBundlePayload,
 	ClientMetadata,
 	EnsureSessionControlPayload,
 	RegisterSessionPayload,
@@ -1766,6 +1767,82 @@ export class StateStore {
 		return record ? this.refreshPendingReminder(record) : null;
 	}
 
+	/** Atomically claims every currently deliverable subscription batch for a session. */
+	claimReminderBundle(sessionId: string, now = Date.now()): ReminderBatch[] {
+		return this.transaction(() => {
+			this.expireStaleHandoffs(undefined, now);
+			if (this.listInFlightReminderBatchRecords(sessionId).length > 0) return [];
+
+			const claim = (batch: ReminderBatch | null) => {
+				if (!batch) return null;
+				const record = this.getReminderBatchRecord(batch.batchId, sessionId);
+				if (!record) return null;
+				if (
+					record.state === "failed" &&
+					!this.transitionReminderBatchState(
+						batch.batchId,
+						sessionId,
+						"failed",
+						"built",
+						now,
+					)
+				)
+					throw new Error(`Failed to retry reminder batch ${batch.batchId}`);
+				if (
+					!this.transitionReminderBatchState(
+						batch.batchId,
+						sessionId,
+						"built",
+						"handed_off",
+						now,
+					)
+				)
+					throw new Error(`Failed to claim reminder batch ${batch.batchId}`);
+				return batch;
+			};
+
+			const subscriptions = this.listSessionSubscriptions(sessionId, "active");
+			if (subscriptions.length === 0) {
+				const batch =
+					this.getPendingReminder(sessionId) ??
+					this.buildReminderBatch(sessionId, now);
+				const claimed = claim(batch);
+				return claimed ? [claimed] : [];
+			}
+
+			const claimed: ReminderBatch[] = [];
+			for (const subscription of subscriptions) {
+				const batch =
+					this.getPendingReminderForSubscription(subscription.subscriptionId) ??
+					this.buildReminderBatchForSubscription(subscription.subscriptionId, now);
+				const next = claim(batch);
+				if (next) claimed.push(next);
+			}
+			return claimed;
+		});
+	}
+
+	/** Resolves every batch in the session's one in-flight bundle atomically. */
+	ackReminderBundle(payload: AckReminderBundlePayload, now = Date.now()): number {
+		return this.transaction(() => {
+			const records = this.listInFlightReminderBatchRecords(payload.sessionId);
+			for (const record of records) {
+				const acknowledged = this.ackReminder(
+					{
+						batchId: record.batchId,
+						sessionId: payload.sessionId,
+						state: payload.state,
+						...(payload.error ? { error: payload.error } : {}),
+					},
+					now,
+				);
+				if (!acknowledged)
+					throw new Error(`Failed to acknowledge reminder batch ${record.batchId}`);
+			}
+			return records.length;
+		});
+	}
+
 	/**
 	 * Claims exactly one durable reminder for Claude in the same SQLite
 	 * transaction that selects/builds it. This prevents a second Stop hook from
@@ -1922,6 +1999,24 @@ export class StateStore {
 				 WHERE reminder_batches.state != 'confirmed' ORDER BY reminder_batches.created_at ASC`,
 			)
 			.all() as ReminderRow[];
+		return rows.flatMap((row) => {
+			const record = this.toReminderBatchRecord(row);
+			return record ? [record] : [];
+		});
+	}
+
+	listInFlightReminderBatchRecords(sessionId: string): ReminderBatchRecord[] {
+		const rows = this.db
+			.prepare(
+				`SELECT reminder_batches.batch_id, reminder_batches.session_id, reminder_batches.subscription_id,
+				        reminder_batches.reminder_text, reminder_batches.events_json, reminder_batches.state, reminder_batches.max_event_seq,
+				        session_subscriptions.repo, session_subscriptions.pr_number, session_subscriptions.source
+				 FROM reminder_batches LEFT JOIN session_subscriptions USING (subscription_id)
+				 WHERE reminder_batches.session_id = :sessionId
+				   AND reminder_batches.state = 'handed_off'
+				 ORDER BY reminder_batches.created_at ASC`,
+			)
+			.all({ sessionId }) as ReminderRow[];
 		return rows.flatMap((row) => {
 			const record = this.toReminderBatchRecord(row);
 			return record ? [record] : [];

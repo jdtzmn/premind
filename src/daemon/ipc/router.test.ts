@@ -577,3 +577,103 @@ describe("Claude session IPC", () => {
     store.close();
   });
 });
+
+describe("reminder bundle IPC", () => {
+  test("claims and confirms every pending batch for a session atomically", async () => {
+    const store = createStore();
+    const router = new Router(store);
+    store.registerClient("bundle-client", { pid: 123, projectRoot: "/tmp/project" });
+    store.registerSession({
+      clientId: "bundle-client",
+      sessionId: "bundle-session",
+      repo: "acme/repo",
+      branch: "feature/bundle",
+      isPrimary: true,
+      status: "active",
+      busyState: "idle",
+    });
+    const subscriptions = [
+      store.upsertSubscription({
+        sessionId: "bundle-session",
+        repo: "acme/repo",
+        prNumber: 41,
+        source: "manual",
+      }),
+      store.upsertSubscription({
+        sessionId: "bundle-session",
+        repo: "other/repo",
+        prNumber: 42,
+        source: "manual",
+      }),
+    ];
+    const batchIds = subscriptions.map((subscription, index) =>
+      store.createOrReplaceReminder(
+        "bundle-session",
+        subscription.subscriptionId,
+        `Reminder ${index + 1}`,
+        [],
+        0,
+      ),
+    );
+
+    const claimed = await router.handle({
+      type: "claimReminderBundle",
+      protocolVersion: PREMIND_PROTOCOL_VERSION,
+      payload: { sessionId: "bundle-session" },
+    } as never);
+    assert.equal(claimed.ok, true);
+    if (!claimed.ok) return;
+    const batches = (claimed.result as {
+      batches: Array<{
+        batchId: string;
+        reminderText: string;
+        subscriptionId?: string;
+      }>;
+    }).batches;
+    assert.deepEqual(
+      batches.map(({ batchId }) => batchId),
+      batchIds,
+    );
+    assert.deepEqual(
+      batches.map(({ subscriptionId }) => subscriptionId),
+      subscriptions.map(({ subscriptionId }) => subscriptionId),
+    );
+    assert.match(batches[0].reminderText, /acme\/repo#41/);
+    assert.match(batches[1].reminderText, /other\/repo#42/);
+    assert.deepEqual(
+      batchIds.map((batchId) =>
+        store.getReminderBatchRecord(batchId, "bundle-session")?.state,
+      ),
+      ["handed_off", "handed_off"],
+    );
+
+    const duplicateClaim = await router.handle({
+      type: "claimReminderBundle",
+      protocolVersion: PREMIND_PROTOCOL_VERSION,
+      payload: { sessionId: "bundle-session" },
+    } as never);
+    assert.deepEqual(duplicateClaim, {
+      ok: true,
+      protocolVersion: PREMIND_PROTOCOL_VERSION,
+      result: { batches: [] },
+    });
+
+    const confirmed = await router.handle({
+      type: "ackReminderBundle",
+      protocolVersion: PREMIND_PROTOCOL_VERSION,
+      payload: { sessionId: "bundle-session", state: "confirmed" },
+    } as never);
+    assert.deepEqual(confirmed, {
+      ok: true,
+      protocolVersion: PREMIND_PROTOCOL_VERSION,
+      result: { acknowledged: 2 },
+    });
+    assert.deepEqual(
+      batchIds.map((batchId) =>
+        store.getReminderBatchRecord(batchId, "bundle-session"),
+      ),
+      [null, null],
+    );
+    store.close();
+  });
+});

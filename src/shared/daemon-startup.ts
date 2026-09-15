@@ -16,6 +16,8 @@ export const CLAUDE_REQUIRED_DAEMON_OPERATIONS = [
   "touchClaudeSession",
   "claimClaudeReminder",
   "confirmClaudeHandoff",
+  "claimReminderBundle",
+  "ackReminderBundle",
   "suspendClaudeSession",
 ] as const;
 
