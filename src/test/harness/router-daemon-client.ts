@@ -124,6 +124,22 @@ export const createRouterDaemonClient = (
 		}) => {
 			await request("updateSessionState", payload)
 		},
+		touchClaudeSession: async (payload: {
+			sessionId: string
+			busyState: "busy" | "idle"
+		}) =>
+			(await request("touchClaudeSession", payload)) as {
+				updated: boolean
+				revived: boolean
+			},
+		claimClaudeReminder: async (sessionId: string) =>
+			(await request("claimClaudeReminder", { sessionId })) as {
+				batch: ReminderBatch | null
+			},
+		confirmClaudeHandoff: async (sessionId: string) =>
+			(await request("confirmClaudeHandoff", { sessionId })) as {
+				confirmed: boolean
+			},
 		unregisterSession: async (sessionId: string) => {
 			await request("unregisterSession", { sessionId })
 		},

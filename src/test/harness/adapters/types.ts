@@ -22,10 +22,21 @@ export type DeliverArgs = {
 	branch: string
 }
 
+export type StartIdleArgs = DeliverArgs & {
+	/** Advance host timers without making the session cross another lifecycle boundary. */
+	advanceTime: (milliseconds: number) => Promise<void>
+}
+
 export type DeliverResult = {
 	captured: DeliveryCapture[]
 	/** Re-run the adapter's idle boundary; used to prove no duplicate delivery. */
 	idleAgain: () => Promise<void>
+}
+
+export type IdleDeliveryHandle = DeliverResult & {
+	/** Cross the earliest boundary this host supports after a late reminder arrives. */
+	afterUpdate: () => Promise<void>
+	shutdown: () => Promise<void>
 }
 
 export type AdapterDriver = {
@@ -34,4 +45,5 @@ export type AdapterDriver = {
 	sessionId: string
 	branch: string
 	deliver: (args: DeliverArgs) => Promise<DeliverResult>
+	startIdle: (args: StartIdleArgs) => Promise<IdleDeliveryHandle>
 }

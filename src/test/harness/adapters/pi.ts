@@ -1,20 +1,81 @@
-/**
- * Pi contract driver.
- *
- * Pi delivers at `turn_end` (see "Delay Pi reminders until turn end", #26), not
- * at `agent_end`, and it drains in a loop via `deliverPendingReminders`. The
- * driver drives those real handlers so a change to the delivery trigger shows
- * up here rather than silently narrowing coverage.
- */
+/** Pi lifecycle contract driver. */
 
 import { createPremindPiExtension } from "../../../extension/index.ts"
-import type { AdapterDriver, DeliveryCapture } from "./types.ts"
+import type {
+	AdapterDriver,
+	DeliveryCapture,
+	StartIdleArgs,
+} from "./types.ts"
 
 type EventHandler = (event: unknown, ctx: unknown) => Promise<void>
 
-type SentMessage = {
-	message: { customType?: string; content?: string; details?: unknown }
-	options: unknown
+type PiHarnessArgs = Pick<StartIdleArgs, "daemonClient" | "sessionId" | "branch"> & {
+	statusPollIntervalMs: number
+}
+
+const createPiHarness = ({
+	daemonClient,
+	sessionId,
+	branch,
+	statusPollIntervalMs,
+}: PiHarnessArgs) => {
+	const events = new Map<string, EventHandler>()
+	const captured: DeliveryCapture[] = []
+	let idle = true
+
+	const pi = {
+		on(name: string, handler: EventHandler) {
+			events.set(name, handler)
+		},
+		registerMessageRenderer() {},
+		registerCommand() {},
+		registerTool() {},
+		sendMessage(
+			message: { customType?: string; content?: string; details?: unknown },
+			options: unknown,
+		) {
+			captured.push({
+				sessionId,
+				text: message.content ?? "",
+				meta: { customType: message.customType, options, details: message.details },
+			})
+		},
+	}
+
+	const ctx = {
+		cwd: "/tmp/project",
+		hasUI: true,
+		isIdle: () => idle,
+		sessionManager: { getSessionFile: () => sessionId },
+		ui: {
+			notify: () => {},
+			setStatus: () => {},
+		},
+	}
+
+	createPremindPiExtension({
+		createDaemonClient: () => daemonClient as never,
+		config: { statusPollIntervalMs },
+		detectGit: async () => ({ repo: "acme/repo", branch }),
+	})(pi as never)
+
+	const fire = async (name: string) => {
+		const handler = events.get(name)
+		if (!handler) {
+			throw new Error(
+				`pi extension did not register ${name}; registered: ${[...events.keys()].join(", ")}`,
+			)
+		}
+		await handler({}, ctx)
+	}
+
+	return {
+		captured,
+		fire,
+		setIdle(value: boolean) {
+			idle = value
+		},
+	}
 }
 
 export const piDriver: AdapterDriver = {
@@ -22,66 +83,33 @@ export const piDriver: AdapterDriver = {
 	sessionId: "/tmp/pi-session.jsonl",
 	branch: "feature/pi",
 
-	async deliver({ daemonClient, sessionId, branch }) {
-		const events = new Map<string, EventHandler>()
-		const sentMessages: SentMessage[] = []
-
-		const pi = {
-			on(name: string, handler: EventHandler) {
-				events.set(name, handler)
-			},
-			registerMessageRenderer() {},
-			registerCommand() {},
-			registerTool() {},
-			sendMessage(message: SentMessage["message"], options: unknown) {
-				sentMessages.push({ message, options })
-			},
-		}
-
-		const ctx = {
-			cwd: "/tmp/project",
-			hasUI: true,
-			sessionManager: { getSessionFile: () => sessionId },
-			ui: {
-				notify: () => {},
-				setStatus: () => {},
-			},
-		}
-
-		createPremindPiExtension({
-			createDaemonClient: () => daemonClient as never,
-			config: { statusPollIntervalMs: 0 },
-			detectGit: async () => ({ repo: "acme/repo", branch }),
-		})(pi as never)
-
-		const sessionStart = events.get("session_start")
-		const agentStart = events.get("agent_start")
-		const agentEnd = events.get("agent_end")
-		const turnEnd = events.get("turn_end")
-		if (!sessionStart || !agentStart || !agentEnd || !turnEnd) {
-			throw new Error(
-				`pi extension did not register the expected lifecycle events: ${[...events.keys()].join(", ")}`,
-			)
-		}
-
-		await sessionStart({}, ctx)
+	async deliver(args) {
+		const harness = createPiHarness({ ...args, statusPollIntervalMs: 0 })
+		await harness.fire("session_start")
 		// Busy while the update is already queued, so delivery waits for the turn
 		// boundary rather than firing mid-turn.
-		await agentStart({}, ctx)
-		await agentEnd({}, ctx)
-		await turnEnd({}, ctx)
-
-		const captured: DeliveryCapture[] = sentMessages.map((sent) => ({
-			sessionId,
-			text: sent.message.content ?? "",
-			meta: { customType: sent.message.customType, options: sent.options, details: sent.message.details },
-		}))
+		harness.setIdle(false)
+		await harness.fire("agent_start")
+		harness.setIdle(true)
+		await harness.fire("agent_end")
+		await harness.fire("turn_end")
 
 		return {
-			captured,
-			idleAgain: async () => {
-				await turnEnd({}, ctx)
-			},
+			captured: harness.captured,
+			idleAgain: () => harness.fire("turn_end"),
+		}
+	},
+
+	async startIdle({ advanceTime, ...args }) {
+		const harness = createPiHarness({ ...args, statusPollIntervalMs: 5_000 })
+		await harness.fire("session_start")
+
+		return {
+			captured: harness.captured,
+			// Pi can wake an already-idle session from its autonomous status poll.
+			afterUpdate: () => advanceTime(5_000),
+			idleAgain: () => advanceTime(5_000),
+			shutdown: () => harness.fire("session_shutdown"),
 		}
 	},
 }

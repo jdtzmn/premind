@@ -95,6 +95,10 @@ export type Scenario = {
 	dbPath: string
 	sessions: AdapterSession[]
 	github: ScriptedGitHub
+	/** Persist the update under test after adapters have had a chance to become idle. */
+	ingestUpdate: () => Promise<void>
+	/** Reopen SQLite so later reads prove the update was durable. */
+	reopenStore: () => void
 	/** Structured state for failure diagnostics. */
 	describe: () => Record<string, unknown>
 	cleanup: () => void
@@ -103,10 +107,10 @@ export type Scenario = {
 const T0 = 4_000_000_000_000
 
 /**
- * Ingests baseline + one update, drains the baseline batch so every cursor
- * starts level, asserts persistence, then reopens the database.
+ * Creates the fan-out world at a durable baseline, before the update under test.
+ * Callers may attach adapters and make them idle before calling `ingestUpdate`.
  */
-export const runPrUpdateScenario = async (
+export const createPrUpdateScenario = async (
 	adapters: Array<{ key: string; sessionId: string; branch: string }>,
 ): Promise<Scenario> => {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "premind-fanout-"))
@@ -114,7 +118,7 @@ export const runPrUpdateScenario = async (
 	let store = new StateStore(dbPath)
 
 	const github = new ScriptedGitHub([BASELINE_SNAPSHOT, UPDATED_SNAPSHOT])
-	const watcher = new PullRequestWatcher(store, github)
+	let watcher = new PullRequestWatcher(store, github)
 
 	const sessions: AdapterSession[] = []
 	for (const adapter of adapters) {
@@ -125,7 +129,7 @@ export const runPrUpdateScenario = async (
 				sessionId: adapter.sessionId,
 				repo: SCENARIO_REPO,
 				// Distinct branches keep these sessions independent consumers of one
-				// PR, which is what two adapters watching the same PR looks like.
+				// PR, which is what multiple adapters watching the same PR looks like.
 				branch: adapter.branch,
 				isPrimary: true,
 				status: "active",
@@ -155,39 +159,48 @@ export const runPrUpdateScenario = async (
 		store.ackReminder({ batchId: baseline.batchId, sessionId: session.sessionId, state: "confirmed" }, T0)
 	}
 
-	// The update under test.
-	await watcher.tick(T0 + 60_000)
-
-	// --- persistence boundary, asserted before any adapter runs ---
-	const stored = store.getSnapshot(SCENARIO_REPO, SCENARIO_PR)
-	assert.equal(stored?.core.headRefOid, "sha-2", "the update is persisted")
-
-	const perSubscription = sessions.map((session) => ({
-		session,
-		events: store.listUndeliveredEventsForSubscription(session.subscriptionId),
-	}))
-	for (const { session, events } of perSubscription) {
-		assert.ok(events.length > 0, `${session.adapter} should have queued events`)
+	const reopenStore = () => {
+		store.close()
+		store = new StateStore(dbPath)
+		watcher = new PullRequestWatcher(store, github)
 	}
-	assert.deepEqual(
-		[...new Set(perSubscription.map(({ events }) => events.map((e) => e.kind).join("|")))],
-		[perSubscription[0].events.map((e) => e.kind).join("|")],
-		"every subscription is owed the same source events",
-	)
 
-	// Replaying the same snapshot must not create new work. Depth on dedupe
-	// lives in diff.test.ts; this only guards the fan-out path.
-	const before = store.listUndeliveredEventsForSubscription(sessions[0].subscriptionId).length
-	await watcher.tick(T0 + 120_000)
-	assert.equal(
-		store.listUndeliveredEventsForSubscription(sessions[0].subscriptionId).length,
-		before,
-		"replaying an unchanged snapshot adds no events",
-	)
+	// Establish a durable baseline before any adapter attaches.
+	reopenStore()
+	let updateIngested = false
 
-	// Adapters must only be able to see durable state.
-	store.close()
-	store = new StateStore(dbPath)
+	const ingestUpdate = async () => {
+		if (updateIngested) throw new Error("the PR update may only be ingested once")
+		updateIngested = true
+		await watcher.tick(T0 + 60_000)
+
+		// --- persistence boundary, asserted before any adapter delivers ---
+		const stored = store.getSnapshot(SCENARIO_REPO, SCENARIO_PR)
+		assert.equal(stored?.core.headRefOid, "sha-2", "the update is persisted")
+
+		const perSubscription = sessions.map((session) => ({
+			session,
+			events: store.listUndeliveredEventsForSubscription(session.subscriptionId),
+		}))
+		for (const { session, events } of perSubscription) {
+			assert.ok(events.length > 0, `${session.adapter} should have queued events`)
+		}
+		assert.deepEqual(
+			[...new Set(perSubscription.map(({ events }) => events.map((e) => e.kind).join("|")))],
+			[perSubscription[0].events.map((e) => e.kind).join("|")],
+			"every subscription is owed the same source events",
+		)
+
+		// Replaying the same snapshot must not create new work. Depth on dedupe
+		// lives in diff.test.ts; this only guards the fan-out path.
+		const before = store.listUndeliveredEventsForSubscription(sessions[0].subscriptionId).length
+		await watcher.tick(T0 + 120_000)
+		assert.equal(
+			store.listUndeliveredEventsForSubscription(sessions[0].subscriptionId).length,
+			before,
+			"replaying an unchanged snapshot adds no events",
+		)
+	}
 
 	const describe = () => ({
 		dbPath,
@@ -213,6 +226,8 @@ export const runPrUpdateScenario = async (
 		dbPath,
 		sessions,
 		github,
+		ingestUpdate,
+		reopenStore,
 		describe,
 		cleanup: () => {
 			try {
@@ -227,4 +242,14 @@ export const runPrUpdateScenario = async (
 			fs.rmSync(dir, { recursive: true, force: true })
 		},
 	}
+}
+
+/** Ingests one update and reopens SQLite before adapters consume it. */
+export const runPrUpdateScenario = async (
+	adapters: Array<{ key: string; sessionId: string; branch: string }>,
+): Promise<Scenario> => {
+	const scenario = await createPrUpdateScenario(adapters)
+	await scenario.ingestUpdate()
+	scenario.reopenStore()
+	return scenario
 }
