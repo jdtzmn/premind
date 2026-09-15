@@ -19,6 +19,7 @@ import type { StateStore } from "../../daemon/persistence/store.ts"
 import type { PremindRequest } from "../../shared/ipc.ts"
 import type {
 	AckReminderPayload,
+	AckReminderBundlePayload,
 	RegisterSessionPayload,
 	ReminderBatch,
 } from "../../shared/schema.ts"
@@ -158,6 +159,14 @@ export const createRouterDaemonClient = (
 		unsubscribe: async (payload: { sessionId: string; prNumber: number; repo?: string }) => {
 			await request("unsubscribe", payload)
 		},
+		claimReminderBundle: async (sessionId: string) =>
+			(await request("claimReminderBundle", { sessionId })) as {
+				batches: ReminderBatch[]
+			},
+		ackReminderBundle: async (payload: AckReminderBundlePayload) =>
+			(await request("ackReminderBundle", payload)) as {
+				acknowledged: number
+			},
 		getPendingReminder: async (sessionId: string) => {
 			const result = (await request("getPendingReminder", { sessionId })) as {
 				batch: ReminderBatch | null

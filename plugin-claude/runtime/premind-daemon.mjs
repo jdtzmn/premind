@@ -16,9 +16,9 @@ var __toESM = (mod, isNodeMode, target) => {
     if (cached)
       return cached;
   }
-  target = mod == null ? {} : __create(__getProtoOf(mod));
+  target = mod != null ? __create(__getProtoOf(mod)) : {};
   const to = isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target;
-  for (const key of __getOwnPropNames(mod))
+  for (let key of __getOwnPropNames(mod))
     if (!__hasOwnProp.call(to, key))
       __defProp(to, key, {
         get: __accessProp.bind(mod, key),
@@ -59,7 +59,9 @@ var require_xstate_dev_development_cjs = __commonJS((exports) => {
     if (typeof global !== "undefined") {
       return global;
     }
+    {
       console.warn("XState could not find a global object in this environment. Please let the maintainers know and raise an issue here: https://github.com/statelyai/xstate/issues");
+    }
   }
   function getDevTools() {
     const w = getGlobal();
@@ -280,7 +282,7 @@ var require_raise_53e20da7_development_cjs = __commonJS((exports) => {
         self: self2
       });
     }
-    if (mapper && typeof mapper === "object" && Object.values(mapper).some((val) => typeof val === "function")) {
+    if (!!mapper && typeof mapper === "object" && Object.values(mapper).some((val) => typeof val === "function")) {
       console.warn(`Dynamically mapping values to individual properties is deprecated. Use a single function that returns the mapped object instead.
 Found object containing properties whose values are possibly mapping functions: ${Object.entries(mapper).filter(([, value]) => typeof value === "function").map(([key, value]) => `
  - ${key}: ${value.toString().replace(/\n\s*/g, "")}`).join("")}`);
@@ -505,12 +507,12 @@ Found object containing properties whose values are possibly mapping functions: 
   }
   exports.executingCustomAction = false;
   var $$ACTOR_TYPE = 1;
-  var ProcessingStatus = /* @__PURE__ */ ((ProcessingStatus2) => {
+  var ProcessingStatus = /* @__PURE__ */ function(ProcessingStatus2) {
     ProcessingStatus2[ProcessingStatus2["NotStarted"] = 0] = "NotStarted";
     ProcessingStatus2[ProcessingStatus2["Running"] = 1] = "Running";
     ProcessingStatus2[ProcessingStatus2["Stopped"] = 2] = "Stopped";
     return ProcessingStatus2;
-  })({});
+  }({});
   var defaultOptions = {
     clock: {
       setTimeout: (fn, ms) => {
@@ -711,7 +713,9 @@ Found object containing properties whose values are possibly mapping functions: 
     }
     subscribe(nextListenerOrObserver, errorListener, completeListener) {
       const observer = toObserver(nextListenerOrObserver, errorListener, completeListener);
-      if (this._processingStatus === ProcessingStatus.Stopped) {
+      if (this._processingStatus !== ProcessingStatus.Stopped) {
+        this.observers.add(observer);
+      } else {
         switch (this._snapshot.status) {
           case "done":
             try {
@@ -722,20 +726,18 @@ Found object containing properties whose values are possibly mapping functions: 
             break;
           case "error": {
             const err = this._snapshot.error;
-            if (observer.error) {
+            if (!observer.error) {
+              reportUnhandledError(err);
+            } else {
               try {
                 observer.error(err);
               } catch (err2) {
                 reportUnhandledError(err2);
               }
-            } else {
-              reportUnhandledError(err);
             }
             break;
           }
         }
-      } else {
-        this.observers.add(observer);
       }
       return {
         unsubscribe: () => {
@@ -1005,7 +1007,9 @@ Event: ${eventString}`);
   }
   function cancel(sendId) {
     function cancel2(_args, _params) {
+      {
         throw new Error(`This isn't supposed to be called`);
+      }
     }
     cancel2.type = "xstate.cancel";
     cancel2.sendId = sendId;
@@ -1023,7 +1027,7 @@ Event: ${eventString}`);
     const logic = typeof src === "string" ? resolveReferencedActor(snapshot.machine, src) : src;
     const resolvedId = typeof id === "function" ? id(actionArgs) : id;
     let actorRef;
-    let resolvedInput ;
+    let resolvedInput = undefined;
     if (logic) {
       resolvedInput = typeof input === "function" ? input({
         context: snapshot.context,
@@ -1075,7 +1079,9 @@ Event: ${eventString}`);
     syncSnapshot = false
   } = {}]) {
     function spawnChild2(_args, _params) {
+      {
         throw new Error(`This isn't supposed to be called`);
+      }
     }
     spawnChild2.type = "xstate.spawnChild";
     spawnChild2.id = id;
@@ -1127,7 +1133,9 @@ Event: ${eventString}`);
   }
   function stopChild(actorRef) {
     function stop2(_args, _params) {
+      {
         throw new Error(`This isn't supposed to be called`);
+      }
     }
     stop2.type = "xstate.stopChild";
     stop2.actorRef = actorRef;
@@ -1147,7 +1155,9 @@ Event: ${eventString}`);
   }
   function stateIn(stateValue) {
     function stateIn2() {
+      {
         throw new Error(`This isn't supposed to be called`);
+      }
     }
     stateIn2.check = checkStateIn;
     stateIn2.stateValue = stateValue;
@@ -1163,7 +1173,9 @@ Event: ${eventString}`);
   }
   function not(guard) {
     function not2(_args, _params) {
+      {
         throw new Error(`This isn't supposed to be called`);
+      }
     }
     not2.check = checkNot;
     not2.guards = [guard];
@@ -1179,7 +1191,9 @@ Event: ${eventString}`);
   }
   function and(guards) {
     function and2(_args, _params) {
+      {
         throw new Error(`This isn't supposed to be called`);
+      }
     }
     and2.check = checkAnd;
     and2.guards = guards;
@@ -1195,7 +1209,9 @@ Event: ${eventString}`);
   }
   function or(guards) {
     function or2(_args, _params) {
+      {
         throw new Error(`This isn't supposed to be called`);
+      }
     }
     or2.check = checkOr;
     or2.guards = guards;
@@ -1251,7 +1267,8 @@ Event: ${eventString}`);
     for (const s of nodeSet) {
       if (s.type === "compound" && (!adjList.get(s) || !adjList.get(s).length)) {
         getInitialStateNodesWithTheirAncestors(s).forEach((sn) => nodeSet.add(sn));
-      } else if (s.type === "parallel") {
+      } else {
+        if (s.type === "parallel") {
           for (const child of getChildren(s)) {
             if (child.type === "history") {
               continue;
@@ -1264,6 +1281,7 @@ Event: ${eventString}`);
             }
           }
         }
+      }
     }
     for (const s of nodeSet) {
       let m = s.parent;
@@ -1850,7 +1868,7 @@ ${err.message}`);
         let ancestorMarker = parent?.type === "parallel" ? parent : parent?.parent;
         let rootCompletionNode = ancestorMarker || stateNodeToEnter;
         if (parent?.type === "compound") {
-          internalQueue.push(createDoneStateEvent(parent.id, stateNodeToEnter.output === undefined ? undefined : resolveOutput(stateNodeToEnter.output, nextSnapshot.context, event, actorScope.self)));
+          internalQueue.push(createDoneStateEvent(parent.id, stateNodeToEnter.output !== undefined ? resolveOutput(stateNodeToEnter.output, nextSnapshot.context, event, actorScope.self) : undefined));
         }
         while (ancestorMarker?.type === "parallel" && !completedNodes.has(ancestorMarker) && isInFinalState(mutStateNodeSet, ancestorMarker)) {
           completedNodes.add(ancestorMarker);
@@ -1913,7 +1931,8 @@ ${err.message}`);
           addProperAncestorStatesToEnter(s, stateNode.parent, statesToEnter, historyValue, statesForDefaultEntry);
         }
       }
-    } else if (stateNode.type === "compound") {
+    } else {
+      if (stateNode.type === "compound") {
         const [initialState] = stateNode.initial.target;
         if (!isHistoryNode(initialState)) {
           statesToEnter.add(initialState);
@@ -1921,7 +1940,8 @@ ${err.message}`);
         }
         addDescendantStatesToEnter(initialState, historyValue, statesForDefaultEntry, statesToEnter);
         addProperAncestorStatesToEnter(initialState, stateNode, statesToEnter, historyValue, statesForDefaultEntry);
-      } else if (stateNode.type === "parallel") {
+      } else {
+        if (stateNode.type === "parallel") {
           for (const child of getChildren(stateNode).filter((sn) => !isHistoryNode(sn))) {
             if (![...statesToEnter].some((s) => isDescendant(s, child))) {
               if (!isHistoryNode(child)) {
@@ -1932,6 +1952,8 @@ ${err.message}`);
             }
           }
         }
+      }
+    }
   }
   function addAncestorStatesToEnter(statesToEnter, historyValue, statesForDefaultEntry, ancestors, reentrancyDomain) {
     for (const anc of ancestors) {
@@ -2333,7 +2355,9 @@ ${err.message}`);
       console.warn("Custom actions should not call `raise()` directly, as it is not imperative. See https://stately.ai/docs/actions#built-in-actions for more details.");
     }
     function raise2(_args, _params) {
+      {
         throw new Error(`This isn't supposed to be called`);
+      }
     }
     raise2.type = "xstate.raise";
     raise2.event = eventOrExpr;
@@ -2870,7 +2894,9 @@ var require_assign_f03a9bed_development_cjs = __commonJS((exports) => {
       console.warn("Custom actions should not call `assign()` directly, as it is not imperative. See https://stately.ai/docs/actions#built-in-actions for more details.");
     }
     function assign2(_args, _params) {
+      {
         throw new Error(`This isn't supposed to be called`);
+      }
     }
     assign2.type = "xstate.assign";
     assign2.assignment = assignment;
@@ -3306,7 +3332,9 @@ ${err.message}`);
         try {
           return root.machine.getStateNodeById(referenced.id);
         } catch {
+          {
             console.warn(`Could not resolve StateNode for id: ${referenced.id}`);
+          }
         }
       }
       function reviveHistoryValue(root, historyValue) {
@@ -3381,7 +3409,9 @@ var require_log_0ed3e43f_development_cjs = __commonJS((exports) => {
       console.warn("Custom actions should not call `emit()` directly, as it is not imperative. See https://stately.ai/docs/actions#built-in-actions for more details.");
     }
     function emit2(_args, _params) {
+      {
         throw new Error(`This isn't supposed to be called`);
+      }
     }
     emit2.type = "xstate.emit";
     emit2.event = eventOrExpr;
@@ -3389,11 +3419,11 @@ var require_log_0ed3e43f_development_cjs = __commonJS((exports) => {
     emit2.execute = executeEmit;
     return emit2;
   }
-  var SpecialTargets = /* @__PURE__ */ ((SpecialTargets2) => {
+  var SpecialTargets = /* @__PURE__ */ function(SpecialTargets2) {
     SpecialTargets2["Parent"] = "#_parent";
     SpecialTargets2["Internal"] = "#_internal";
     return SpecialTargets2;
-  })({});
+  }({});
   function resolveSendTo(actorScope, snapshot, args, actionParams, {
     to,
     event: eventOrExpr,
@@ -3463,7 +3493,9 @@ var require_log_0ed3e43f_development_cjs = __commonJS((exports) => {
       console.warn("Custom actions should not call `sendTo()` directly, as it is not imperative. See https://stately.ai/docs/actions#built-in-actions for more details.");
     }
     function sendTo2(_args, _params) {
+      {
         throw new Error(`This isn't supposed to be called`);
+      }
     }
     sendTo2.type = "xstate.sendTo";
     sendTo2.to = to;
@@ -3536,7 +3568,9 @@ var require_log_0ed3e43f_development_cjs = __commonJS((exports) => {
   }
   function enqueueActions(collect) {
     function enqueueActions2(_args, _params) {
+      {
         throw new Error(`This isn't supposed to be called`);
+      }
     }
     enqueueActions2.type = "xstate.enqueueActions";
     enqueueActions2.collect = collect;
@@ -3572,7 +3606,9 @@ var require_log_0ed3e43f_development_cjs = __commonJS((exports) => {
     event
   }), label) {
     function log2(_args, _params) {
+      {
         throw new Error(`This isn't supposed to be called`);
+      }
     }
     log2.type = "xstate.log";
     log2.value = value;
@@ -3974,6 +4010,7 @@ var PREMIND_PROTOCOL_VERSION = 1;
 var PREMIND_SOCKET_PATH = process.env.PREMIND_SOCKET_PATH ?? path.join(os.tmpdir(), "premind.sock");
 var PREMIND_STATE_DIR = process.env.PREMIND_STATE_DIR ?? (process.platform === "darwin" ? path.join(os.homedir(), "Library", "Application Support", "premind") : path.join(process.env.XDG_STATE_HOME ?? path.join(os.homedir(), ".local", "state"), "premind"));
 var PREMIND_DB_PATH = path.join(PREMIND_STATE_DIR, "premind.db");
+var PREMIND_DATABASE_BUSY_TIMEOUT_MS = 5000;
 var PREMIND_EVENT_DETAIL_DIR = path.join(PREMIND_STATE_DIR, "event-details");
 var PREMIND_CLIENT_HEARTBEAT_MS = 1e4;
 var PREMIND_CLIENT_LEASE_TTL_MS = 30000;
@@ -4167,7 +4204,7 @@ __export(exports_external, {
 
 // node_modules/zod/v3/helpers/util.js
 var util;
-((util2) => {
+(function(util2) {
   util2.assertEqual = (_) => {};
   function assertIs(_arg) {}
   util2.assertIs = assertIs;
@@ -4191,12 +4228,14 @@ var util;
     return util2.objectValues(filtered);
   };
   util2.objectValues = (obj) => {
-    return util2.objectKeys(obj).map((e) => obj[e]);
+    return util2.objectKeys(obj).map(function(e) {
+      return obj[e];
+    });
   };
   util2.objectKeys = typeof Object.keys === "function" ? (obj) => Object.keys(obj) : (object) => {
     const keys = [];
     for (const key in object) {
-      if (Object.hasOwn(object, key)) {
+      if (Object.prototype.hasOwnProperty.call(object, key)) {
         keys.push(key);
       }
     }
@@ -4222,7 +4261,7 @@ var util;
   };
 })(util || (util = {}));
 var objectUtil;
-((objectUtil2) => {
+(function(objectUtil2) {
   objectUtil2.mergeShapes = (first, second) => {
     return {
       ...first,
@@ -4341,7 +4380,9 @@ class ZodError extends Error {
     this.issues = issues;
   }
   format(_mapper) {
-    const mapper = _mapper || ((issue) => issue.message);
+    const mapper = _mapper || function(issue) {
+      return issue.message;
+    };
     const fieldErrors = { _errors: [] };
     const processError = (error) => {
       for (const issue of error.issues) {
@@ -4359,11 +4400,11 @@ class ZodError extends Error {
           while (i < issue.path.length) {
             const el = issue.path[i];
             const terminal = i === issue.path.length - 1;
-            if (terminal) {
+            if (!terminal) {
               curr[el] = curr[el] || { _errors: [] };
-              curr[el]._errors.push(mapper(issue));
             } else {
               curr[el] = curr[el] || { _errors: [] };
+              curr[el]._errors.push(mapper(issue));
             }
             curr = curr[el];
             i++;
@@ -4460,10 +4501,10 @@ var errorMap = (issue, _ctx) => {
         } else {
           util.assertNever(issue.validation);
         }
-      } else if (issue.validation === "regex") {
-        message = "Invalid";
-      } else {
+      } else if (issue.validation !== "regex") {
         message = `Invalid ${issue.validation}`;
+      } else {
+        message = "Invalid";
       }
       break;
     case ZodIssueCode.too_small:
@@ -4630,7 +4671,7 @@ var isValid = (x) => x.status === "valid";
 var isAsync = (x) => typeof Promise !== "undefined" && x instanceof Promise;
 // node_modules/zod/v3/helpers/errorUtil.js
 var errorUtil;
-((errorUtil2) => {
+(function(errorUtil2) {
   errorUtil2.errToObj = (message) => typeof message === "string" ? { message } : message || {};
   errorUtil2.toString = (message) => typeof message === "string" ? message : message?.message;
 })(errorUtil || (errorUtil = {}));
@@ -4838,29 +4879,29 @@ class ZodType {
       });
       if (typeof Promise !== "undefined" && result instanceof Promise) {
         return result.then((data) => {
-          if (data) {
-            return true;
-          } else {
+          if (!data) {
             setError();
             return false;
+          } else {
+            return true;
           }
         });
       }
-      if (result) {
-        return true;
-      } else {
+      if (!result) {
         setError();
         return false;
+      } else {
+        return true;
       }
     });
   }
   refinement(check, refinementData) {
     return this._refinement((val, ctx) => {
-      if (check(val)) {
-        return true;
-      } else {
+      if (!check(val)) {
         ctx.addIssue(typeof refinementData === "function" ? refinementData(val, ctx) : refinementData);
         return false;
+      } else {
+        return true;
       }
     });
   }
@@ -4988,7 +5029,7 @@ var uuidRegex = /^[0-9a-fA-F]{8}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]
 var nanoidRegex = /^[a-z0-9_-]{21}$/i;
 var jwtRegex = /^[A-Za-z0-9-_]+\.[A-Za-z0-9-_]+\.[A-Za-z0-9-_]*$/;
 var durationRegex = /^[-+]?P(?!$)(?:(?:[-+]?\d+Y)|(?:[-+]?\d+[.,]\d+Y$))?(?:(?:[-+]?\d+M)|(?:[-+]?\d+[.,]\d+M$))?(?:(?:[-+]?\d+W)|(?:[-+]?\d+[.,]\d+W$))?(?:(?:[-+]?\d+D)|(?:[-+]?\d+[.,]\d+D$))?(?:T(?=[\d+-])(?:(?:[-+]?\d+H)|(?:[-+]?\d+[.,]\d+H$))?(?:(?:[-+]?\d+M)|(?:[-+]?\d+[.,]\d+M$))?(?:[-+]?\d+(?:[.,]\d+)?S)?)??$/;
-var emailRegex = /^(?!\.)(?!.*\.\.)([A-Z0-9_'+\-.]*)[A-Z0-9_+-]@([A-Z0-9][A-Z0-9-]*\.)+[A-Z]{2,}$/i;
+var emailRegex = /^(?!\.)(?!.*\.\.)([A-Z0-9_'+\-\.]*)[A-Z0-9_+-]@([A-Z0-9][A-Z0-9\-]*\.)+[A-Z]{2,}$/i;
 var _emojiRegex = `^(\\p{Extended_Pictographic}|\\p{Emoji_Component})+$`;
 var emojiRegex;
 var ipv4Regex = /^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])$/;
@@ -5078,7 +5119,7 @@ class ZodString extends ZodType {
       return INVALID;
     }
     const status = new ParseStatus;
-    let ctx ;
+    let ctx = undefined;
     for (const check of this._def.checks) {
       if (check.kind === "min") {
         if (input.data.length < check.value) {
@@ -5635,7 +5676,7 @@ class ZodNumber extends ZodType {
       });
       return INVALID;
     }
-    let ctx ;
+    let ctx = undefined;
     const status = new ParseStatus;
     for (const check of this._def.checks) {
       if (check.kind === "int") {
@@ -5865,7 +5906,7 @@ class ZodBigInt extends ZodType {
     if (parsedType !== ZodParsedType.bigint) {
       return this._getInvalidInput(input);
     }
-    let ctx ;
+    let ctx = undefined;
     const status = new ParseStatus;
     for (const check of this._def.checks) {
       if (check.kind === "min") {
@@ -6069,7 +6110,7 @@ class ZodDate extends ZodType {
       return INVALID;
     }
     const status = new ParseStatus;
-    let ctx ;
+    let ctx = undefined;
     for (const check of this._def.checks) {
       if (check.kind === "min") {
         if (input.data.getTime() < check.value) {
@@ -6134,7 +6175,7 @@ class ZodDate extends ZodType {
           min = ch.value;
       }
     }
-    return min == null ? null : new Date(min);
+    return min != null ? new Date(min) : null;
   }
   get maxDate() {
     let max = null;
@@ -6144,7 +6185,7 @@ class ZodDate extends ZodType {
           max = ch.value;
       }
     }
-    return max == null ? null : new Date(max);
+    return max != null ? new Date(max) : null;
   }
 }
 ZodDate.create = (params) => {
@@ -6527,7 +6568,7 @@ class ZodObject extends ZodType {
     return new ZodObject({
       ...this._def,
       unknownKeys: "strict",
-      ...message === undefined ? {} : {
+      ...message !== undefined ? {
         errorMap: (issue, ctx) => {
           const defaultError = this._def.errorMap?.(issue, ctx).message ?? ctx.defaultError;
           if (issue.code === "unrecognized_keys")
@@ -6538,7 +6579,7 @@ class ZodObject extends ZodType {
             message: defaultError
           };
         }
-      }
+      } : {}
     });
   }
   strip() {
@@ -6719,7 +6760,7 @@ class ZodUnion extends ZodType {
         };
       })).then(handleResults);
     } else {
-      let dirty ;
+      let dirty = undefined;
       const issues = [];
       for (const option of options) {
         const childCtx = {
@@ -7933,7 +7974,7 @@ var late = {
   object: ZodObject.lazycreate
 };
 var ZodFirstPartyTypeKind;
-((ZodFirstPartyTypeKind2) => {
+(function(ZodFirstPartyTypeKind2) {
   ZodFirstPartyTypeKind2["ZodString"] = "ZodString";
   ZodFirstPartyTypeKind2["ZodNumber"] = "ZodNumber";
   ZodFirstPartyTypeKind2["ZodNaN"] = "ZodNaN";
@@ -8126,6 +8167,11 @@ var ackReminderPayloadSchema = exports_external.object({
   state: exports_external.enum(["handed_off", "confirmed", "failed"]),
   error: exports_external.string().min(1).optional()
 }).strict();
+var ackReminderBundlePayloadSchema = exports_external.object({
+  sessionId: exports_external.string().min(1),
+  state: exports_external.enum(["confirmed", "failed"]),
+  error: exports_external.string().min(1).optional()
+}).strict();
 var confirmClaudeHandoffPayloadSchema = sessionControlPayloadSchema;
 var setGlobalDisabledPayloadSchema = exports_external.object({
   disabled: exports_external.boolean()
@@ -8267,6 +8313,16 @@ var requestSchema = exports_external.discriminatedUnion("type", [
     payload: unsubscribePayloadSchema
   }),
   exports_external.object({
+    type: exports_external.literal("claimReminderBundle"),
+    protocolVersion: exports_external.literal(PREMIND_PROTOCOL_VERSION),
+    payload: sessionControlPayloadSchema
+  }),
+  exports_external.object({
+    type: exports_external.literal("ackReminderBundle"),
+    protocolVersion: exports_external.literal(PREMIND_PROTOCOL_VERSION),
+    payload: ackReminderBundlePayloadSchema
+  }),
+  exports_external.object({
     type: exports_external.literal("getPendingReminder"),
     protocolVersion: exports_external.literal(PREMIND_PROTOCOL_VERSION),
     payload: getPendingReminderPayloadSchema
@@ -8322,6 +8378,12 @@ var registerClientResponseSchema = exports_external.object({
 var getPendingReminderResponseSchema = exports_external.object({
   batch: reminderBatchSchema.nullable()
 });
+var claimReminderBundleResponseSchema = exports_external.object({
+  batches: exports_external.array(reminderBatchSchema)
+});
+var ackReminderBundleResponseSchema = exports_external.object({
+  acknowledged: exports_external.number().int().nonnegative()
+});
 var globalDisabledResponseSchema = exports_external.object({
   disabled: exports_external.boolean()
 });
@@ -8357,6 +8419,8 @@ var CLAUDE_REQUIRED_DAEMON_OPERATIONS = [
   "touchClaudeSession",
   "claimClaudeReminder",
   "confirmClaudeHandoff",
+  "claimReminderBundle",
+  "ackReminderBundle",
   "suspendClaudeSession"
 ];
 var isSocketReachable = (socketPath = PREMIND_SOCKET_PATH, timeoutMs = DEFAULT_PROBE_TIMEOUT_MS) => new Promise((resolve) => {
@@ -8453,6 +8517,35 @@ class ReminderHandoffRegistry {
         return null;
     }
     return this.store.getPendingReminder(sessionId);
+  }
+  claimReminderBundle(sessionId, now = Date.now()) {
+    const batches = this.store.claimReminderBundle(sessionId, now);
+    for (const batch of batches) {
+      const record = this.store.getReminderBatchRecord(batch.batchId, sessionId);
+      if (record)
+        this.actorFor(record);
+    }
+    return batches;
+  }
+  acknowledgeBundle(payload, now = Date.now()) {
+    const records = this.store.listInFlightReminderBatchRecords(payload.sessionId);
+    try {
+      const acknowledged = this.store.ackReminderBundle(payload, now);
+      for (const record of records) {
+        if (payload.state === "confirmed")
+          this.discard(record.batchId);
+        else {
+          const updated = this.store.getReminderBatchRecord(record.batchId, payload.sessionId);
+          if (updated)
+            this.actorFor(updated);
+        }
+      }
+      return acknowledged;
+    } catch (error) {
+      for (const record of records)
+        this.discard(record.batchId);
+      throw error;
+    }
   }
   claimClaudeReminder(sessionId, now = Date.now()) {
     return this.store.claimClaudeReminder(sessionId, now);
@@ -9091,6 +9184,14 @@ class Router {
           return this.handleSubscribe(request.payload);
         case "unsubscribe":
           return this.handleUnsubscribe(request.payload);
+        case "claimReminderBundle":
+          return this.ok({
+            batches: this.reminderHandoffs.claimReminderBundle(request.payload.sessionId)
+          });
+        case "ackReminderBundle":
+          return this.ok({
+            acknowledged: this.reminderHandoffs.acknowledgeBundle(request.payload)
+          });
         case "getPendingReminder":
           return this.ok({
             batch: this.reminderHandoffs.getPendingReminder(request.payload.sessionId)
@@ -9578,6 +9679,15 @@ function renderReminder(rows, snapshot, target) {
 }
 
 // src/daemon/persistence/store.ts
+function busyTimeoutPragma(timeoutMs) {
+  switch (timeoutMs) {
+    case 5000:
+      return "PRAGMA busy_timeout = 5000";
+    default:
+      throw new Error(`Unsupported SQLite busy timeout: ${timeoutMs}`);
+  }
+}
+
 class StateStore {
   db;
   detailFiles = new DetailFileWriter;
@@ -9587,6 +9697,7 @@ class StateStore {
     fs3.mkdirSync(path4.dirname(dbPath), { recursive: true });
     fs3.mkdirSync(PREMIND_STATE_DIR, { recursive: true });
     this.db = new DatabaseSync(dbPath);
+    this.db.exec(busyTimeoutPragma(PREMIND_DATABASE_BUSY_TIMEOUT_MS));
     this.db.exec("PRAGMA journal_mode = WAL");
     this.db.exec("PRAGMA foreign_keys = ON");
     this.migrate();
@@ -10444,6 +10555,55 @@ class StateStore {
     const record = this.getPendingReminderRecord(sessionId);
     return record ? this.refreshPendingReminder(record) : null;
   }
+  claimReminderBundle(sessionId, now = Date.now()) {
+    return this.transaction(() => {
+      this.expireStaleHandoffs(undefined, now);
+      if (this.listInFlightReminderBatchRecords(sessionId).length > 0)
+        return [];
+      const claim = (batch) => {
+        if (!batch)
+          return null;
+        const record = this.getReminderBatchRecord(batch.batchId, sessionId);
+        if (!record)
+          return null;
+        if (record.state === "failed" && !this.transitionReminderBatchState(batch.batchId, sessionId, "failed", "built", now))
+          throw new Error(`Failed to retry reminder batch ${batch.batchId}`);
+        if (!this.transitionReminderBatchState(batch.batchId, sessionId, "built", "handed_off", now))
+          throw new Error(`Failed to claim reminder batch ${batch.batchId}`);
+        return batch;
+      };
+      const subscriptions = this.listSessionSubscriptions(sessionId, "active");
+      if (subscriptions.length === 0) {
+        const batch = this.getPendingReminder(sessionId) ?? this.buildReminderBatch(sessionId, now);
+        const claimed2 = claim(batch);
+        return claimed2 ? [claimed2] : [];
+      }
+      const claimed = [];
+      for (const subscription of subscriptions) {
+        const batch = this.getPendingReminderForSubscription(subscription.subscriptionId) ?? this.buildReminderBatchForSubscription(subscription.subscriptionId, now);
+        const next = claim(batch);
+        if (next)
+          claimed.push(next);
+      }
+      return claimed;
+    });
+  }
+  ackReminderBundle(payload, now = Date.now()) {
+    return this.transaction(() => {
+      const records = this.listInFlightReminderBatchRecords(payload.sessionId);
+      for (const record of records) {
+        const acknowledged = this.ackReminder({
+          batchId: record.batchId,
+          sessionId: payload.sessionId,
+          state: payload.state,
+          ...payload.error ? { error: payload.error } : {}
+        }, now);
+        if (!acknowledged)
+          throw new Error(`Failed to acknowledge reminder batch ${record.batchId}`);
+      }
+      return records.length;
+    });
+  }
   claimClaudeReminder(sessionId, now = Date.now()) {
     return this.transaction(() => {
       this.expireStaleHandoffs(undefined, now);
@@ -10516,6 +10676,19 @@ class StateStore {
 				        session_subscriptions.repo, session_subscriptions.pr_number, session_subscriptions.source
 				 FROM reminder_batches LEFT JOIN session_subscriptions USING (subscription_id)
 				 WHERE reminder_batches.state != 'confirmed' ORDER BY reminder_batches.created_at ASC`).all();
+    return rows.flatMap((row) => {
+      const record = this.toReminderBatchRecord(row);
+      return record ? [record] : [];
+    });
+  }
+  listInFlightReminderBatchRecords(sessionId) {
+    const rows = this.db.prepare(`SELECT reminder_batches.batch_id, reminder_batches.session_id, reminder_batches.subscription_id,
+				        reminder_batches.reminder_text, reminder_batches.events_json, reminder_batches.state, reminder_batches.max_event_seq,
+				        session_subscriptions.repo, session_subscriptions.pr_number, session_subscriptions.source
+				 FROM reminder_batches LEFT JOIN session_subscriptions USING (subscription_id)
+				 WHERE reminder_batches.session_id = :sessionId
+				   AND reminder_batches.state = 'handed_off'
+				 ORDER BY reminder_batches.created_at ASC`).all({ sessionId });
     return rows.flatMap((row) => {
       const record = this.toReminderBatchRecord(row);
       return record ? [record] : [];
@@ -11471,7 +11644,7 @@ class GitHubHttpClient {
   async throwForResponse(response) {
     const body = await response.text().catch(() => "");
     const retryAfterRaw = response.headers.get("retry-after");
-    const retryAfterSeconds = retryAfterRaw === null ? null : Number.parseInt(retryAfterRaw, 10);
+    const retryAfterSeconds = retryAfterRaw !== null ? Number.parseInt(retryAfterRaw, 10) : null;
     const resource = inferResource(response);
     if ((response.status === 403 || response.status === 429) && Number.isFinite(retryAfterSeconds)) {
       this.rateLimit.recordRetryAfter(resource, retryAfterSeconds);
@@ -11857,10 +12030,10 @@ class BranchDiscoveryWatcher {
             viewerLogin
           });
           for (const binding of targets) {
-            if (binding.git_dir === "") {
-              this.store.rejectAutomaticPullRequest(binding.session_id, binding.repo, pr.number, now);
-            } else {
+            if (binding.git_dir !== "") {
               this.worktreeBindings.pullRequestNotOwned(binding.session_id, { repo: binding.repo, prNumber: pr.number }, now);
+            } else {
+              this.store.rejectAutomaticPullRequest(binding.session_id, binding.repo, pr.number, now);
             }
           }
           continue;
@@ -12967,7 +13140,7 @@ class PollScheduler {
       const waitMs = this.rateLimitResetAt - now + 1000;
       return Math.min(waitMs, this.options.maxIntervalMs);
     }
-    const backoffMultiplier = 2 ** Math.min(this.consecutiveFailures, 6);
+    const backoffMultiplier = Math.pow(2, Math.min(this.consecutiveFailures, 6));
     const interval = Math.min(this.options.baseIntervalMs * backoffMultiplier, this.options.maxIntervalMs);
     const jitter = interval * this.options.jitterFactor * Math.random();
     return Math.round(interval + jitter);

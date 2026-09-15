@@ -15,17 +15,29 @@ type ClaudeHarnessArgs = Pick<StartIdleArgs, "daemonClient" | "sessionId">
 
 const createClaudeHarness = ({ daemonClient, sessionId }: ClaudeHarnessArgs) => {
 	const captured: DeliveryCapture[] = []
-	const ipc = async (type: string, payload: { sessionId: string; busyState?: "busy" | "idle" }) => {
+	const ipc = async (
+		type: string,
+		payload: {
+			sessionId: string
+			busyState?: "busy" | "idle"
+			state?: "confirmed" | "failed"
+			error?: string
+		},
+	) => {
 		switch (type) {
 			case "touchClaudeSession":
 				return daemonClient.touchClaudeSession({
 					sessionId: payload.sessionId,
 					busyState: payload.busyState ?? "idle",
 				})
-			case "claimClaudeReminder":
-				return daemonClient.claimClaudeReminder(payload.sessionId)
-			case "confirmClaudeHandoff":
-				return daemonClient.confirmClaudeHandoff(payload.sessionId)
+			case "claimReminderBundle":
+				return daemonClient.claimReminderBundle(payload.sessionId)
+			case "ackReminderBundle":
+				return daemonClient.ackReminderBundle({
+					sessionId: payload.sessionId,
+					state: payload.state ?? "confirmed",
+					...(payload.error ? { error: payload.error } : {}),
+				})
 			default:
 				throw new Error(`unexpected Claude hook request: ${type}`)
 		}

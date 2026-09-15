@@ -29,6 +29,12 @@ type DaemonClientLike = {
   activateWorktree: (payload: import("../shared/schema.ts").ActivateWorktreePayload) => Promise<unknown>
   subscribe: (payload: import("../shared/schema.ts").SubscribePayload) => Promise<unknown>
   unsubscribe: (payload: import("../shared/schema.ts").UnsubscribePayload) => Promise<unknown>
+  claimReminderBundle?: (
+    sessionId: string,
+  ) => Promise<{ batches: import("../shared/schema.ts").ReminderBatch[] }>
+  ackReminderBundle?: (
+    payload: import("../shared/schema.ts").AckReminderBundlePayload,
+  ) => Promise<{ acknowledged: number }>
   getPendingReminder: (sessionId: string) => Promise<{ batch: import("../shared/schema.ts").ReminderBatch | null }>
   ackReminder: (payload: import("../shared/schema.ts").AckReminderPayload) => Promise<unknown>
   setGlobalDisabled: (disabled: boolean) => Promise<{ disabled: boolean }>
@@ -374,25 +380,35 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
     }
   }
 
-  // Attempt immediate delivery of a pending reminder for a session.
-  // Does nothing if no batch exists or if a delivery is already in progress.
+  // Attempt immediate delivery of all pending reminders for a session.
+  // Does nothing if no batches exist or if a delivery is already in progress.
   const deliverPendingReminder = async (sessionID: string) => {
     // Never deliver to a session this plugin instance doesn't own. The
-    // promptAsync call would fail anyway, but we'd have already acked
-    // "handed_off" to the daemon, leaving the batch in a wrong state.
+    // promptAsync call would fail anyway, but we'd have already claimed
+    // the bundle from the daemon, leaving its batches in the wrong state.
     if (!ownedSessions.has(sessionID)) return
 
     // Prevent concurrent delivery for the same session.
     if (inflightReminders.has(sessionID)) return
 
-    const pending = await daemon.getPendingReminder(sessionID)
-    if (!pending.batch) return
-
-    await daemon.ackReminder({
-      batchId: pending.batch.batchId,
-      sessionId: sessionID,
-      state: "handed_off",
-    })
+    const supportsBundles =
+      typeof daemon.claimReminderBundle === "function" &&
+      typeof daemon.ackReminderBundle === "function"
+    let batches: import("../shared/schema.ts").ReminderBatch[]
+    if (supportsBundles) {
+      batches = (await daemon.claimReminderBundle!(sessionID)).batches
+    } else {
+      const pending = await daemon.getPendingReminder(sessionID)
+      batches = pending.batch ? [pending.batch] : []
+      if (pending.batch) {
+        await daemon.ackReminder({
+          batchId: pending.batch.batchId,
+          sessionId: sessionID,
+          state: "handed_off",
+        })
+      }
+    }
+    if (batches.length === 0) return
 
     inflightReminders.add(sessionID)
     // Stop countdown toast — delivery is in progress.
@@ -401,20 +417,37 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
       const promptResult = await client.session.promptAsync({
         path: { id: sessionID },
         body: {
-          parts: [{ type: "text", text: pending.batch.reminderText }],
+          parts: [
+            {
+              type: "text",
+              text: batches.map((batch) => batch.reminderText).join("\n\n"),
+            },
+          ],
         },
       })
       // The SDK returns error objects instead of throwing on non-2xx responses.
       // Rethrow so our catch block handles NotFoundError and other failures.
       throwIfResponseError(promptResult)
-      // Auto-confirm immediately after successful delivery. The reminder has
+      // Auto-confirm immediately after successful delivery. The bundle has
       // been enqueued in the session; no need to wait for a marker in the
       // user's next message.
-      await daemon.ackReminder({
-        batchId: pending.batch.batchId,
-        sessionId: sessionID,
-        state: "confirmed",
-      })
+      if (supportsBundles) {
+        const result = await daemon.ackReminderBundle!({
+          sessionId: sessionID,
+          state: "confirmed",
+        })
+        if (result.acknowledged !== batches.length) {
+          throw new Error(
+            `Confirmed ${result.acknowledged} of ${batches.length} reminder batches`,
+          )
+        }
+      } else {
+        await daemon.ackReminder({
+          batchId: batches[0].batchId,
+          sessionId: sessionID,
+          state: "confirmed",
+        })
+      }
     } catch (error) {
       if (isNotFoundError(error)) {
         // The opencode session no longer exists. Unregister it from premind so
@@ -423,9 +456,15 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
         cancelDelivery(sessionID)
         ownedSessions.delete(sessionID)
         void daemon.unregisterSession(sessionID).catch(() => {})
+      } else if (supportsBundles) {
+        await daemon.ackReminderBundle!({
+          sessionId: sessionID,
+          state: "failed",
+          error: error instanceof Error ? error.message : String(error),
+        })
       } else {
         await daemon.ackReminder({
-          batchId: pending.batch.batchId,
+          batchId: batches[0].batchId,
           sessionId: sessionID,
           state: "failed",
           error: error instanceof Error ? error.message : String(error),

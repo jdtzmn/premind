@@ -139,12 +139,15 @@ export const handleHook = async (
   if (eventName === "Stop") {
     await ipc("touchClaudeSession", { sessionId, busyState: "idle" });
     if (event?.stop_hook_active) {
-      await ipc("confirmClaudeHandoff", { sessionId });
+      await ipc("ackReminderBundle", { sessionId, state: "confirmed" });
       return undefined;
     }
-    const claimed = await ipc("claimClaudeReminder", { sessionId });
-    if (!claimed?.batch?.reminderText) return undefined;
-    return hookOutput(`${firstReminderPrefix}${claimed.batch.reminderText}`);
+    const claimed = await ipc("claimReminderBundle", { sessionId });
+    const reminders = claimed?.batches
+      ?.map((batch) => batch.reminderText)
+      .filter((text) => typeof text === "string" && text.length > 0);
+    if (!reminders || reminders.length === 0) return undefined;
+    return hookOutput(`${firstReminderPrefix}${reminders.join("\n\n")}`);
   }
 
   if (eventName === "UserPromptSubmit") {

@@ -2,6 +2,8 @@ import net from "node:net"
 import { randomUUID } from "node:crypto"
 import { PREMIND_PROTOCOL_VERSION, PREMIND_SOCKET_PATH } from "../shared/constants.ts"
 import {
+  ackReminderBundleResponseSchema,
+  claimReminderBundleResponseSchema,
   activateWorktreeResponseSchema,
   debugStatusResponseSchema,
   getPendingReminderResponseSchema,
@@ -13,6 +15,7 @@ import {
 } from "../shared/ipc.ts"
 import type {
   AckReminderPayload,
+  AckReminderBundlePayload,
   ActivateWorktreePayload,
   EnsureSessionControlPayload,
   RegisterSessionPayload,
@@ -156,6 +159,24 @@ export class PremindDaemonClient {
       payload,
     })
     return unsubscribeResponseSchema.parse(response)
+  }
+
+  async claimReminderBundle(sessionId: string) {
+    const response = await this.requestWithRetry({
+      type: "claimReminderBundle",
+      protocolVersion: PREMIND_PROTOCOL_VERSION,
+      payload: { sessionId },
+    })
+    return claimReminderBundleResponseSchema.parse(response)
+  }
+
+  async ackReminderBundle(payload: AckReminderBundlePayload) {
+    const response = await this.requestWithRetry({
+      type: "ackReminderBundle",
+      protocolVersion: PREMIND_PROTOCOL_VERSION,
+      payload,
+    })
+    return ackReminderBundleResponseSchema.parse(response)
   }
 
   async getPendingReminder(sessionId: string) {

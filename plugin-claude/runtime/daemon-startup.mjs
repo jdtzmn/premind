@@ -29,6 +29,8 @@ var CLAUDE_REQUIRED_DAEMON_OPERATIONS = [
   "touchClaudeSession",
   "claimClaudeReminder",
   "confirmClaudeHandoff",
+  "claimReminderBundle",
+  "ackReminderBundle",
   "suspendClaudeSession"
 ];
 var isProcessAlive = (pid) => {

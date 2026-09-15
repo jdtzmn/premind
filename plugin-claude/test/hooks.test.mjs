@@ -54,28 +54,34 @@ test("request deadline is not extended by an incomplete response", async () => {
 });
 
 
-test("Stop atomically claims a reminder and returns additionalContext without confirming it", async () => {
+test("Stop atomically claims one reminder bundle and returns it without confirming", async () => {
   const calls = [];
   const output = await handleHook(
     "Stop",
     { session_id: "claude-1" },
     async (type, payload) => {
       calls.push({ type, payload });
-      if (type === "claimClaudeReminder")
-        return { batch: { reminderText: "Review changed" } };
+      if (type === "claimReminderBundle")
+        return {
+          batches: [
+            { reminderText: "First review changed" },
+            { reminderText: "Second review changed" },
+          ],
+        };
       return { updated: true };
     },
     {},
   );
   assert.deepEqual(
     calls.map(({ type }) => type),
-    ["touchClaudeSession", "claimClaudeReminder"],
+    ["touchClaudeSession", "claimReminderBundle"],
   );
   assert.match(
     output.hookSpecificOutput.additionalContext,
     /cannot wake an otherwise inactive session/i,
   );
-  assert.match(output.hookSpecificOutput.additionalContext, /Review changed/);
+  assert.match(output.hookSpecificOutput.additionalContext, /First review changed/);
+  assert.match(output.hookSpecificOutput.additionalContext, /Second review changed/);
 });
 
 test("post-continuation Stop confirms only the prior handoff", async () => {
@@ -95,7 +101,10 @@ test("post-continuation Stop confirms only the prior handoff", async () => {
       type: "touchClaudeSession",
       payload: { sessionId: "claude-1", busyState: "idle" },
     },
-    { type: "confirmClaudeHandoff", payload: { sessionId: "claude-1" } },
+    {
+      type: "ackReminderBundle",
+      payload: { sessionId: "claude-1", state: "confirmed" },
+    },
   ]);
 });
 

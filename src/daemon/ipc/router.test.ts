@@ -658,6 +658,41 @@ describe("reminder bundle IPC", () => {
       result: { batches: [] },
     });
 
+    const failed = await router.handle({
+      type: "ackReminderBundle",
+      protocolVersion: PREMIND_PROTOCOL_VERSION,
+      payload: {
+        sessionId: "bundle-session",
+        state: "failed",
+        error: "host injection failed",
+      },
+    } as never);
+    assert.deepEqual(failed, {
+      ok: true,
+      protocolVersion: PREMIND_PROTOCOL_VERSION,
+      result: { acknowledged: 2 },
+    });
+    assert.deepEqual(
+      batchIds.map((batchId) =>
+        store.getReminderBatchRecord(batchId, "bundle-session")?.state,
+      ),
+      ["failed", "failed"],
+    );
+
+    const retried = await router.handle({
+      type: "claimReminderBundle",
+      protocolVersion: PREMIND_PROTOCOL_VERSION,
+      payload: { sessionId: "bundle-session" },
+    } as never);
+    assert.equal(retried.ok, true);
+    if (!retried.ok) return;
+    assert.deepEqual(
+      (retried.result as { batches: Array<{ batchId: string }> }).batches.map(
+        ({ batchId }) => batchId,
+      ),
+      batchIds,
+    );
+
     const confirmed = await router.handle({
       type: "ackReminderBundle",
       protocolVersion: PREMIND_PROTOCOL_VERSION,

@@ -174,7 +174,7 @@ describe("PR update fan-out", () => {
 
 describe("late-arriving update liveness", () => {
 	for (const driver of ADAPTER_DRIVERS) {
-		test(`${driver.key} delivers an update persisted after the session is already idle`, async (t) => {
+		test(`${driver.key} bundles updates persisted after the session is already idle`, async (t) => {
 			t.mock.timers.enable({ apis: ["setInterval"] })
 			const scenario = await createPrUpdateScenario([
 				{ key: driver.key, sessionId: driver.sessionId, branch: driver.branch },
@@ -219,12 +219,44 @@ describe("late-arriving update liveness", () => {
 				const owedSeq = scenario.store.getReminderBatchRecord(owed.batchId)?.maxEventSeq
 				assert.ok(owedSeq && owedSeq > 0)
 
+				const bundledSubscription = scenario.store.upsertSubscription({
+					sessionId: session.sessionId,
+					repo: "acme/secondary",
+					prNumber: 84,
+					source: "manual",
+				})
+				scenario.store.insertEvents("acme/secondary", 84, [
+					{
+						dedupeKey: `issue_comment.created:bundle:${driver.key}`,
+						kind: "issue_comment.created",
+						priority: "high",
+						summary: "A second PR received feedback",
+						payload: { id: `bundle-${driver.key}` },
+					},
+				])
+				const bundledBatch = scenario.store.buildReminderBatchForSubscription(
+					bundledSubscription.subscriptionId,
+				)
+				assert.ok(bundledBatch, `${driver.key} should have a second batch waiting`)
+				const bundledSeq = scenario.store.getReminderBatchRecord(
+					bundledBatch.batchId,
+				)?.maxEventSeq
+				assert.ok(bundledSeq && bundledSeq > 0)
+
 				await idleHandle.afterUpdate()
 
-				assert.equal(idleHandle.captured.length, 1, `${driver.key} left a late reminder queued`)
+				assert.equal(
+					idleHandle.captured.length,
+					1,
+					`${driver.key} should inject one host message for all pending batches`,
+				)
 				const [capture] = idleHandle.captured
 				assert.equal(capture.sessionId, session.sessionId)
 				assert.ok(capture.text.includes(owed.reminderText))
+				assert.ok(
+					capture.text.includes(bundledBatch.reminderText),
+					`${driver.key} delivered pending batches as separate host messages`,
+				)
 				HOST_CONTRACT[driver.key]?.(capture)
 				assert.equal(
 					scenario.store.getReminderBatchRecord(owed.batchId),
@@ -232,9 +264,20 @@ describe("late-arriving update liveness", () => {
 					`${driver.key} did not confirm its late reminder`,
 				)
 				assert.equal(
+					scenario.store.getReminderBatchRecord(bundledBatch.batchId),
+					null,
+					`${driver.key} did not confirm every bundled reminder`,
+				)
+				assert.equal(
 					scenario.store.getSubscriptionById(session.subscriptionId)?.lastDeliveredEventSeq,
 					owedSeq,
 					`${driver.key} did not advance its cursor`,
+				)
+				assert.equal(
+					scenario.store.getSubscriptionById(bundledSubscription.subscriptionId)
+						?.lastDeliveredEventSeq,
+					bundledSeq,
+					`${driver.key} did not advance every bundled cursor`,
 				)
 
 				await idleHandle.idleAgain()
