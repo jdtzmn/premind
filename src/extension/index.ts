@@ -468,6 +468,7 @@ export const createPremindPiExtension = (
 		const pollStatus = async (
 			ctx: {
 				hasUI?: boolean;
+				isIdle?: () => boolean;
 				ui?: { setStatus?: (key: string, value?: string) => void };
 			},
 			generation: number,
@@ -476,6 +477,18 @@ export const createPremindPiExtension = (
 			statusPollInFlight = true;
 			try {
 				await refreshStatusbar(ctx, generation);
+				if (
+					generation !== sessionGeneration ||
+					ctx.isIdle?.() !== true ||
+					!currentSessionId
+				)
+					return;
+				const result = await deliverPendingReminders(
+					currentSessionId,
+					generation,
+				);
+				if (generation === sessionGeneration && result.delivered)
+					setStatus(ctx, undefined);
 			} catch (error) {
 				if (
 					generation === sessionGeneration &&

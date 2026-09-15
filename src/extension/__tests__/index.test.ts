@@ -93,6 +93,7 @@ type ToolDefinition = {
 type EventContext = {
 	cwd: string;
 	hasUI: boolean;
+	isIdle: () => boolean;
 	sessionManager: { getSessionFile: () => string | undefined };
 	ui: {
 		notify: (message: string, level: string) => void;
@@ -145,12 +146,13 @@ const createMockPi = () => {
 	};
 };
 
-const createEventContext = () => {
+const createEventContext = (isIdle: () => boolean = () => true) => {
 	const notifications: Array<{ message: string; level: string }> = [];
 	const statuses: Array<{ key: string; value?: string }> = [];
 	const ctx: EventContext = {
 		cwd: "/tmp/project",
 		hasUI: true,
+		isIdle,
 		sessionManager: { getSessionFile: () => "/tmp/session.jsonl" },
 		ui: {
 			notify(message: string, level: string) {
@@ -569,11 +571,18 @@ describe("premind Pi extension", () => {
 		await shutdown({}, ctx);
 	});
 
-	test("status polling does not deliver pending reminders", async (t) => {
+	test("status polling wakes an already-idle session when a reminder arrives later", async (t) => {
 		t.mock.timers.enable({ apis: ["setInterval"] });
 		const mock = createMockPi();
-		const client = createClient({ pendingBatch: reminderBatch });
-		const { ctx, statuses } = createEventContext();
+		const client = createClient();
+		const { ctx } = createEventContext();
+		let pendingBatch: ReminderBatch | null = null;
+		client.client.getPendingReminder = async (sessionId: string) => {
+			client.operations.push(`getPendingReminder:${sessionId}`);
+			const batch = pendingBatch;
+			pendingBatch = null;
+			return { batch };
+		};
 		createPremindPiExtension({
 			createDaemonClient: () => client.client,
 			config: { statusPollIntervalMs: 5_000 },
@@ -585,20 +594,70 @@ describe("premind Pi extension", () => {
 		assert.ok(start);
 		assert.ok(shutdown);
 		await start({}, ctx);
-		statuses.length = 0;
+
+		// The session was already idle when this reminder became pending. No future
+		// Pi lifecycle event should be required to wake it.
+		pendingBatch = reminderBatch;
 		t.mock.timers.tick(5_000);
 		await new Promise<void>((resolve) => setImmediate(resolve));
 
-		assert.deepEqual(statuses, [{ key: "premind", value: undefined }]);
+		assert.deepEqual(mock.sentMessages, [
+			{
+				message: {
+					customType: "premind-reminder",
+					content: reminderBatch.reminderText,
+					display: true,
+					details: reminderBatch,
+				},
+				options: { deliverAs: "followUp", triggerTurn: true },
+			},
+		]);
+		assert.ok(
+			client.operations.includes(
+				"ackReminder:batch-1:/tmp/session.jsonl:confirmed",
+			),
+		);
+		await shutdown({}, ctx);
+	});
+
+	test("status polling never delivers while the Pi agent is busy", async (t) => {
+		t.mock.timers.enable({ apis: ["setInterval"] });
+		const mock = createMockPi();
+		const client = createClient({ pendingBatch: reminderBatch });
+		let idle = false;
+		const { ctx } = createEventContext(() => idle);
+		createPremindPiExtension({
+			createDaemonClient: () => client.client,
+			config: { statusPollIntervalMs: 5_000 },
+			detectGit: async () => ({ repo: "owner/repo", branch: "feature/pi" }),
+		})(mock.pi as never);
+
+		const start = mock.events.get("session_start");
+		const agentStart = mock.events.get("agent_start");
+		const agentEnd = mock.events.get("agent_end");
+		const shutdown = mock.events.get("session_shutdown");
+		assert.ok(start);
+		assert.ok(agentStart);
+		assert.ok(agentEnd);
+		assert.ok(shutdown);
+		await start({}, ctx);
+		await agentStart({}, ctx);
+
+		t.mock.timers.tick(5_000);
+		await new Promise<void>((resolve) => setImmediate(resolve));
 		assert.equal(mock.sentMessages.length, 0);
 		assert.equal(
-			client.operations.some(
-				(operation) =>
-					operation.startsWith("getPendingReminder:") ||
-					operation.startsWith("ackReminder:"),
+			client.operations.some((operation) =>
+				operation.startsWith("getPendingReminder:"),
 			),
 			false,
 		);
+
+		idle = true;
+		await agentEnd({}, ctx);
+		t.mock.timers.tick(5_000);
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		assert.equal(mock.sentMessages.length, 1);
 		await shutdown({}, ctx);
 	});
 
