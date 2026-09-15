@@ -27,6 +27,8 @@ import { ensureDaemonRunning } from "./daemon-launcher.ts"
 
 const MAX_RETRIES = 3
 const RETRY_DELAY_MS = 500
+const isUnsupportedOperation = (error: unknown) =>
+  error instanceof Error && error.message.startsWith("BAD_REQUEST:")
 
 export class PremindDaemonClient {
   readonly clientId = randomUUID()
@@ -34,6 +36,10 @@ export class PremindDaemonClient {
   private projectRoot?: string
   private sessionSource?: string
 
+  private readonly legacyBundleClaims = new Map<
+    string,
+    { handoffId: string; batchIds: string[] }
+  >()
   async registerClient(projectRoot: string, sessionSource?: string) {
     this.projectRoot = projectRoot
     this.sessionSource = sessionSource
@@ -162,21 +168,58 @@ export class PremindDaemonClient {
   }
 
   async claimReminderBundle(sessionId: string) {
-    const response = await this.requestWithRetry({
-      type: "claimReminderBundle",
-      protocolVersion: PREMIND_PROTOCOL_VERSION,
-      payload: { sessionId },
-    })
-    return claimReminderBundleResponseSchema.parse(response)
+    try {
+      const response = await this.requestWithRetry({
+        type: "claimReminderBundle",
+        protocolVersion: PREMIND_PROTOCOL_VERSION,
+        payload: { sessionId },
+      })
+      return claimReminderBundleResponseSchema.parse(response)
+    } catch (error) {
+      if (!isUnsupportedOperation(error)) throw error
+      const pending = await this.getPendingReminder(sessionId)
+      if (!pending.batch) return { bundle: null }
+
+      await this.ackReminder({
+        batchId: pending.batch.batchId,
+        sessionId,
+        state: "handed_off",
+      })
+      const handoffId = randomUUID()
+      this.legacyBundleClaims.set(sessionId, {
+        handoffId,
+        batchIds: [pending.batch.batchId],
+      })
+      return { bundle: { handoffId, batches: [pending.batch] } }
+    }
   }
 
   async ackReminderBundle(payload: AckReminderBundlePayload) {
-    const response = await this.requestWithRetry({
-      type: "ackReminderBundle",
-      protocolVersion: PREMIND_PROTOCOL_VERSION,
-      payload,
-    })
-    return ackReminderBundleResponseSchema.parse(response)
+    try {
+      const response = await this.requestWithRetry({
+        type: "ackReminderBundle",
+        protocolVersion: PREMIND_PROTOCOL_VERSION,
+        payload,
+      })
+      return ackReminderBundleResponseSchema.parse(response)
+    } catch (error) {
+      if (!isUnsupportedOperation(error)) throw error
+      const claim = this.legacyBundleClaims.get(payload.sessionId)
+      if (!claim || claim.handoffId !== payload.handoffId) {
+        return { acknowledged: 0 }
+      }
+
+      for (const batchId of claim.batchIds) {
+        await this.ackReminder({
+          batchId,
+          sessionId: payload.sessionId,
+          state: payload.state,
+          ...(payload.error ? { error: payload.error } : {}),
+        })
+      }
+      this.legacyBundleClaims.delete(payload.sessionId)
+      return { acknowledged: claim.batchIds.length }
+    }
   }
 
   async getPendingReminder(sessionId: string) {

@@ -615,6 +615,14 @@ describe("reminder bundle IPC", () => {
         0,
       ),
     );
+    const legacyBatchId = store.createOrReplaceReminder(
+      "bundle-session",
+      null,
+      "Legacy reminder",
+      [],
+      0,
+    );
+    const allBatchIds = [legacyBatchId, ...batchIds];
 
     const claimed = await router.handle({
       type: "claimReminderBundle",
@@ -623,28 +631,34 @@ describe("reminder bundle IPC", () => {
     } as never);
     assert.equal(claimed.ok, true);
     if (!claimed.ok) return;
-    const batches = (claimed.result as {
-      batches: Array<{
-        batchId: string;
-        reminderText: string;
-        subscriptionId?: string;
-      }>;
-    }).batches;
+    const firstBundle = (claimed.result as {
+      bundle: {
+        handoffId: string;
+        batches: Array<{
+          batchId: string;
+          reminderText: string;
+          subscriptionId?: string;
+        }>;
+      } | null;
+    }).bundle;
+    assert.ok(firstBundle);
+    const batches = firstBundle.batches;
     assert.deepEqual(
       batches.map(({ batchId }) => batchId),
-      batchIds,
+      allBatchIds,
     );
     assert.deepEqual(
       batches.map(({ subscriptionId }) => subscriptionId),
-      subscriptions.map(({ subscriptionId }) => subscriptionId),
+      [undefined, ...subscriptions.map(({ subscriptionId }) => subscriptionId)],
     );
-    assert.match(batches[0].reminderText, /acme\/repo#41/);
-    assert.match(batches[1].reminderText, /other\/repo#42/);
+    assert.equal(batches[0].reminderText, "Legacy reminder");
+    assert.match(batches[1].reminderText, /acme\/repo#41/);
+    assert.match(batches[2].reminderText, /other\/repo#42/);
     assert.deepEqual(
-      batchIds.map((batchId) =>
+      allBatchIds.map((batchId) =>
         store.getReminderBatchRecord(batchId, "bundle-session")?.state,
       ),
-      ["handed_off", "handed_off"],
+      ["handed_off", "handed_off", "handed_off"],
     );
 
     const duplicateClaim = await router.handle({
@@ -655,7 +669,7 @@ describe("reminder bundle IPC", () => {
     assert.deepEqual(duplicateClaim, {
       ok: true,
       protocolVersion: PREMIND_PROTOCOL_VERSION,
-      result: { batches: [] },
+      result: { bundle: null },
     });
 
     const failed = await router.handle({
@@ -663,6 +677,7 @@ describe("reminder bundle IPC", () => {
       protocolVersion: PREMIND_PROTOCOL_VERSION,
       payload: {
         sessionId: "bundle-session",
+        handoffId: firstBundle.handoffId,
         state: "failed",
         error: "host injection failed",
       },
@@ -670,13 +685,13 @@ describe("reminder bundle IPC", () => {
     assert.deepEqual(failed, {
       ok: true,
       protocolVersion: PREMIND_PROTOCOL_VERSION,
-      result: { acknowledged: 2 },
+      result: { acknowledged: 3 },
     });
     assert.deepEqual(
-      batchIds.map((batchId) =>
+      allBatchIds.map((batchId) =>
         store.getReminderBatchRecord(batchId, "bundle-session")?.state,
       ),
-      ["failed", "failed"],
+      ["failed", "failed", "failed"],
     );
 
     const retried = await router.handle({
@@ -686,28 +701,56 @@ describe("reminder bundle IPC", () => {
     } as never);
     assert.equal(retried.ok, true);
     if (!retried.ok) return;
+    const retriedBundle = (retried.result as {
+      bundle: { handoffId: string; batches: Array<{ batchId: string }> } | null;
+    }).bundle;
+    assert.ok(retriedBundle);
+    assert.notEqual(retriedBundle.handoffId, firstBundle.handoffId);
     assert.deepEqual(
-      (retried.result as { batches: Array<{ batchId: string }> }).batches.map(
-        ({ batchId }) => batchId,
+      retriedBundle.batches.map(({ batchId }) => batchId),
+      allBatchIds,
+    );
+
+    const staleConfirmation = await router.handle({
+      type: "ackReminderBundle",
+      protocolVersion: PREMIND_PROTOCOL_VERSION,
+      payload: {
+        sessionId: "bundle-session",
+        handoffId: firstBundle.handoffId,
+        state: "confirmed",
+      },
+    } as never);
+    assert.deepEqual(staleConfirmation, {
+      ok: true,
+      protocolVersion: PREMIND_PROTOCOL_VERSION,
+      result: { acknowledged: 0 },
+    });
+    assert.deepEqual(
+      allBatchIds.map((batchId) =>
+        store.getReminderBatchRecord(batchId, "bundle-session")?.state,
       ),
-      batchIds,
+      ["handed_off", "handed_off", "handed_off"],
     );
 
     const confirmed = await router.handle({
       type: "ackReminderBundle",
       protocolVersion: PREMIND_PROTOCOL_VERSION,
-      payload: { sessionId: "bundle-session", state: "confirmed" },
+      payload: {
+        sessionId: "bundle-session",
+        handoffId: retriedBundle.handoffId,
+        state: "confirmed",
+      },
     } as never);
     assert.deepEqual(confirmed, {
       ok: true,
       protocolVersion: PREMIND_PROTOCOL_VERSION,
-      result: { acknowledged: 2 },
+      result: { acknowledged: 3 },
     });
     assert.deepEqual(
-      batchIds.map((batchId) =>
+      allBatchIds.map((batchId) =>
         store.getReminderBatchRecord(batchId, "bundle-session"),
       ),
-      [null, null],
+      [null, null, null],
     );
     store.close();
   });

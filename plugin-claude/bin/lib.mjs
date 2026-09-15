@@ -1,4 +1,6 @@
 import net from "node:net";
+import { createHash, randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -8,6 +10,65 @@ const socketPath =
 const protocolVersion = 1;
 const firstReminderPrefix =
   "[premind] Claude Code reminders arrive after a turn completes; Premind cannot wake an otherwise inactive session in v0.2.\n\n";
+
+const isUnsupportedOperation = (error) =>
+  error instanceof Error && error.message.startsWith("BAD_REQUEST:");
+
+export const createClaudeHandoffStore = (environment = process.env) => {
+  const directory =
+    environment.PREMIND_CLAUDE_HANDOFF_DIR ??
+    path.join(os.tmpdir(), "premind-claude-handoffs");
+  const fileFor = (sessionId) =>
+    path.join(
+      directory,
+      `${createHash("sha256").update(sessionId).digest("hex")}.json`,
+    );
+  const read = async (sessionId) => {
+    try {
+      const parsed = JSON.parse(await fs.readFile(fileFor(sessionId), "utf8"));
+      if (!Array.isArray(parsed)) return [];
+      return parsed.filter(
+        (entry) =>
+          entry &&
+          typeof entry.handoffId === "string" &&
+          (entry.mode === "bundle" || entry.mode === "legacy"),
+      );
+    } catch (error) {
+      if (error?.code === "ENOENT") return [];
+      throw error;
+    }
+  };
+  const write = async (sessionId, entries) => {
+    await fs.mkdir(directory, { recursive: true });
+    const target = fileFor(sessionId);
+    if (entries.length === 0) {
+      await fs.rm(target, { force: true });
+      return;
+    }
+    const temporary = `${target}.${process.pid}.tmp`;
+    await fs.writeFile(temporary, JSON.stringify(entries), { mode: 0o600 });
+    await fs.rename(temporary, target);
+  };
+  return {
+    async append(sessionId, entry) {
+      const entries = await read(sessionId);
+      if (!entries.some(({ handoffId }) => handoffId === entry.handoffId)) {
+        entries.push(entry);
+        await write(sessionId, entries);
+      }
+    },
+    async peek(sessionId) {
+      return (await read(sessionId))[0];
+    },
+    async remove(sessionId, handoffId) {
+      const entries = await read(sessionId);
+      await write(
+        sessionId,
+        entries.filter((entry) => entry.handoffId !== handoffId),
+      );
+    },
+  };
+};
 
 export const readHookEvent = async (input = process.stdin) => {
   let body = "";
@@ -127,6 +188,7 @@ export const handleHook = async (
   event,
   ipc = request,
   environment = process.env,
+  handoffs = createClaudeHandoffStore(environment),
 ) => {
   const sessionId = getBoundClaudeSessionId(event, environment);
   if (!sessionId) return undefined;
@@ -139,14 +201,50 @@ export const handleHook = async (
   if (eventName === "Stop") {
     await ipc("touchClaudeSession", { sessionId, busyState: "idle" });
     if (event?.stop_hook_active) {
-      await ipc("ackReminderBundle", { sessionId, state: "confirmed" });
+      const handoff = await handoffs.peek(sessionId);
+      if (handoff?.mode === "bundle") {
+        await ipc("ackReminderBundle", {
+          sessionId,
+          handoffId: handoff.handoffId,
+          state: "confirmed",
+        });
+        await handoffs.remove(sessionId, handoff.handoffId);
+      } else if (handoff?.mode === "legacy") {
+        await ipc("confirmClaudeHandoff", { sessionId });
+        await handoffs.remove(sessionId, handoff.handoffId);
+      } else {
+        // Complete a handoff created by a pre-token hook during a live upgrade.
+        await ipc("confirmClaudeHandoff", { sessionId });
+      }
       return undefined;
     }
-    const claimed = await ipc("claimReminderBundle", { sessionId });
-    const reminders = claimed?.batches
-      ?.map((batch) => batch.reminderText)
+
+    let batches = [];
+    try {
+      const claimed = await ipc("claimReminderBundle", { sessionId });
+      if (claimed?.bundle) {
+        batches = claimed.bundle.batches;
+        await handoffs.append(sessionId, {
+          handoffId: claimed.bundle.handoffId,
+          mode: "bundle",
+        });
+      }
+    } catch (error) {
+      if (!isUnsupportedOperation(error)) throw error;
+      const claimed = await ipc("claimClaudeReminder", { sessionId });
+      if (claimed?.batch) {
+        batches = [claimed.batch];
+        await handoffs.append(sessionId, {
+          handoffId: randomUUID(),
+          mode: "legacy",
+        });
+      }
+    }
+
+    const reminders = batches
+      .map((batch) => batch.reminderText)
       .filter((text) => typeof text === "string" && text.length > 0);
-    if (!reminders || reminders.length === 0) return undefined;
+    if (reminders.length === 0) return undefined;
     return hookOutput(`${firstReminderPrefix}${reminders.join("\n\n")}`);
   }
 

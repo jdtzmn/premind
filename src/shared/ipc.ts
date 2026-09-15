@@ -192,7 +192,13 @@ export const getPendingReminderResponseSchema = z.object({
 });
 
 export const claimReminderBundleResponseSchema = z.object({
-  batches: z.array(reminderBatchSchema),
+  bundle: z
+    .object({
+      handoffId: z.string().uuid(),
+      batches: z.array(reminderBatchSchema).min(1),
+    })
+    .strict()
+    .nullable(),
 });
 
 export const ackReminderBundleResponseSchema = z.object({

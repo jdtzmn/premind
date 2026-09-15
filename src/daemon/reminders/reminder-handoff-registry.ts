@@ -3,7 +3,11 @@ import type {
   AckReminderPayload,
   ReminderBatch,
 } from "../../shared/schema.ts";
-import type { ReminderBatchRecord, StateStore } from "../persistence/store.ts";
+import type {
+  ReminderBatchRecord,
+  ReminderBundleClaim,
+  StateStore,
+} from "../persistence/store.ts";
 import {
   createReminderHandoffActor,
   eventForReminderState,
@@ -49,17 +53,23 @@ export class ReminderHandoffRegistry {
   }
 
 
-  claimReminderBundle(sessionId: string, now = Date.now()): ReminderBatch[] {
-    const batches = this.store.claimReminderBundle(sessionId, now);
-    for (const batch of batches) {
+  claimReminderBundle(
+    sessionId: string,
+    now = Date.now(),
+  ): ReminderBundleClaim | null {
+    const bundle = this.store.claimReminderBundle(sessionId, now);
+    for (const batch of bundle?.batches ?? []) {
       const record = this.store.getReminderBatchRecord(batch.batchId, sessionId);
       if (record) this.actorFor(record);
     }
-    return batches;
+    return bundle;
   }
 
   acknowledgeBundle(payload: AckReminderBundlePayload, now = Date.now()): number {
-    const records = this.store.listInFlightReminderBatchRecords(payload.sessionId);
+    const records = this.store.listInFlightReminderBatchRecords(
+      payload.sessionId,
+      payload.handoffId,
+    );
     try {
       const acknowledged = this.store.ackReminderBundle(payload, now);
       for (const record of records) {

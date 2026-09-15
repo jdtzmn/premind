@@ -15,12 +15,29 @@ type ClaudeHarnessArgs = Pick<StartIdleArgs, "daemonClient" | "sessionId">
 
 const createClaudeHarness = ({ daemonClient, sessionId }: ClaudeHarnessArgs) => {
 	const captured: DeliveryCapture[] = []
+	const handoffEntries: Array<{ handoffId: string; mode: "bundle" | "legacy" }> = []
+	const handoffs = {
+		async append(
+			_sessionId: string,
+			entry: { handoffId: string; mode: "bundle" | "legacy" },
+		) {
+			handoffEntries.push(entry)
+		},
+		async peek(_sessionId: string) {
+			return handoffEntries[0]
+		},
+		async remove(_sessionId: string, handoffId: string) {
+			const index = handoffEntries.findIndex((entry) => entry.handoffId === handoffId)
+			if (index >= 0) handoffEntries.splice(index, 1)
+		},
+	}
 	const ipc = async (
 		type: string,
 		payload: {
 			sessionId: string
 			busyState?: "busy" | "idle"
 			state?: "confirmed" | "failed"
+			handoffId?: string
 			error?: string
 		},
 	) => {
@@ -35,6 +52,7 @@ const createClaudeHarness = ({ daemonClient, sessionId }: ClaudeHarnessArgs) => 
 			case "ackReminderBundle":
 				return daemonClient.ackReminderBundle({
 					sessionId: payload.sessionId,
+					handoffId: payload.handoffId ?? "missing-handoff-id",
 					state: payload.state ?? "confirmed",
 					...(payload.error ? { error: payload.error } : {}),
 				})
@@ -48,6 +66,7 @@ const createClaudeHarness = ({ daemonClient, sessionId }: ClaudeHarnessArgs) => 
 			{ session_id: sessionId, ...(stopHookActive ? { stop_hook_active: true } : {}) },
 			ipc,
 			{ CLAUDE_CODE_SESSION_ID: sessionId },
+			handoffs,
 		)) as HookOutput | undefined
 		if (output) {
 			captured.push({

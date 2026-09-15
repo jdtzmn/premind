@@ -266,10 +266,19 @@ const createClient = (
 				operations.push(`claimReminderBundle:${sessionId}`);
 				const batches = pendingBatches.splice(0);
 				claimedBundleSize = batches.length;
-				return { batches };
+				return {
+					bundle:
+						batches.length > 0
+							? {
+									handoffId: "00000000-0000-4000-8000-000000000001",
+									batches,
+								}
+							: null,
+				};
 			},
 			ackReminderBundle: async (payload: {
 				sessionId: string;
+				handoffId: string;
 				state: string;
 			}) => {
 				operations.push(
@@ -599,10 +608,19 @@ describe("premind Pi extension", () => {
 			client.operations.push(`claimReminderBundle:${sessionId}`);
 			const batches = pendingBatch ? [pendingBatch] : [];
 			pendingBatch = null;
-			return { batches };
+			return {
+				bundle:
+					batches.length > 0
+						? {
+								handoffId: "00000000-0000-4000-8000-000000000001",
+								batches,
+							}
+						: null,
+			};
 		};
 		client.client.ackReminderBundle = async (payload: {
 			sessionId: string;
+			handoffId: string;
 			state: string;
 		}) => {
 			client.operations.push(
@@ -754,8 +772,12 @@ describe("premind Pi extension", () => {
 		const mock = createMockPi();
 		const client = createClient();
 		const { ctx } = createEventContext();
-		let resolvePending!: (value: { batches: ReminderBatch[] }) => void;
-		const pendingResult = new Promise<{ batches: ReminderBatch[] }>((resolve) => {
+		let resolvePending!: (value: {
+			bundle: { handoffId: string; batches: ReminderBatch[] } | null;
+		}) => void;
+		const pendingResult = new Promise<{
+			bundle: { handoffId: string; batches: ReminderBatch[] } | null;
+		}>((resolve) => {
 			resolvePending = resolve;
 		});
 		client.client.claimReminderBundle = async (sessionId: string) => {
@@ -778,7 +800,12 @@ describe("premind Pi extension", () => {
 		await startSession({}, ctx);
 		const delivery = turnEnd({}, ctx);
 		await shutdown({}, ctx);
-		resolvePending({ batches: [reminderBatch] });
+		resolvePending({
+			bundle: {
+				handoffId: "00000000-0000-4000-8000-000000000001",
+				batches: [reminderBatch],
+			},
+		});
 		await delivery;
 
 		assert.deepEqual(mock.sentMessages, []);

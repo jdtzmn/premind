@@ -190,7 +190,7 @@ export class Router {
 					return this.handleUnsubscribe(request.payload);
 				case "claimReminderBundle":
 					return this.ok({
-						batches: this.reminderHandoffs.claimReminderBundle(
+						bundle: this.reminderHandoffs.claimReminderBundle(
 							request.payload.sessionId,
 						),
 					});

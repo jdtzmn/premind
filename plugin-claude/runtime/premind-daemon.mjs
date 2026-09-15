@@ -4025,6 +4025,30 @@ var PREMIND_CLOSED_SESSION_RETENTION_MS = 24 * 60 * 60 * 1000;
 var PREMIND_DAEMON_LOG_PATH = path.join(PREMIND_STATE_DIR, "daemon.log");
 var PREMIND_DAEMON_LOG_MAX_BYTES = 10 * 1024 * 1024;
 
+// src/shared/daemon-startup.ts
+import net from "node:net";
+var DEFAULT_PROBE_TIMEOUT_MS = 250;
+var CLAUDE_REQUIRED_DAEMON_OPERATIONS = [
+  "registerClaudeSession",
+  "touchClaudeSession",
+  "claimClaudeReminder",
+  "confirmClaudeHandoff",
+  "claimReminderBundle",
+  "ackReminderBundle",
+  "suspendClaudeSession"
+];
+var isSocketReachable = (socketPath = PREMIND_SOCKET_PATH, timeoutMs = DEFAULT_PROBE_TIMEOUT_MS) => new Promise((resolve) => {
+  const connection = net.createConnection(socketPath);
+  const done = (reachable) => {
+    clearTimeout(timer);
+    connection.destroy();
+    resolve(reachable);
+  };
+  const timer = setTimeout(() => done(false), timeoutMs);
+  connection.once("connect", () => done(true));
+  connection.once("error", () => done(false));
+});
+
 // src/daemon/logging/logger.ts
 import fs from "node:fs";
 var logStream = null;
@@ -8169,6 +8193,7 @@ var ackReminderPayloadSchema = exports_external.object({
 }).strict();
 var ackReminderBundlePayloadSchema = exports_external.object({
   sessionId: exports_external.string().min(1),
+  handoffId: exports_external.string().uuid(),
   state: exports_external.enum(["confirmed", "failed"]),
   error: exports_external.string().min(1).optional()
 }).strict();
@@ -8379,7 +8404,10 @@ var getPendingReminderResponseSchema = exports_external.object({
   batch: reminderBatchSchema.nullable()
 });
 var claimReminderBundleResponseSchema = exports_external.object({
-  batches: exports_external.array(reminderBatchSchema)
+  bundle: exports_external.object({
+    handoffId: exports_external.string().uuid(),
+    batches: exports_external.array(reminderBatchSchema).min(1)
+  }).strict().nullable()
 });
 var ackReminderBundleResponseSchema = exports_external.object({
   acknowledged: exports_external.number().int().nonnegative()
@@ -8410,30 +8438,6 @@ var subscriptionResponseSchema = exports_external.object({
 var activateWorktreeResponseSchema = exports_external.object({ binding: worktreeBindingResponseSchema, watching: exports_external.boolean() }).strict();
 var subscribeResponseSchema = exports_external.object({ subscription: subscriptionResponseSchema }).strict();
 var unsubscribeResponseSchema = exports_external.object({ unsubscribed: exports_external.boolean(), automaticOptOutRecorded: exports_external.boolean() }).strict();
-
-// src/shared/daemon-startup.ts
-import net from "node:net";
-var DEFAULT_PROBE_TIMEOUT_MS = 250;
-var CLAUDE_REQUIRED_DAEMON_OPERATIONS = [
-  "registerClaudeSession",
-  "touchClaudeSession",
-  "claimClaudeReminder",
-  "confirmClaudeHandoff",
-  "claimReminderBundle",
-  "ackReminderBundle",
-  "suspendClaudeSession"
-];
-var isSocketReachable = (socketPath = PREMIND_SOCKET_PATH, timeoutMs = DEFAULT_PROBE_TIMEOUT_MS) => new Promise((resolve) => {
-  const connection = net.createConnection(socketPath);
-  const done = (reachable) => {
-    clearTimeout(timer);
-    connection.destroy();
-    resolve(reachable);
-  };
-  const timer = setTimeout(() => done(false), timeoutMs);
-  connection.once("connect", () => done(true));
-  connection.once("error", () => done(false));
-});
 
 // node_modules/xstate/dist/xstate.development.cjs.mjs
 var import_xstate_development_cjs = __toESM(require_xstate_development_cjs(), 1);
@@ -8519,16 +8523,16 @@ class ReminderHandoffRegistry {
     return this.store.getPendingReminder(sessionId);
   }
   claimReminderBundle(sessionId, now = Date.now()) {
-    const batches = this.store.claimReminderBundle(sessionId, now);
-    for (const batch of batches) {
+    const bundle = this.store.claimReminderBundle(sessionId, now);
+    for (const batch of bundle?.batches ?? []) {
       const record = this.store.getReminderBatchRecord(batch.batchId, sessionId);
       if (record)
         this.actorFor(record);
     }
-    return batches;
+    return bundle;
   }
   acknowledgeBundle(payload, now = Date.now()) {
-    const records = this.store.listInFlightReminderBatchRecords(payload.sessionId);
+    const records = this.store.listInFlightReminderBatchRecords(payload.sessionId, payload.handoffId);
     try {
       const acknowledged = this.store.ackReminderBundle(payload, now);
       for (const record of records) {
@@ -9186,7 +9190,7 @@ class Router {
           return this.handleUnsubscribe(request.payload);
         case "claimReminderBundle":
           return this.ok({
-            batches: this.reminderHandoffs.claimReminderBundle(request.payload.sessionId)
+            bundle: this.reminderHandoffs.claimReminderBundle(request.payload.sessionId)
           });
         case "ackReminderBundle":
           return this.ok({
@@ -10559,38 +10563,47 @@ class StateStore {
     return this.transaction(() => {
       this.expireStaleHandoffs(undefined, now);
       if (this.listInFlightReminderBatchRecords(sessionId).length > 0)
-        return [];
-      const claim = (batch) => {
-        if (!batch)
-          return null;
-        const record = this.getReminderBatchRecord(batch.batchId, sessionId);
-        if (!record)
-          return null;
-        if (record.state === "failed" && !this.transitionReminderBatchState(batch.batchId, sessionId, "failed", "built", now))
-          throw new Error(`Failed to retry reminder batch ${batch.batchId}`);
-        if (!this.transitionReminderBatchState(batch.batchId, sessionId, "built", "handed_off", now))
-          throw new Error(`Failed to claim reminder batch ${batch.batchId}`);
-        return batch;
-      };
+        return null;
+      const batches = this.listPendingLegacyReminderBatchRecords(sessionId).map((record) => this.toReminderBatch(record));
       const subscriptions = this.listSessionSubscriptions(sessionId, "active");
-      if (subscriptions.length === 0) {
-        const batch = this.getPendingReminder(sessionId) ?? this.buildReminderBatch(sessionId, now);
-        const claimed2 = claim(batch);
-        return claimed2 ? [claimed2] : [];
-      }
-      const claimed = [];
       for (const subscription of subscriptions) {
         const batch = this.getPendingReminderForSubscription(subscription.subscriptionId) ?? this.buildReminderBatchForSubscription(subscription.subscriptionId, now);
-        const next = claim(batch);
-        if (next)
-          claimed.push(next);
+        if (batch)
+          batches.push(batch);
       }
-      return claimed;
+      if (subscriptions.length === 0 && batches.length === 0) {
+        const batch = this.buildReminderBatch(sessionId, now);
+        if (batch)
+          batches.push(batch);
+      }
+      if (batches.length === 0)
+        return null;
+      const handoffId = randomUUID();
+      const handoffSize = batches.length;
+      for (const batch of batches) {
+        const record = this.getReminderBatchRecord(batch.batchId, sessionId);
+        if (!record)
+          throw new Error(`Missing reminder batch ${batch.batchId}`);
+        if (record.state === "failed" && !this.transitionReminderBatchState(batch.batchId, sessionId, "failed", "built", now))
+          throw new Error(`Failed to retry reminder batch ${batch.batchId}`);
+        const result = this.db.prepare(`UPDATE reminder_batches
+						 SET state = 'handed_off', handoff_id = :handoffId,
+						     handoff_size = :handoffSize, updated_at = :now
+						 WHERE batch_id = :batchId AND session_id = :sessionId AND state = 'built'`).run({ handoffId, handoffSize, now, batchId: batch.batchId, sessionId });
+        if (result.changes !== 1)
+          throw new Error(`Failed to claim reminder batch ${batch.batchId}`);
+      }
+      return { handoffId, batches };
     });
   }
   ackReminderBundle(payload, now = Date.now()) {
     return this.transaction(() => {
-      const records = this.listInFlightReminderBatchRecords(payload.sessionId);
+      const records = this.listInFlightReminderBatchRecords(payload.sessionId, payload.handoffId);
+      if (records.length === 0)
+        return 0;
+      const expectedSize = records[0].handoffSize;
+      if (expectedSize !== records.length || records.some((record) => record.handoffId !== payload.handoffId || record.handoffSize !== expectedSize))
+        throw new Error(`Incomplete reminder handoff ${payload.handoffId}`);
       for (const record of records) {
         const acknowledged = this.ackReminder({
           batchId: record.batchId,
@@ -10600,6 +10613,10 @@ class StateStore {
         }, now);
         if (!acknowledged)
           throw new Error(`Failed to acknowledge reminder batch ${record.batchId}`);
+      }
+      if (payload.state === "failed") {
+        this.db.prepare(`UPDATE reminder_batches SET handoff_id = NULL, handoff_size = NULL
+						 WHERE session_id = :sessionId AND handoff_id = :handoffId`).run({ sessionId: payload.sessionId, handoffId: payload.handoffId });
       }
       return records.length;
     });
@@ -10660,11 +10677,11 @@ class StateStore {
   }
   getReminderBatchRecord(batchId, sessionId) {
     const row = sessionId ? this.db.prepare(`SELECT reminder_batches.batch_id, reminder_batches.session_id, reminder_batches.subscription_id,
-						        reminder_batches.reminder_text, reminder_batches.events_json, reminder_batches.state, reminder_batches.max_event_seq,
+						        reminder_batches.reminder_text, reminder_batches.events_json, reminder_batches.state, reminder_batches.max_event_seq, reminder_batches.handoff_id, reminder_batches.handoff_size,
 						        session_subscriptions.repo, session_subscriptions.pr_number, session_subscriptions.source
 						 FROM reminder_batches LEFT JOIN session_subscriptions USING (subscription_id)
 						 WHERE batch_id = :batchId AND reminder_batches.session_id = :sessionId`).get({ batchId, sessionId }) : this.db.prepare(`SELECT reminder_batches.batch_id, reminder_batches.session_id, reminder_batches.subscription_id,
-						        reminder_batches.reminder_text, reminder_batches.events_json, reminder_batches.state, reminder_batches.max_event_seq,
+						        reminder_batches.reminder_text, reminder_batches.events_json, reminder_batches.state, reminder_batches.max_event_seq, reminder_batches.handoff_id, reminder_batches.handoff_size,
 						        session_subscriptions.repo, session_subscriptions.pr_number, session_subscriptions.source
 						 FROM reminder_batches LEFT JOIN session_subscriptions USING (subscription_id)
 						 WHERE batch_id = :batchId`).get({ batchId });
@@ -10681,14 +10698,28 @@ class StateStore {
       return record ? [record] : [];
     });
   }
-  listInFlightReminderBatchRecords(sessionId) {
+  listInFlightReminderBatchRecords(sessionId, handoffId) {
     const rows = this.db.prepare(`SELECT reminder_batches.batch_id, reminder_batches.session_id, reminder_batches.subscription_id,
-				        reminder_batches.reminder_text, reminder_batches.events_json, reminder_batches.state, reminder_batches.max_event_seq,
+				        reminder_batches.reminder_text, reminder_batches.events_json, reminder_batches.state,
+				        reminder_batches.max_event_seq, reminder_batches.handoff_id, reminder_batches.handoff_size,
 				        session_subscriptions.repo, session_subscriptions.pr_number, session_subscriptions.source
 				 FROM reminder_batches LEFT JOIN session_subscriptions USING (subscription_id)
 				 WHERE reminder_batches.session_id = :sessionId
 				   AND reminder_batches.state = 'handed_off'
-				 ORDER BY reminder_batches.created_at ASC`).all({ sessionId });
+				   AND (:handoffId IS NULL OR reminder_batches.handoff_id = :handoffId)
+				 ORDER BY reminder_batches.created_at ASC`).all({ sessionId, handoffId: handoffId ?? null });
+    return rows.flatMap((row) => {
+      const record = this.toReminderBatchRecord(row);
+      return record ? [record] : [];
+    });
+  }
+  listPendingLegacyReminderBatchRecords(sessionId) {
+    const rows = this.db.prepare(`SELECT batch_id, session_id, subscription_id, reminder_text, events_json, state,
+				        max_event_seq, handoff_id, handoff_size
+				 FROM reminder_batches
+				 WHERE session_id = :sessionId AND subscription_id IS NULL
+				   AND state IN ('built', 'failed')
+				 ORDER BY created_at ASC`).all({ sessionId });
     return rows.flatMap((row) => {
       const record = this.toReminderBatchRecord(row);
       return record ? [record] : [];
@@ -10882,7 +10913,9 @@ class StateStore {
         reminderText: row.reminder_text,
         events: JSON.parse(row.events_json),
         state: row.state,
-        maxEventSeq: row.max_event_seq
+        maxEventSeq: row.max_event_seq,
+        handoffId: row.handoff_id ?? null,
+        handoffSize: row.handoff_size ?? null
       };
     } catch {
       return null;
@@ -11141,6 +11174,8 @@ class StateStore {
         events_json TEXT NOT NULL,
         state TEXT NOT NULL,
         max_event_seq INTEGER,
+        handoff_id TEXT,
+        handoff_size INTEGER,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,
         FOREIGN KEY(session_id) REFERENCES sessions(session_id) ON DELETE CASCADE,
@@ -11278,6 +11313,8 @@ class StateStore {
 					events_json TEXT NOT NULL,
 					state TEXT NOT NULL,
 					max_event_seq INTEGER,
+					handoff_id TEXT,
+					handoff_size INTEGER,
 					created_at INTEGER NOT NULL,
 					updated_at INTEGER NOT NULL,
 					FOREIGN KEY(session_id) REFERENCES sessions(session_id) ON DELETE CASCADE,
@@ -11298,6 +11335,17 @@ class StateStore {
 				ALTER TABLE reminder_batches_next RENAME TO reminder_batches;
 			`);
     }
+    const currentReminderColumns = this.db.prepare(`PRAGMA table_info(reminder_batches)`).all();
+    if (!currentReminderColumns.some((column) => column.name === "handoff_id")) {
+      this.db.exec(`ALTER TABLE reminder_batches ADD COLUMN handoff_id TEXT`);
+    }
+    if (!currentReminderColumns.some((column) => column.name === "handoff_size")) {
+      this.db.exec(`ALTER TABLE reminder_batches ADD COLUMN handoff_size INTEGER`);
+    }
+    this.db.exec(`
+			CREATE INDEX IF NOT EXISTS reminder_batches_handoff
+			ON reminder_batches(session_id, handoff_id, state);
+		`);
     const prEventColumns = this.db.prepare(`PRAGMA table_info(pr_events)`).all();
     if (prEventColumns.some((column) => column.name === "detail_file_path") && !prEventColumns.some((column) => column.name === "reference_link")) {
       this.db.exec(`ALTER TABLE pr_events RENAME COLUMN detail_file_path TO reference_link`);
@@ -13369,6 +13417,10 @@ var logger = createLogger("daemon");
 var STALENESS_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
 async function main() {
   logger.info("daemon starting", { pid: process.pid, logFile: PREMIND_DAEMON_LOG_PATH });
+  if (await isSocketReachable()) {
+    logger.info("daemon startup skipped; another process owns the socket");
+    return;
+  }
   const server = new IpcServer;
   const github = new GitHubClient;
   const discoveryWatcher = new BranchDiscoveryWatcher(server.store, github, server.worktreeBindings);

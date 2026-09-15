@@ -161,7 +161,7 @@ export const createRouterDaemonClient = (
 		},
 		claimReminderBundle: async (sessionId: string) =>
 			(await request("claimReminderBundle", { sessionId })) as {
-				batches: ReminderBatch[]
+				bundle: { handoffId: string; batches: ReminderBatch[] } | null
 			},
 		ackReminderBundle: async (payload: AckReminderBundlePayload) =>
 			(await request("ackReminderBundle", payload)) as {

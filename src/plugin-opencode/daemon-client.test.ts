@@ -64,3 +64,58 @@ describe("PremindDaemonClient.ensureSessionControl", () => {
     )
   })
 })
+
+describe("reminder bundle compatibility", () => {
+  test("falls back to one legacy batch when bundle operations are unavailable", async () => {
+    const client = new PremindDaemonClient()
+    const requests: Request[] = []
+    const batch = {
+      batchId: "batch-1",
+      sessionId: "session-1",
+      reminderText: "Reminder",
+      events: [],
+    }
+    const testClient = client as unknown as {
+      requestWithRetry: (request: Request) => Promise<unknown>
+    }
+    testClient.requestWithRetry = async (request) => {
+      requests.push(request)
+      if (request.type === "claimReminderBundle" || request.type === "ackReminderBundle") {
+        throw new Error("BAD_REQUEST: unsupported request type")
+      }
+      if (request.type === "getPendingReminder") return { batch }
+      return undefined
+    }
+
+    const claimed = await client.claimReminderBundle("session-1")
+    assert.ok(claimed.bundle)
+    assert.deepEqual(claimed.bundle.batches, [batch])
+    const acknowledged = await client.ackReminderBundle({
+      sessionId: "session-1",
+      handoffId: claimed.bundle.handoffId,
+      state: "confirmed",
+    })
+
+    assert.equal(acknowledged.acknowledged, 1)
+    assert.deepEqual(
+      requests.map(({ type }) => type),
+      [
+        "claimReminderBundle",
+        "getPendingReminder",
+        "ackReminder",
+        "ackReminderBundle",
+        "ackReminder",
+      ],
+    )
+    assert.deepEqual(requests[2]?.payload, {
+      batchId: "batch-1",
+      sessionId: "session-1",
+      state: "handed_off",
+    })
+    assert.deepEqual(requests[4]?.payload, {
+      batchId: "batch-1",
+      sessionId: "session-1",
+      state: "confirmed",
+    })
+  })
+})

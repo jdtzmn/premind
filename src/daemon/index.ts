@@ -1,4 +1,5 @@
 import { PREMIND_CLOSED_SESSION_RETENTION_MS, PREMIND_DAEMON_LOG_PATH, PREMIND_IDLE_SHUTDOWN_GRACE_MS, PREMIND_REMINDER_HANDOFF_STALE_MS, PREMIND_SESSION_STALE_MS } from "../shared/constants.ts"
+import { isSocketReachable } from "../shared/daemon-startup.ts"
 import { createLogger } from "./logging/logger.ts"
 import { IpcServer } from "./ipc/server.ts"
 import { GitHubClient } from "./github/client.ts"
@@ -16,6 +17,10 @@ const STALENESS_SWEEP_INTERVAL_MS = 5 * 60 * 1000
 
 async function main() {
   logger.info("daemon starting", { pid: process.pid, logFile: PREMIND_DAEMON_LOG_PATH })
+  if (await isSocketReachable()) {
+    logger.info("daemon startup skipped; another process owns the socket")
+    return
+  }
   const server = new IpcServer()
   const github = new GitHubClient()
   const discoveryWatcher = new BranchDiscoveryWatcher(server.store, github, server.worktreeBindings)

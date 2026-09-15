@@ -24,8 +24,7 @@ export { probeDaemon };
  * Claude hooks and the MCP server can fail open.
  */
 export const ensureDaemonRunning = async () => {
-  if (await probeDaemon(undefined, CLAUDE_REQUIRED_DAEMON_OPERATIONS))
-    return true;
+  if (await probeDaemon()) return true;
 
   let lock;
   try {
@@ -36,8 +35,7 @@ export const ensureDaemonRunning = async () => {
         CLAUDE_REQUIRED_DAEMON_OPERATIONS,
         startupTimeoutMs,
       );
-    if (await probeDaemon(undefined, CLAUDE_REQUIRED_DAEMON_OPERATIONS))
-      return true;
+    if (await probeDaemon()) return true;
     if (!fs.existsSync(runtimePath)) return false;
 
     const child = spawn(process.execPath, [runtimePath], {

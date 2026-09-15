@@ -56,7 +56,9 @@ type DaemonClientLike = {
 	}) => Promise<unknown>;
 	claimReminderBundle: (
 		sessionId: string,
-	) => Promise<{ batches: ReminderBatch[] }>;
+	) => Promise<{
+		bundle: { handoffId: string; batches: ReminderBatch[] } | null;
+	}>;
 	ackReminderBundle: (
 		payload: AckReminderBundlePayload,
 	) => Promise<{ acknowledged: number }>;
@@ -390,15 +392,19 @@ export const createPremindPiExtension = (
 			deliveryInFlight = true;
 			const client = getClient();
 			let batches: ReminderBatch[] = [];
+			let handoffId: string | null = null;
 			let handedOff = false;
 			try {
-				batches = (await client.claimReminderBundle(sessionId)).batches;
-				handedOff = batches.length > 0;
-				if (!handedOff) return { delivered: false as const };
+				const bundle = (await client.claimReminderBundle(sessionId)).bundle;
+				if (!bundle) return { delivered: false as const };
+				batches = bundle.batches;
+				handoffId = bundle.handoffId;
+				handedOff = true;
 
 				if (generation !== sessionGeneration) {
 					await client.ackReminderBundle({
 						sessionId,
+						handoffId,
 						state: "failed",
 						error: "Pi session ended before reminder delivery",
 					});
@@ -425,6 +431,7 @@ export const createPremindPiExtension = (
 				);
 				const result = await client.ackReminderBundle({
 					sessionId,
+					handoffId,
 					state: "confirmed",
 				});
 				if (result.acknowledged !== batches.length)
@@ -438,6 +445,7 @@ export const createPremindPiExtension = (
 					try {
 						await client.ackReminderBundle({
 							sessionId,
+							handoffId: handoffId!,
 							state: "failed",
 							error: error instanceof Error ? error.message : String(error),
 						});

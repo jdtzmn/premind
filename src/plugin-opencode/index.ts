@@ -31,7 +31,12 @@ type DaemonClientLike = {
   unsubscribe: (payload: import("../shared/schema.ts").UnsubscribePayload) => Promise<unknown>
   claimReminderBundle?: (
     sessionId: string,
-  ) => Promise<{ batches: import("../shared/schema.ts").ReminderBatch[] }>
+  ) => Promise<{
+    bundle: {
+      handoffId: string
+      batches: import("../shared/schema.ts").ReminderBatch[]
+    } | null
+  }>
   ackReminderBundle?: (
     payload: import("../shared/schema.ts").AckReminderBundlePayload,
   ) => Promise<{ acknowledged: number }>
@@ -395,8 +400,12 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
       typeof daemon.claimReminderBundle === "function" &&
       typeof daemon.ackReminderBundle === "function"
     let batches: import("../shared/schema.ts").ReminderBatch[]
+    let handoffId: string | undefined
     if (supportsBundles) {
-      batches = (await daemon.claimReminderBundle!(sessionID)).batches
+      const bundle = (await daemon.claimReminderBundle!(sessionID)).bundle
+      if (!bundle) return
+      batches = bundle.batches
+      handoffId = bundle.handoffId
     } else {
       const pending = await daemon.getPendingReminder(sessionID)
       batches = pending.batch ? [pending.batch] : []
@@ -434,6 +443,7 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
       if (supportsBundles) {
         const result = await daemon.ackReminderBundle!({
           sessionId: sessionID,
+          handoffId: handoffId!,
           state: "confirmed",
         })
         if (result.acknowledged !== batches.length) {
@@ -459,6 +469,7 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
       } else if (supportsBundles) {
         await daemon.ackReminderBundle!({
           sessionId: sessionID,
+          handoffId: handoffId!,
           state: "failed",
           error: error instanceof Error ? error.message : String(error),
         })

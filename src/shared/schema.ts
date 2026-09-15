@@ -177,6 +177,7 @@ export const ackReminderPayloadSchema = z
 export const ackReminderBundlePayloadSchema = z
   .object({
     sessionId: z.string().min(1),
+    handoffId: z.string().uuid(),
     state: z.enum(["confirmed", "failed"]),
     error: z.string().min(1).optional(),
   })
