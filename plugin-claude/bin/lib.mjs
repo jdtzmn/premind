@@ -31,7 +31,7 @@ export const createClaudeHandoffStore = (environment = process.env) => {
         (entry) =>
           entry &&
           typeof entry.handoffId === "string" &&
-          (entry.mode === "bundle" || entry.mode === "legacy"),
+          ["bundle", "legacy", "legacy-bundle"].includes(entry.mode),
       );
     } catch (error) {
       if (error?.code === "ENOENT") return [];
@@ -50,12 +50,8 @@ export const createClaudeHandoffStore = (environment = process.env) => {
     await fs.rename(temporary, target);
   };
   return {
-    async append(sessionId, entry) {
-      const entries = await read(sessionId);
-      if (!entries.some(({ handoffId }) => handoffId === entry.handoffId)) {
-        entries.push(entry);
-        await write(sessionId, entries);
-      }
+    async replace(sessionId, entry) {
+      await write(sessionId, [entry]);
     },
     async peek(sessionId) {
       return (await read(sessionId))[0];
@@ -66,6 +62,9 @@ export const createClaudeHandoffStore = (environment = process.env) => {
         sessionId,
         entries.filter((entry) => entry.handoffId !== handoffId),
       );
+    },
+    async clear(sessionId) {
+      await write(sessionId, []);
     },
   };
 };
@@ -195,6 +194,7 @@ export const handleHook = async (
 
   if (eventName === "SessionEnd") {
     await ipc("suspendClaudeSession", { sessionId });
+    await handoffs.clear(sessionId);
     return undefined;
   }
 
@@ -209,12 +209,20 @@ export const handleHook = async (
           state: "confirmed",
         });
         await handoffs.remove(sessionId, handoff.handoffId);
+      } else if (handoff?.mode === "legacy-bundle") {
+        await ipc("ackReminderBundle", { sessionId, state: "confirmed" });
+        await handoffs.remove(sessionId, handoff.handoffId);
       } else if (handoff?.mode === "legacy") {
         await ipc("confirmClaudeHandoff", { sessionId });
         await handoffs.remove(sessionId, handoff.handoffId);
       } else {
         // Complete a handoff created by a pre-token hook during a live upgrade.
-        await ipc("confirmClaudeHandoff", { sessionId });
+        try {
+          await ipc("ackReminderBundle", { sessionId, state: "confirmed" });
+        } catch (error) {
+          if (!isUnsupportedOperation(error)) throw error;
+          await ipc("confirmClaudeHandoff", { sessionId });
+        }
       }
       return undefined;
     }
@@ -224,9 +232,15 @@ export const handleHook = async (
       const claimed = await ipc("claimReminderBundle", { sessionId });
       if (claimed?.bundle) {
         batches = claimed.bundle.batches;
-        await handoffs.append(sessionId, {
+        await handoffs.replace(sessionId, {
           handoffId: claimed.bundle.handoffId,
           mode: "bundle",
+        });
+      } else if (Array.isArray(claimed?.batches) && claimed.batches.length > 0) {
+        batches = claimed.batches;
+        await handoffs.replace(sessionId, {
+          handoffId: randomUUID(),
+          mode: "legacy-bundle",
         });
       }
     } catch (error) {
@@ -234,7 +248,7 @@ export const handleHook = async (
       const claimed = await ipc("claimClaudeReminder", { sessionId });
       if (claimed?.batch) {
         batches = [claimed.batch];
-        await handoffs.append(sessionId, {
+        await handoffs.replace(sessionId, {
           handoffId: randomUUID(),
           mode: "legacy",
         });

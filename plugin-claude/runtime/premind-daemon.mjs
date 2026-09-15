@@ -8409,6 +8409,7 @@ var claimReminderBundleResponseSchema = exports_external.object({
     batches: exports_external.array(reminderBatchSchema).min(1)
   }).strict().nullable()
 });
+var legacyClaimReminderBundleResponseSchema = exports_external.object({ batches: exports_external.array(reminderBatchSchema) }).strict();
 var ackReminderBundleResponseSchema = exports_external.object({
   acknowledged: exports_external.number().int().nonnegative()
 });
@@ -10053,7 +10054,7 @@ class StateStore {
 					 WHERE subscription_id IN (
 					   SELECT subscription_id FROM session_subscriptions
 					   WHERE session_id = :sessionId AND repo = :repo AND pr_number = :prNumber
-					 )`).run({ sessionId, repo, prNumber });
+					 ) AND state != 'handed_off'`).run({ sessionId, repo, prNumber });
       const result = this.db.prepare(`UPDATE session_subscriptions SET state = 'unsubscribed', updated_at = :now WHERE session_id = :sessionId AND repo = :repo AND pr_number = :prNumber AND state = 'active'`).run(input);
       if (result.changes > 0)
         this.refreshWatcherCounts(now);
@@ -10066,7 +10067,7 @@ class StateStore {
 					 WHERE subscription_id IN (
 					   SELECT subscription_id FROM session_subscriptions
 					   WHERE session_id = :sessionId AND source = 'automatic'
-					 )`).run({ sessionId });
+					 ) AND state != 'handed_off'`).run({ sessionId });
       const result = this.db.prepare(`UPDATE session_subscriptions SET state = 'unsubscribed', updated_at = :now WHERE session_id = :sessionId AND source = 'automatic' AND state = 'active'`).run({ sessionId, now });
       if (result.changes > 0)
         this.refreshWatcherCounts(now);
@@ -10076,7 +10077,8 @@ class StateStore {
   rejectAutomaticPullRequest(sessionId, repo, prNumber, now = Date.now()) {
     return this.transaction(() => {
       this.db.prepare(`DELETE FROM reminder_batches
-					 WHERE session_id = :sessionId AND subscription_id IS NULL`).run({ sessionId });
+					 WHERE session_id = :sessionId AND subscription_id IS NULL
+					   AND state != 'handed_off'`).run({ sessionId });
       this.db.prepare(`UPDATE sessions
 					 SET pr_number = NULL, last_delivered_event_seq = 0, updated_at = :now
 					 WHERE session_id = :sessionId AND repo = :repo AND pr_number = :prNumber`).run({ sessionId, repo, prNumber, now });
@@ -10564,7 +10566,10 @@ class StateStore {
       this.expireStaleHandoffs(undefined, now);
       if (this.listInFlightReminderBatchRecords(sessionId).length > 0)
         return null;
-      const batches = this.listPendingLegacyReminderBatchRecords(sessionId).map((record) => this.toReminderBatch(record));
+      const batches = this.listPendingLegacyReminderBatchRecords(sessionId).flatMap((record) => {
+        const refreshed = this.refreshPendingReminder(record);
+        return refreshed ? [refreshed] : [];
+      });
       const subscriptions = this.listSessionSubscriptions(sessionId, "active");
       for (const subscription of subscriptions) {
         const batch = this.getPendingReminderForSubscription(subscription.subscriptionId) ?? this.buildReminderBatchForSubscription(subscription.subscriptionId, now);
@@ -10714,12 +10719,18 @@ class StateStore {
     });
   }
   listPendingLegacyReminderBatchRecords(sessionId) {
-    const rows = this.db.prepare(`SELECT batch_id, session_id, subscription_id, reminder_text, events_json, state,
-				        max_event_seq, handoff_id, handoff_size
+    const rows = this.db.prepare(`SELECT reminder_batches.batch_id, reminder_batches.session_id,
+				        reminder_batches.subscription_id, reminder_batches.reminder_text,
+				        reminder_batches.events_json, reminder_batches.state,
+				        reminder_batches.max_event_seq, reminder_batches.handoff_id,
+				        reminder_batches.handoff_size, sessions.repo, sessions.pr_number,
+				        NULL AS source
 				 FROM reminder_batches
-				 WHERE session_id = :sessionId AND subscription_id IS NULL
-				   AND state IN ('built', 'failed')
-				 ORDER BY created_at ASC`).all({ sessionId });
+				 LEFT JOIN sessions ON sessions.session_id = reminder_batches.session_id
+				 WHERE reminder_batches.session_id = :sessionId
+				   AND reminder_batches.subscription_id IS NULL
+				   AND reminder_batches.state IN ('built', 'failed')
+				 ORDER BY reminder_batches.created_at ASC`).all({ sessionId });
     return rows.flatMap((row) => {
       const record = this.toReminderBatchRecord(row);
       return record ? [record] : [];

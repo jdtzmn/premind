@@ -8,6 +8,7 @@ import {
   debugStatusResponseSchema,
   getPendingReminderResponseSchema,
   globalDisabledResponseSchema,
+  legacyClaimReminderBundleResponseSchema,
   registerClientResponseSchema,
   responseSchema,
   subscribeResponseSchema,
@@ -174,7 +175,18 @@ export class PremindDaemonClient {
         protocolVersion: PREMIND_PROTOCOL_VERSION,
         payload: { sessionId },
       })
-      return claimReminderBundleResponseSchema.parse(response)
+      const current = claimReminderBundleResponseSchema.safeParse(response)
+      if (current.success) return current.data
+
+      const legacy = legacyClaimReminderBundleResponseSchema.safeParse(response)
+      if (!legacy.success) return claimReminderBundleResponseSchema.parse(response)
+      if (legacy.data.batches.length === 0) return { bundle: null }
+      const handoffId = randomUUID()
+      this.legacyBundleClaims.set(sessionId, {
+        handoffId,
+        batchIds: legacy.data.batches.map(({ batchId }) => batchId),
+      })
+      return { bundle: { handoffId, batches: legacy.data.batches } }
     } catch (error) {
       if (!isUnsupportedOperation(error)) throw error
       const pending = await this.getPendingReminder(sessionId)

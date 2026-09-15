@@ -118,4 +118,45 @@ describe("reminder bundle compatibility", () => {
       state: "confirmed",
     })
   })
+
+  test("adapts the previous protocol-v1 bundle response shape", async () => {
+    const client = new PremindDaemonClient()
+    const requests: Request[] = []
+    const batches = ["batch-1", "batch-2"].map((batchId) => ({
+      batchId,
+      sessionId: "session-1",
+      reminderText: batchId,
+      events: [],
+    }))
+    const testClient = client as unknown as {
+      requestWithRetry: (request: Request) => Promise<unknown>
+    }
+    testClient.requestWithRetry = async (request) => {
+      requests.push(request)
+      if (request.type === "claimReminderBundle") return { batches }
+      if (request.type === "ackReminderBundle") {
+        throw new Error("BAD_REQUEST: legacy acknowledgement shape")
+      }
+      return undefined
+    }
+
+    const claimed = await client.claimReminderBundle("session-1")
+    assert.ok(claimed.bundle)
+    assert.deepEqual(claimed.bundle.batches, batches)
+    const acknowledged = await client.ackReminderBundle({
+      sessionId: "session-1",
+      handoffId: claimed.bundle.handoffId,
+      state: "confirmed",
+    })
+
+    assert.equal(acknowledged.acknowledged, 2)
+    assert.deepEqual(
+      requests.filter(({ type }) => type === "ackReminder").map(({ payload }) => payload),
+      batches.map(({ batchId }) => ({
+        batchId,
+        sessionId: "session-1",
+        state: "confirmed",
+      })),
+    )
+  })
 })

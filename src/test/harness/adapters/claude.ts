@@ -15,20 +15,28 @@ type ClaudeHarnessArgs = Pick<StartIdleArgs, "daemonClient" | "sessionId">
 
 const createClaudeHarness = ({ daemonClient, sessionId }: ClaudeHarnessArgs) => {
 	const captured: DeliveryCapture[] = []
-	const handoffEntries: Array<{ handoffId: string; mode: "bundle" | "legacy" }> = []
+	let handoffEntry: {
+		handoffId: string
+		mode: "bundle" | "legacy" | "legacy-bundle"
+	} | undefined
 	const handoffs = {
-		async append(
+		async replace(
 			_sessionId: string,
-			entry: { handoffId: string; mode: "bundle" | "legacy" },
+			entry: {
+				handoffId: string
+				mode: "bundle" | "legacy" | "legacy-bundle"
+			},
 		) {
-			handoffEntries.push(entry)
+			handoffEntry = entry
 		},
 		async peek(_sessionId: string) {
-			return handoffEntries[0]
+			return handoffEntry
 		},
 		async remove(_sessionId: string, handoffId: string) {
-			const index = handoffEntries.findIndex((entry) => entry.handoffId === handoffId)
-			if (index >= 0) handoffEntries.splice(index, 1)
+			if (handoffEntry?.handoffId === handoffId) handoffEntry = undefined
+		},
+		async clear(_sessionId: string) {
+			handoffEntry = undefined
 		},
 	}
 	const ipc = async (

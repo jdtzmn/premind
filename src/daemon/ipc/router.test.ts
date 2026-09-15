@@ -592,6 +592,7 @@ describe("reminder bundle IPC", () => {
       status: "active",
       busyState: "idle",
     });
+    store.recordBranchAssociation("acme/repo", "feature/bundle", 41);
     const subscriptions = [
       store.upsertSubscription({
         sessionId: "bundle-session",
@@ -637,6 +638,8 @@ describe("reminder bundle IPC", () => {
         batches: Array<{
           batchId: string;
           reminderText: string;
+          repo?: string;
+          prNumber?: number;
           subscriptionId?: string;
         }>;
       } | null;
@@ -651,7 +654,9 @@ describe("reminder bundle IPC", () => {
       batches.map(({ subscriptionId }) => subscriptionId),
       [undefined, ...subscriptions.map(({ subscriptionId }) => subscriptionId)],
     );
-    assert.equal(batches[0].reminderText, "Legacy reminder");
+    assert.match(batches[0].reminderText, /acme\/repo#41/);
+    assert.equal(batches[0].repo, "acme/repo");
+    assert.equal(batches[0].prNumber, 41);
     assert.match(batches[1].reminderText, /acme\/repo#41/);
     assert.match(batches[2].reminderText, /other\/repo#42/);
     assert.deepEqual(

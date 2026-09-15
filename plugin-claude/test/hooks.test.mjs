@@ -14,23 +14,19 @@ import {
 const createMemoryHandoffs = () => {
   const bySession = new Map();
   return {
-    async append(sessionId, entry) {
-      const entries = bySession.get(sessionId) ?? [];
-      if (!entries.some(({ handoffId }) => handoffId === entry.handoffId)) {
-        entries.push(entry);
-        bySession.set(sessionId, entries);
-      }
+    async replace(sessionId, entry) {
+      bySession.set(sessionId, entry);
     },
     async peek(sessionId) {
-      return bySession.get(sessionId)?.[0];
+      return bySession.get(sessionId);
     },
     async remove(sessionId, handoffId) {
-      bySession.set(
-        sessionId,
-        (bySession.get(sessionId) ?? []).filter(
-          (entry) => entry.handoffId !== handoffId,
-        ),
-      );
+      if (bySession.get(sessionId)?.handoffId === handoffId) {
+        bySession.delete(sessionId);
+      }
+    },
+    async clear(sessionId) {
+      bySession.delete(sessionId);
     },
   };
 };
@@ -40,7 +36,7 @@ test("Claude handoff generations persist across hook processes", async () => {
   try {
     const environment = { PREMIND_CLAUDE_HANDOFF_DIR: directory };
     const firstProcess = createClaudeHandoffStore(environment);
-    await firstProcess.append("claude-1", {
+    await firstProcess.replace("claude-1", {
       handoffId: "00000000-0000-4000-8000-000000000001",
       mode: "bundle",
     });
@@ -147,7 +143,7 @@ test("Stop atomically claims one reminder bundle and returns it without confirmi
 test("post-continuation Stop confirms only the prior handoff", async () => {
   const calls = [];
   const handoffs = createMemoryHandoffs();
-  await handoffs.append("claude-1", {
+  await handoffs.replace("claude-1", {
     handoffId: "00000000-0000-4000-8000-000000000001",
     mode: "bundle",
   });
@@ -178,14 +174,14 @@ test("post-continuation Stop confirms only the prior handoff", async () => {
   ]);
 });
 
-test("a delayed Stop acknowledges only its original handoff generation", async () => {
+test("a new claim replaces an abandoned Claude handoff generation", async () => {
   const calls = [];
   const handoffs = createMemoryHandoffs();
-  await handoffs.append("claude-1", {
+  await handoffs.replace("claude-1", {
     handoffId: "00000000-0000-4000-8000-000000000001",
     mode: "bundle",
   });
-  await handoffs.append("claude-1", {
+  await handoffs.replace("claude-1", {
     handoffId: "00000000-0000-4000-8000-000000000002",
     mode: "bundle",
   });
@@ -195,7 +191,7 @@ test("a delayed Stop acknowledges only its original handoff generation", async (
     { session_id: "claude-1", stop_hook_active: true },
     async (type, payload) => {
       calls.push({ type, payload });
-      return { acknowledged: 0 };
+      return { acknowledged: 1 };
     },
     { CLAUDE_CODE_SESSION_ID: "claude-1" },
     handoffs,
@@ -205,14 +201,11 @@ test("a delayed Stop acknowledges only its original handoff generation", async (
     type: "ackReminderBundle",
     payload: {
       sessionId: "claude-1",
-      handoffId: "00000000-0000-4000-8000-000000000001",
+      handoffId: "00000000-0000-4000-8000-000000000002",
       state: "confirmed",
     },
   });
-  assert.equal(
-    (await handoffs.peek("claude-1")).handoffId,
-    "00000000-0000-4000-8000-000000000002",
-  );
+  assert.equal(await handoffs.peek("claude-1"), undefined);
 });
 
 test("Claude falls back to legacy claim and confirmation against an older daemon", async () => {
@@ -255,6 +248,63 @@ test("Claude falls back to legacy claim and confirmation against an older daemon
       "confirmClaudeHandoff",
     ],
   );
+});
+
+test("Claude adapts the previous protocol-v1 bundle response", async () => {
+  const calls = [];
+  const handoffs = createMemoryHandoffs();
+  const ipc = async (type, payload) => {
+    calls.push({ type, payload });
+    if (type === "claimReminderBundle") {
+      return {
+        batches: [
+          { reminderText: "First legacy bundle reminder" },
+          { reminderText: "Second legacy bundle reminder" },
+        ],
+      };
+    }
+    return { acknowledged: 2 };
+  };
+
+  const output = await handleHook(
+    "Stop",
+    { session_id: "claude-1" },
+    ipc,
+    { CLAUDE_CODE_SESSION_ID: "claude-1" },
+    handoffs,
+  );
+  assert.match(output.hookSpecificOutput.additionalContext, /First legacy bundle/);
+  assert.match(output.hookSpecificOutput.additionalContext, /Second legacy bundle/);
+
+  await handleHook(
+    "Stop",
+    { session_id: "claude-1", stop_hook_active: true },
+    ipc,
+    { CLAUDE_CODE_SESSION_ID: "claude-1" },
+    handoffs,
+  );
+  assert.deepEqual(calls.at(-1), {
+    type: "ackReminderBundle",
+    payload: { sessionId: "claude-1", state: "confirmed" },
+  });
+});
+
+test("a pre-token continuation confirms the previous bundle shape", async () => {
+  const calls = [];
+  await handleHook(
+    "Stop",
+    { session_id: "claude-1", stop_hook_active: true },
+    async (type, payload) => {
+      calls.push({ type, payload });
+      return { acknowledged: 2 };
+    },
+    { CLAUDE_CODE_SESSION_ID: "claude-1" },
+    createMemoryHandoffs(),
+  );
+  assert.deepEqual(calls.at(-1), {
+    type: "ackReminderBundle",
+    payload: { sessionId: "claude-1", state: "confirmed" },
+  });
 });
 
 test("UserPromptSubmit marks the environment-bound Claude session busy", async () => {

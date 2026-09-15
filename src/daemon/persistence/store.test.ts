@@ -427,6 +427,59 @@ describe("StateStore", () => {
     store.close()
   })
 
+  test("keeps every in-flight bundle member until acknowledgement", () => {
+    const store = createStore()
+    store.registerClient("bundle-client", { pid: 1, projectRoot: "/tmp/project" })
+    store.registerSession({
+      clientId: "bundle-client",
+      sessionId: "bundle-session",
+      repo: "acme/repo",
+      branch: "feature/bundle",
+      isPrimary: true,
+      status: "active",
+      busyState: "idle",
+    })
+    const subscriptions = [
+      { prNumber: 7, source: "manual" as const },
+      { prNumber: 8, source: "manual" as const },
+      { prNumber: 9, source: "automatic" as const },
+    ].map(({ prNumber, source }) =>
+      store.upsertSubscription({
+        sessionId: "bundle-session",
+        repo: "acme/repo",
+        prNumber,
+        source,
+      }),
+    )
+    const batchIds = subscriptions.map((subscription) =>
+      store.createOrReplaceReminder(
+        "bundle-session",
+        subscription.subscriptionId,
+        `Reminder ${subscription.prNumber}`,
+        [],
+        0,
+      ),
+    )
+    const bundle = store.claimReminderBundle("bundle-session")
+    assert.ok(bundle)
+
+    assert.equal(store.unsubscribe("bundle-session", "acme/repo", 8), true)
+    assert.equal(store.deactivateAutomaticSubscriptions("bundle-session"), 1)
+    assert.equal(
+      store.ackReminderBundle({
+        sessionId: "bundle-session",
+        handoffId: bundle.handoffId,
+        state: "confirmed",
+      }),
+      3,
+    )
+    assert.deepEqual(
+      batchIds.map((batchId) => store.getReminderBatchRecord(batchId)),
+      [null, null, null],
+    )
+    store.close()
+  })
+
   test("paused sessions block delivery and resumed sessions recover", () => {
     const store = createStore()
 
