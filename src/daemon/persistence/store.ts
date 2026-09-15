@@ -831,6 +831,13 @@ export class StateStore {
 		return this.transaction(() => {
 			this.db
 				.prepare(
+					`UPDATE reminder_batches SET canceled_at = :now, updated_at = :now
+					 WHERE session_id = :sessionId AND subscription_id IS NULL
+					   AND state = 'handed_off'`,
+				)
+				.run({ sessionId, now });
+			this.db
+				.prepare(
 					`DELETE FROM reminder_batches
 					 WHERE session_id = :sessionId AND subscription_id IS NULL
 					   AND state != 'handed_off'`,
@@ -1886,6 +1893,7 @@ export class StateStore {
 						       SELECT subscription_id FROM session_subscriptions
 						       WHERE session_id = :sessionId AND state != 'active'
 						     )
+						     OR canceled_at IS NOT NULL
 						     OR (
 						       subscription_id IS NULL
 						       AND NOT EXISTS (
@@ -1969,6 +1977,8 @@ export class StateStore {
 				   ON session_subscriptions.subscription_id = reminder_batches.subscription_id
 				 WHERE reminder_batches.session_id = :sessionId
 				   AND reminder_batches.state IN ('built', 'failed')
+				   AND (reminder_batches.subscription_id IS NOT NULL
+				        OR reminder_batches.canceled_at IS NULL)
 				   AND (reminder_batches.subscription_id IS NULL OR session_subscriptions.state = 'active')
 				 ORDER BY reminder_batches.created_at ASC LIMIT 1`,
 			)
@@ -2016,6 +2026,12 @@ export class StateStore {
 				 WHERE state = 'handed_off' AND updated_at < :cutoff`,
 			)
 			.run({ now, cutoff: now - thresholdMs });
+		this.db
+			.prepare(
+				`DELETE FROM reminder_batches
+				 WHERE canceled_at IS NOT NULL AND state = 'failed'`,
+			)
+			.run();
 		return result.changes as number;
 	}
 
@@ -2101,6 +2117,7 @@ export class StateStore {
 				 LEFT JOIN sessions ON sessions.session_id = reminder_batches.session_id
 				 WHERE reminder_batches.session_id = :sessionId
 				   AND reminder_batches.subscription_id IS NULL
+				   AND reminder_batches.canceled_at IS NULL
 				   AND reminder_batches.state IN ('built', 'failed')
 				 ORDER BY reminder_batches.created_at ASC`,
 			)
@@ -2765,6 +2782,7 @@ export class StateStore {
         max_event_seq INTEGER,
         handoff_id TEXT,
         handoff_size INTEGER,
+        canceled_at INTEGER,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,
         FOREIGN KEY(session_id) REFERENCES sessions(session_id) ON DELETE CASCADE,
@@ -2943,6 +2961,7 @@ export class StateStore {
 					max_event_seq INTEGER,
 					handoff_id TEXT,
 					handoff_size INTEGER,
+					canceled_at INTEGER,
 					created_at INTEGER NOT NULL,
 					updated_at INTEGER NOT NULL,
 					FOREIGN KEY(session_id) REFERENCES sessions(session_id) ON DELETE CASCADE,
@@ -2971,6 +2990,9 @@ export class StateStore {
 		}
 		if (!currentReminderColumns.some((column) => column.name === "handoff_size")) {
 			this.db.exec(`ALTER TABLE reminder_batches ADD COLUMN handoff_size INTEGER`);
+		}
+		if (!currentReminderColumns.some((column) => column.name === "canceled_at")) {
+			this.db.exec(`ALTER TABLE reminder_batches ADD COLUMN canceled_at INTEGER`);
 		}
 		this.db.exec(`
 			CREATE INDEX IF NOT EXISTS reminder_batches_handoff

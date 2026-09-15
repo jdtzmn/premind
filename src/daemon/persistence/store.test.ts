@@ -1737,6 +1737,50 @@ describe("StateStore", () => {
     store.close()
   })
 
+  test("failed acknowledgement cannot retarget a rejected legacy handoff", () => {
+    const store = createStore()
+    store.registerClient("client-retarget", { pid: 1, projectRoot: "/tmp/project" })
+    store.registerSession({
+      clientId: "client-retarget",
+      sessionId: "session-retarget",
+      repo: "acme/repo",
+      branch: "feature/retarget",
+      isPrimary: true,
+      status: "active",
+      busyState: "idle",
+    })
+    store.recordBranchAssociation("acme/repo", "feature/retarget", 7)
+    assert.equal(store.unsubscribe("session-retarget", "acme/repo", 7), true)
+    store.insertEvents("acme/repo", 7, [
+      {
+        dedupeKey: "legacy-retarget-event",
+        kind: "review.approved",
+        priority: "high",
+        summary: "legacy PR 7 event",
+        payload: {},
+      },
+    ])
+    const batch = store.buildReminderBatch("session-retarget")
+    assert.ok(batch)
+    const bundle = store.claimReminderBundle("session-retarget")
+    assert.ok(bundle)
+
+    store.rejectAutomaticPullRequest("session-retarget", "acme/repo", 7)
+    store.recordBranchAssociation("acme/repo", "feature/retarget", 8)
+    assert.equal(
+      store.ackReminderBundle({
+        sessionId: "session-retarget",
+        handoffId: bundle.handoffId,
+        state: "failed",
+      }),
+      1,
+    )
+
+    assert.equal(store.getReminderBatchRecord(batch.batchId), null)
+    assert.equal(store.claimReminderBundle("session-retarget"), null)
+    store.close()
+  })
+
   test("scopes event deduplication to repository and pull request", () => {
     const store = createStore()
     const event = {
