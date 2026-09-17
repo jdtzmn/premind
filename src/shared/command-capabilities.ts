@@ -159,3 +159,47 @@ export const expectedCapabilitySurface = (
 	Object.values(commandCapabilities)
 		.flatMap((capability) => capability.harnesses[harness][surface])
 		.sort();
+
+const formatSurface = (surface: HarnessCapabilitySurface): string => {
+	const commands = surface.commands.map((name) => `\`/${name}\``);
+	const tools = surface.tools.map((name) => `\`${name}\``);
+	return [
+		commands.length > 0 ? `commands ${commands.join(", ")}` : undefined,
+		tools.length > 0 ? `tools ${tools.join(", ")}` : undefined,
+	]
+		.filter(Boolean)
+		.join("<br>") || "—";
+};
+
+export const renderCommandCapabilityDocumentation = (): string => {
+	const lines = [
+		"# Premind Command Capabilities",
+		"",
+		"This matrix is generated from `src/shared/command-capabilities.ts`. Harness-visible names may differ only when they are explicitly declared here.",
+		"",
+		"| Capability | Classification | Scope | Pi | Claude Code | OpenCode |",
+		"| --- | --- | --- | --- | --- | --- |",
+	];
+	for (const [capabilityId, capability] of Object.entries(commandCapabilities)) {
+		lines.push(
+			`| \`${capabilityId}\` | ${capability.classification} | ${capability.scope} | ${formatSurface(capability.harnesses.pi)} | ${formatSurface(capability.harnesses.claude)} | ${formatSurface(capability.harnesses.opencode)} |`,
+		);
+	}
+	lines.push("", "## Intentional exceptions", "");
+	for (const [capabilityId, capability] of Object.entries(commandCapabilities)) {
+		for (const harness of premindHarnesses) {
+			const surface = capability.harnesses[harness];
+			if (!("exceptions" in surface)) continue;
+			for (const [kind, reason] of Object.entries(surface.exceptions ?? {})) {
+				lines.push(`- \`${capabilityId}\` / ${harness} / ${kind}: ${reason}`);
+			}
+		}
+	}
+	lines.push(
+		"- `prune` is Pi-specific administrative maintenance and is not model-callable.",
+		"- Claude status remains aggregate and redacted; Pi and OpenCode may expose session detail.",
+		"- Delivery mechanics remain harness-specific even though `/premind:deliver` is canonical.",
+		"",
+	);
+	return lines.join("\n");
+};

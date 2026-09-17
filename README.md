@@ -127,6 +127,8 @@ premind registers these slash commands automatically:
 - `/premind-disable` — disable GitHub polling globally
 - `/premind-enable` — re-enable GitHub polling globally
 
+The complete cross-harness command and tool matrix, including intentional exceptions, is documented in [Command Capabilities](docs/command-capabilities.md).
+
 Checkout and subscription lifecycle replaces per-session pause/resume. OpenCode exposes `premind_set_active_checkout`, `premind_subscribe`, and `premind_unsubscribe` model tools. The Pi package exposes the same tools plus `/premind:set-active-checkout`, `/premind:subscribe`, and `/premind:unsubscribe` commands. Set the active checkout at the start of any PR work—including when already in the startup checkout—and again after switching branches before creating or following a PR. Automatic watches are limited to PRs authored by Premind's authenticated GitHub account. Manual subscriptions may intentionally target an external `owner/repo`; their reminders include a guard that changes require explicit user instruction, and status/reminders use fully qualified `owner/repo#number` identities.
 
 `/premind-disable` is a daemon-wide kill switch: the daemon stays up and sessions keep registering, but no GitHub API calls are made until you re-enable. The flag is persisted in SQLite, so it survives daemon restarts. Queued events are preserved and delivered as normal once you re-enable.

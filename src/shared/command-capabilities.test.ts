@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { describe, test } from "node:test";
 import {
 	commandCapabilities,
 	expectedCapabilitySurface,
+	renderCommandCapabilityDocumentation,
 	premindHarnesses,
 } from "./command-capabilities.ts";
 
@@ -40,5 +42,13 @@ describe("command capability contract", () => {
 				);
 			}
 		}
+	});
+
+	test("generated capability documentation is current", () => {
+		const documentation = readFileSync(
+			new URL("../../docs/command-capabilities.md", import.meta.url),
+			"utf8",
+		);
+		assert.equal(documentation, renderCommandCapabilityDocumentation());
 	});
 });
