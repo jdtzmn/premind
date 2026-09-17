@@ -7,7 +7,6 @@ import { CLAUDE_REQUIRED_DAEMON_OPERATIONS } from "../../shared/daemon-startup.t
 import {
 	debugStatusResponseSchema,
 	type AckReminderPayload,
-	type ActivateWorktreePayload,
 	type RegisterClientPayload,
 	type SubscribePayload,
 	type UnsubscribePayload,
@@ -267,31 +266,67 @@ export class Router {
 					return this.ok({ resumed: true });
 				}
 				case "activateWorktree":
-					return await this.handleActivateWorktree(request.payload);
+					return await this.handleActivateWorktree(request);
 				case "subscribe":
-					return this.handleSubscribe(request.payload);
+					try {
+						return this.withAttachedSessionLease(request, () =>
+							this.handleSubscribe(request.payload),
+						);
+					} catch (error) {
+						return this.sessionLeaseFailure(error);
+					}
 				case "unsubscribe":
-					return this.handleUnsubscribe(request.payload);
+					try {
+						return this.withAttachedSessionLease(request, () =>
+							this.handleUnsubscribe(request.payload),
+						);
+					} catch (error) {
+						return this.sessionLeaseFailure(error);
+					}
 				case "claimReminderBundle":
-					return this.ok({
-						bundle: this.reminderHandoffs.claimReminderBundle(
-							request.payload.sessionId,
-						),
-					});
+					try {
+						return this.withAttachedSessionLease(request, () =>
+							this.ok({
+								bundle: this.reminderHandoffs.claimReminderBundle(
+									request.payload.sessionId,
+								),
+							}),
+						);
+					} catch (error) {
+						return this.sessionLeaseFailure(error);
+					}
 				case "ackReminderBundle":
-					return this.ok({
-						acknowledged: this.reminderHandoffs.acknowledgeBundle(
-							request.payload,
-						),
-					});
+					try {
+						return this.withAttachedSessionLease(request, () =>
+							this.ok({
+								acknowledged: this.reminderHandoffs.acknowledgeBundle(
+									request.payload,
+								),
+							}),
+						);
+					} catch (error) {
+						return this.sessionLeaseFailure(error);
+					}
 				case "getPendingReminder":
-					return this.ok({
-						batch: this.reminderHandoffs.getPendingReminder(
-							request.payload.sessionId,
-						),
-					});
+					try {
+						return this.withAttachedSessionLease(request, () =>
+							this.ok({
+								batch: this.reminderHandoffs.getPendingReminder(
+									request.payload.sessionId,
+								),
+							}),
+						);
+					} catch (error) {
+						return this.sessionLeaseFailure(error);
+					}
 				case "ackReminder":
-					return this.handleAckReminder(request.payload);
+					try {
+						return this.withAttachedSessionLease(request, () =>
+							this.handleAckReminder(request.payload),
+						);
+					} catch (error) {
+						return this.sessionLeaseFailure(error);
+					}
 				case "setGlobalDisabled":
 					this.store.setGloballyDisabled(request.payload.disabled);
 					return this.ok({ disabled: request.payload.disabled });
@@ -338,8 +373,9 @@ export class Router {
 	}
 
 	private async handleActivateWorktree(
-		payload: ActivateWorktreePayload,
+		request: RoutedPremindRequest & { type: "activateWorktree" },
 	): Promise<PremindResponse> {
+		const payload = request.payload;
 		if (!this.store.getSession(payload.sessionId)) {
 			return this.fail(
 				"SESSION_NOT_FOUND",
@@ -347,18 +383,26 @@ export class Router {
 			);
 		}
 
+		let worktree: ActiveWorktree;
 		try {
-			const binding = await this.worktreeBindings.activateWorktree(
-				payload.sessionId,
-				payload.path,
-				this.resolveWorktree,
-			);
-			return this.ok({ binding, watching: binding.branch !== null });
+			worktree = await this.resolveWorktree(payload.path);
 		} catch (error) {
 			return this.fail(
 				"WORKTREE_RESOLUTION_FAILED",
 				error instanceof Error ? error.message : "Unable to resolve Git worktree",
 			);
+		}
+		try {
+			const binding = this.withAttachedSessionLease(request, () =>
+				this.worktreeBindings.activateResolvedWorktree(
+					payload.sessionId,
+					payload.path,
+					worktree,
+				),
+			);
+			return this.ok({ binding, watching: binding.branch !== null });
+		} catch (error) {
+			return this.sessionLeaseFailure(error);
 		}
 	}
 

@@ -873,4 +873,42 @@ describe("session lease IPC", () => {
     assert.equal(store.validateSessionLease(movedLease), false);
     store.close();
   });
+
+  test("fences worktree persistence when ownership moves during resolution", async () => {
+    const store = createStore();
+    registerSession(store);
+    let signalResolutionStarted!: () => void;
+    const resolutionStarted = new Promise<void>((resolve) => { signalResolutionStarted = resolve });
+    let releaseResolution!: () => void;
+    const resolutionBarrier = new Promise<void>((resolve) => { releaseResolution = resolve });
+    const router = new Router(store, async () => {
+      signalResolutionStarted();
+      await resolutionBarrier;
+      return worktree;
+    });
+    const lease = store.claimSessionLease({
+      sessionId: "session-1",
+      ownerInstanceId: "daemon-a",
+      clientIncarnationNonce: "client-a-1",
+    });
+    const activation = router.handle({
+      type: "activateWorktree",
+      protocolVersion: PREMIND_PROTOCOL_VERSION,
+      sessionLease: lease,
+      payload: { sessionId: "session-1", path: worktree.root },
+    } as never);
+
+    await resolutionStarted;
+    store.transferSessionLease(lease, {
+      ownerInstanceId: "daemon-b",
+      clientIncarnationNonce: "client-b-1",
+    });
+    releaseResolution();
+
+    const response = await activation;
+    assert.equal(response.ok, false);
+    if (!response.ok) assert.equal(response.error.code, "SESSION_MOVED");
+    assert.equal(store.getWorktreeBinding("session-1"), null);
+    store.close();
+  });
 });
