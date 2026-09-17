@@ -167,6 +167,11 @@ export const requestSchema = z.discriminatedUnion("type", [
   }),
 ]);
 
+export const legacyRequestSchema = requestSchema.refine(
+  (request) => request.type !== "deleteSession",
+  { message: "Operation is not available in frozen protocol v1" },
+);
+
 export const successResponseSchema = z.object({
   ok: z.literal(true),
   protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION),

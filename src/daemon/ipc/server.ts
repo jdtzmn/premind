@@ -2,7 +2,7 @@ import net from "node:net";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { createLogger } from "../logging/logger.ts";
-import { requestSchema } from "../../shared/ipc.ts";
+import { legacyRequestSchema } from "../../shared/ipc.ts";
 import type { PremindResponse } from "../../shared/ipc.ts";
 import { PREMIND_SOCKET_PATH } from "../../shared/constants.ts";
 import {
@@ -157,7 +157,7 @@ export class IpcServer {
 				const request = parseProtocolV2RequestForRouter(value);
 				return toProtocolV2Response(await this.router.handle(request), request);
 			}
-			const request = requestSchema.parse(value);
+			const request = legacyRequestSchema.parse(value);
 			return await this.router.handle(request);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : "Invalid request";

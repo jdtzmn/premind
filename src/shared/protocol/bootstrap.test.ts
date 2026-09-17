@@ -15,6 +15,7 @@ import {
   protocolV2ErrorResponseSchema,
   protocolV2SuccessResponseSchema,
 } from "./v2.ts";
+import { legacyRequestSchema, requestSchema } from "../ipc.ts";
 
 const readFixture = (path: string): unknown =>
   JSON.parse(
@@ -118,4 +119,14 @@ describe("normal protocol v2 base envelopes", () => {
       }),
     );
   });
+
+  test("keeps explicit deletion out of the frozen protocol-v1 allowlist", () => {
+    const request = {
+      type: "deleteSession",
+      protocolVersion: 1,
+      payload: { sessionId: "session-1" },
+    }
+    assert.equal(requestSchema.safeParse(request).success, true)
+    assert.equal(legacyRequestSchema.safeParse(request).success, false)
+  })
 });

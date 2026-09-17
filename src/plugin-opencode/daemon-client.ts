@@ -151,11 +151,16 @@ export class PremindDaemonClient {
   }
 
   async deleteSession(sessionId: string) {
-    await this.requestWithRetry({
-      type: "deleteSession",
-      protocolVersion: PREMIND_PROTOCOL_VERSION,
-      payload: { sessionId },
-    })
+    try {
+      await this.requestWithRetry({
+        type: "deleteSession",
+        protocolVersion: PREMIND_PROTOCOL_VERSION,
+        payload: { sessionId },
+      })
+    } catch (error) {
+      if (!isV1UnsupportedOperation(error)) throw error
+      await this.unregisterSession(sessionId)
+    }
   }
 
   async pauseSession(sessionId: string) {
