@@ -299,6 +299,7 @@ export class Router {
 			repo,
 			prNumber: payload.prNumber,
 			source: "manual",
+			writePolicy: payload.writePolicy,
 		});
 		return this.ok({
 			subscription: {
@@ -307,6 +308,7 @@ export class Router {
 				repo: stored.repo,
 				prNumber: stored.prNumber,
 				source: stored.source,
+				writePolicy: stored.writePolicy,
 				state: stored.state,
 				lastDeliveredEventSeq: stored.lastDeliveredEventSeq,
 				updatedAt: stored.updatedAt,

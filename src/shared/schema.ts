@@ -125,6 +125,12 @@ export const activateWorktreePayloadSchema = z
   })
   .strict();
 
+export const subscriptionWritePolicySchema = z.enum([
+  "owned-active",
+  "user-authorized",
+  "observe-only",
+]);
+
 const subscriptionControlPayloadSchema = z
   .object({
     sessionId: z.string().min(1),
@@ -133,7 +139,9 @@ const subscriptionControlPayloadSchema = z
   })
   .strict();
 
-export const subscribePayloadSchema = subscriptionControlPayloadSchema;
+export const subscribePayloadSchema = subscriptionControlPayloadSchema.extend({
+  writePolicy: subscriptionWritePolicySchema.optional(),
+}).strict();
 export const unsubscribePayloadSchema = subscriptionControlPayloadSchema;
 
 export const reminderEventSchema = z
@@ -154,6 +162,7 @@ export const reminderBatchSchema = z
     prNumber: z.number().int().positive().optional(),
     subscriptionId: z.string().min(1).optional(),
     source: z.enum(["automatic", "manual"]).optional(),
+    writePolicy: subscriptionWritePolicySchema.optional(),
     reminderText: z.string().min(1),
     events: z.array(reminderEventSchema),
   })
@@ -246,6 +255,7 @@ export const debugStatusResponseSchema = z
                   repo: z.string().min(1),
                   prNumber: z.number().int().positive(),
                   source: z.enum(["automatic", "manual"]),
+                  writePolicy: subscriptionWritePolicySchema,
                   state: z.enum(["active", "unsubscribed"]),
                   pendingEventCount: z.number().int().nonnegative(),
                 })
@@ -261,6 +271,7 @@ export const debugStatusResponseSchema = z
 export type ClientMetadata = z.infer<typeof clientMetadataSchema>;
 export type PremindConfig = z.infer<typeof premindConfigSchema>;
 export type SessionHost = z.infer<typeof sessionHostSchema>;
+export type SubscriptionWritePolicy = z.infer<typeof subscriptionWritePolicySchema>;
 export type RegisterClientPayload = z.infer<typeof registerClientPayloadSchema>;
 export type HeartbeatClientPayload = z.infer<
   typeof heartbeatClientPayloadSchema

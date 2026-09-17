@@ -2293,4 +2293,33 @@ describe("migrate: session hosts", () => {
     assert.equal(store.getReminderBatchRecord(batchId, "legacy-claude")?.reminderText, "keep me")
     store.close()
   })
+
+describe("subscription write policy", () => {
+  test("defaults by provenance and preserves an explicit manual policy", () => {
+    const store = createStore()
+    store.registerClient("policy-client", { pid: 1, projectRoot: "/tmp/project" })
+    store.registerSession({
+      clientId: "policy-client", sessionId: "policy-session", repo: "acme/repo",
+      branch: "feature/policy", isPrimary: true, status: "active", busyState: "idle",
+    })
+    const automatic = store.upsertSubscription({
+      sessionId: "policy-session", repo: "acme/repo", prNumber: 7, source: "automatic",
+    })
+    assert.equal(automatic.writePolicy, "owned-active")
+    const manual = store.upsertSubscription({
+      sessionId: "policy-session", repo: "acme/repo", prNumber: 8, source: "manual",
+    })
+    assert.equal(manual.writePolicy, "observe-only")
+    const authorized = store.upsertSubscription({
+      sessionId: "policy-session", repo: "acme/repo", prNumber: 8, source: "manual", writePolicy: "user-authorized",
+    })
+    assert.equal(authorized.writePolicy, "user-authorized")
+    const rediscovered = store.upsertSubscription({
+      sessionId: "policy-session", repo: "acme/repo", prNumber: 8, source: "automatic",
+    })
+    assert.equal(rediscovered.source, "manual")
+    assert.equal(rediscovered.writePolicy, "user-authorized")
+    store.close()
+  })
+})
 })

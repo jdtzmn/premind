@@ -180,7 +180,7 @@ const sourceIds = (events: RenderedReminderEvent[]) => [...new Set(events.flatMa
 
 export function renderReminder(
   rows: ReminderSourceEvent[], snapshot: PullRequestSnapshot | null,
-  target: { repo: string; prNumber?: number; source?: "automatic" | "manual"; policy?: "actionable" | "observe-only"; worktreeMatchesTarget?: boolean },
+  target: { repo: string; prNumber?: number; source?: "automatic" | "manual"; policy?: "actionable" | "observe-only"; worktreeMatchesTarget?: boolean; writePolicy?: "owned-active" | "user-authorized" | "observe-only" },
 ) {
   const reconciled = rows.flatMap(expand).map((candidate) => reconcile(candidate, snapshot))
   const live = reconciled.filter((item) => !item.supersededHead)

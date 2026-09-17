@@ -20,6 +20,7 @@ import type {
 	ReminderBatch,
 	ReminderEvent,
 	UpdateSessionStatePayload,
+	SubscriptionWritePolicy as SharedSubscriptionWritePolicy,
 } from "../../shared/schema.ts";
 import type {
 	NormalizedPrEvent,
@@ -57,6 +58,7 @@ export type SubscriptionOwnership = "self" | "foreign" | "unknown";
 export type SubscriptionPolicy = "actionable" | "observe-only";
 export type SubscriptionState = "active" | "unsubscribed";
 
+export type SubscriptionWritePolicy = SharedSubscriptionWritePolicy;
 export type PrWatcherRecord = {
 	repo: string;
 	prNumber: number;
@@ -100,6 +102,7 @@ export type SessionSubscription = {
 	source: SubscriptionSource;
 	ownership: SubscriptionOwnership;
 	policy: SubscriptionPolicy;
+	writePolicy: SubscriptionWritePolicy;
 	state: SubscriptionState;
 	lastDeliveredEventSeq: number;
 	updatedAt: number;
@@ -118,6 +121,7 @@ type ReminderRow = {
 	repo?: string | null;
 	pr_number?: number | null;
 	source?: SubscriptionSource | null;
+	write_policy?: SubscriptionWritePolicy | null;
 };
 
 export type ReminderBatchRecord = Omit<ReminderBatch, "subscriptionId"> & {
@@ -148,6 +152,7 @@ type ReminderTarget = {
 	source?: SubscriptionSource;
 	policy?: SubscriptionPolicy;
 	worktreeMatchesTarget?: boolean;
+	writePolicy?: SubscriptionWritePolicy;
 };
 
 
@@ -579,6 +584,7 @@ export class StateStore {
 			repo: string;
 			prNumber: number;
 			source: SubscriptionSource;
+			writePolicy?: SubscriptionWritePolicy;
 		},
 		now = Date.now(),
 	): SessionSubscription {
@@ -586,20 +592,26 @@ export class StateStore {
 			if (!this.getSession(input.sessionId)) {
 				throw new Error(`Unknown session: ${input.sessionId}`);
 			}
+			const existing = this.getSubscription(input.sessionId, input.repo, input.prNumber);
+			const source = existing?.source === "manual" || input.source === "manual" ? "manual" : "automatic";
+			const writePolicy = input.writePolicy ?? (existing?.source === "manual"
+				? existing.writePolicy
+				: input.source === "manual" ? "observe-only" : existing?.writePolicy ?? "owned-active");
 			this.db
 				.prepare(
 					`
-					INSERT INTO session_subscriptions (subscription_id, session_id, repo, pr_number, source, ownership, policy, state, last_delivered_event_seq, created_at, updated_at)
-					VALUES (:subscriptionId, :sessionId, :repo, :prNumber, :source, 'unknown', 'observe-only', 'active', 0, :now, :now)
+					INSERT INTO session_subscriptions (subscription_id, session_id, repo, pr_number, source, ownership, policy, write_policy, state, last_delivered_event_seq, created_at, updated_at)
+					VALUES (:subscriptionId, :sessionId, :repo, :prNumber, :source, 'unknown', 'observe-only', :writePolicy, 'active', 0, :now, :now)
 					ON CONFLICT(session_id, repo, pr_number) DO UPDATE SET
-						source = CASE WHEN session_subscriptions.source = 'manual' OR excluded.source = 'manual' THEN 'manual' ELSE 'automatic' END,
+						source = excluded.source,
 						ownership = CASE WHEN session_subscriptions.source = 'manual' OR excluded.source = 'manual' THEN 'unknown' ELSE session_subscriptions.ownership END,
 						policy = CASE WHEN session_subscriptions.source = 'manual' OR excluded.source = 'manual' THEN 'observe-only' ELSE session_subscriptions.policy END,
+						write_policy = excluded.write_policy,
 						state = 'active',
 						updated_at = excluded.updated_at
 					`,
 				)
-				.run({ ...input, subscriptionId: randomUUID(), now });
+				.run({ ...input, source, writePolicy, subscriptionId: randomUUID(), now });
 			this.touchPrWatcher(input.repo, input.prNumber, now);
 			return this.getSubscription(input.sessionId, input.repo, input.prNumber)!;
 		});
@@ -652,6 +664,7 @@ export class StateStore {
 					source: SubscriptionSource;
 					ownership: SubscriptionOwnership;
 					policy: SubscriptionPolicy;
+					write_policy: SubscriptionWritePolicy;
 					state: SubscriptionState;
 					last_delivered_event_seq: number;
 					updated_at: number;
@@ -672,6 +685,7 @@ export class StateStore {
 					source: SubscriptionSource;
 					ownership: SubscriptionOwnership;
 					policy: SubscriptionPolicy;
+					write_policy: SubscriptionWritePolicy;
 					state: SubscriptionState;
 					last_delivered_event_seq: number;
 					updated_at: number;
@@ -688,6 +702,7 @@ export class StateStore {
 		source: SubscriptionSource;
 		ownership: SubscriptionOwnership;
 		policy: SubscriptionPolicy;
+		write_policy: SubscriptionWritePolicy;
 		state: SubscriptionState;
 		last_delivered_event_seq: number;
 		updated_at: number;
@@ -700,6 +715,7 @@ export class StateStore {
 			source: row.source,
 			ownership: row.ownership,
 			policy: row.policy,
+			writePolicy: row.write_policy,
 			state: row.state,
 			lastDeliveredEventSeq: row.last_delivered_event_seq,
 			updatedAt: row.updated_at,
@@ -727,6 +743,7 @@ export class StateStore {
 			source: SubscriptionSource;
 			ownership: SubscriptionOwnership;
 			policy: SubscriptionPolicy;
+			write_policy: SubscriptionWritePolicy;
 			state: SubscriptionState;
 			last_delivered_event_seq: number;
 			updated_at: number;
@@ -739,6 +756,7 @@ export class StateStore {
 			source: row.source,
 			ownership: row.ownership,
 			policy: row.policy,
+			writePolicy: row.write_policy,
 			state: row.state,
 			lastDeliveredEventSeq: row.last_delivered_event_seq,
 			updatedAt: row.updated_at,
@@ -768,6 +786,7 @@ export class StateStore {
 			source: SubscriptionSource;
 			ownership: SubscriptionOwnership;
 			policy: SubscriptionPolicy;
+			write_policy: SubscriptionWritePolicy;
 			state: SubscriptionState;
 			last_delivered_event_seq: number;
 			updated_at: number;
@@ -780,6 +799,7 @@ export class StateStore {
 			source: row.source,
 			ownership: row.ownership,
 			policy: row.policy,
+			writePolicy: row.write_policy,
 			state: row.state,
 			lastDeliveredEventSeq: row.last_delivered_event_seq,
 			updatedAt: row.updated_at,
@@ -818,8 +838,8 @@ export class StateStore {
 			const subscriptionId = existing?.subscriptionId ?? randomUUID();
 			this.db
 				.prepare(
-					`INSERT INTO session_subscriptions (subscription_id, session_id, repo, pr_number, source, ownership, policy, state, last_delivered_event_seq, created_at, updated_at)
-					 VALUES (:subscriptionId, :sessionId, :repo, :prNumber, 'automatic', 'self', 'actionable', 'active', :cursor, :now, :now)
+					`INSERT INTO session_subscriptions (subscription_id, session_id, repo, pr_number, source, ownership, policy, write_policy, state, last_delivered_event_seq, created_at, updated_at)
+					 VALUES (:subscriptionId, :sessionId, :repo, :prNumber, 'automatic', 'self', 'actionable', 'owned-active', 'active', :cursor, :now, :now)
 					 ON CONFLICT(session_id, repo, pr_number) DO UPDATE SET
 					   ownership = 'self',
 					   policy = 'actionable',
@@ -1188,6 +1208,7 @@ export class StateStore {
 					repo: subscription.repo,
 					prNumber: subscription.prNumber,
 					source: subscription.source,
+					writePolicy: subscription.writePolicy,
 					state: subscription.state,
 					pendingEventCount:
 						subscription.state === "active"
@@ -2030,7 +2051,7 @@ export class StateStore {
 				`SELECT reminder_batches.batch_id, reminder_batches.session_id, reminder_batches.subscription_id,
 				        reminder_batches.reminder_text, reminder_batches.events_json, reminder_batches.state,
 				        reminder_batches.max_event_seq, session_subscriptions.repo,
-				        session_subscriptions.pr_number, session_subscriptions.source
+				        session_subscriptions.pr_number, session_subscriptions.source, session_subscriptions.write_policy
 				 FROM reminder_batches
 				 LEFT JOIN session_subscriptions
 				   ON session_subscriptions.subscription_id = reminder_batches.subscription_id
@@ -2104,7 +2125,7 @@ export class StateStore {
 						.prepare(
 							`SELECT reminder_batches.batch_id, reminder_batches.session_id, reminder_batches.subscription_id,
 						        reminder_batches.reminder_text, reminder_batches.events_json, reminder_batches.state, reminder_batches.max_event_seq, reminder_batches.handoff_id, reminder_batches.handoff_size,
-						        session_subscriptions.repo, session_subscriptions.pr_number, session_subscriptions.source
+						        session_subscriptions.repo, session_subscriptions.pr_number, session_subscriptions.source, session_subscriptions.write_policy
 						 FROM reminder_batches LEFT JOIN session_subscriptions USING (subscription_id)
 						 WHERE batch_id = :batchId AND reminder_batches.session_id = :sessionId`,
 						)
@@ -2113,7 +2134,7 @@ export class StateStore {
 						.prepare(
 							`SELECT reminder_batches.batch_id, reminder_batches.session_id, reminder_batches.subscription_id,
 						        reminder_batches.reminder_text, reminder_batches.events_json, reminder_batches.state, reminder_batches.max_event_seq, reminder_batches.handoff_id, reminder_batches.handoff_size,
-						        session_subscriptions.repo, session_subscriptions.pr_number, session_subscriptions.source
+						        session_subscriptions.repo, session_subscriptions.pr_number, session_subscriptions.source, session_subscriptions.write_policy
 						 FROM reminder_batches LEFT JOIN session_subscriptions USING (subscription_id)
 						 WHERE batch_id = :batchId`,
 						)
@@ -2127,7 +2148,7 @@ export class StateStore {
 			.prepare(
 				`SELECT reminder_batches.batch_id, reminder_batches.session_id, reminder_batches.subscription_id,
 				        reminder_batches.reminder_text, reminder_batches.events_json, reminder_batches.state, reminder_batches.max_event_seq,
-				        session_subscriptions.repo, session_subscriptions.pr_number, session_subscriptions.source
+				        session_subscriptions.repo, session_subscriptions.pr_number, session_subscriptions.source, session_subscriptions.write_policy
 				 FROM reminder_batches LEFT JOIN session_subscriptions USING (subscription_id)
 				 WHERE reminder_batches.state != 'confirmed' ORDER BY reminder_batches.created_at ASC`,
 			)
@@ -2147,7 +2168,7 @@ export class StateStore {
 				`SELECT reminder_batches.batch_id, reminder_batches.session_id, reminder_batches.subscription_id,
 				        reminder_batches.reminder_text, reminder_batches.events_json, reminder_batches.state,
 				        reminder_batches.max_event_seq, reminder_batches.handoff_id, reminder_batches.handoff_size,
-				        session_subscriptions.repo, session_subscriptions.pr_number, session_subscriptions.source
+				        session_subscriptions.repo, session_subscriptions.pr_number, session_subscriptions.source, session_subscriptions.write_policy
 				 FROM reminder_batches LEFT JOIN session_subscriptions USING (subscription_id)
 				 WHERE reminder_batches.session_id = :sessionId
 				   AND reminder_batches.state = 'handed_off'
@@ -2171,7 +2192,7 @@ export class StateStore {
 				        reminder_batches.events_json, reminder_batches.state,
 				        reminder_batches.max_event_seq, reminder_batches.handoff_id,
 				        reminder_batches.handoff_size, sessions.repo, sessions.pr_number,
-				        NULL AS source
+				        NULL AS source, NULL AS write_policy
 				 FROM reminder_batches
 				 LEFT JOIN sessions ON sessions.session_id = reminder_batches.session_id
 				 WHERE reminder_batches.session_id = :sessionId
@@ -2195,7 +2216,7 @@ export class StateStore {
 				`SELECT reminder_batches.batch_id, reminder_batches.session_id, reminder_batches.subscription_id,
 				        reminder_batches.reminder_text, reminder_batches.events_json, reminder_batches.state,
 				        reminder_batches.max_event_seq, session_subscriptions.repo,
-				        session_subscriptions.pr_number, session_subscriptions.source
+				        session_subscriptions.pr_number, session_subscriptions.source, session_subscriptions.write_policy
 				 FROM reminder_batches
 				 INNER JOIN session_subscriptions
 				   ON session_subscriptions.subscription_id = reminder_batches.subscription_id
@@ -2261,6 +2282,7 @@ export class StateStore {
 			source: subscription?.source ?? record.source,
 			policy,
 			worktreeMatchesTarget,
+			writePolicy: subscription?.writePolicy ?? record.writePolicy,
 		};
 	}
 
@@ -2443,6 +2465,7 @@ export class StateStore {
 			...(record.prNumber ? { prNumber: record.prNumber } : {}),
 			...(record.subscriptionId ? { subscriptionId: record.subscriptionId } : {}),
 			...(record.source ? { source: record.source } : {}),
+			...(record.writePolicy ? { writePolicy: record.writePolicy } : {}),
 			reminderText: record.reminderText,
 			events: record.events,
 		};
@@ -2460,6 +2483,7 @@ export class StateStore {
 				repo: row.repo ?? undefined,
 				prNumber: row.pr_number ?? undefined,
 				source: row.source ?? undefined,
+				writePolicy: row.write_policy ?? undefined,
 				reminderText: row.reminder_text,
 				events: JSON.parse(row.events_json) as ReminderEvent[],
 				state: row.state,
@@ -2657,6 +2681,7 @@ export class StateStore {
 				source: subscription?.source,
 				policy: subscription?.policy,
 				worktreeMatchesTarget,
+				writePolicy: subscription?.writePolicy,
 			},
 		);
 		const batchId = this.createOrReplaceReminder(
@@ -2676,6 +2701,7 @@ export class StateStore {
 				? {
 						subscriptionId: subscription.subscriptionId,
 						source: subscription.source,
+						writePolicy: subscription.writePolicy,
 					}
 				: {}),
 			reminderText,
@@ -2837,6 +2863,7 @@ export class StateStore {
         source TEXT NOT NULL CHECK(source IN ('automatic', 'manual')),
         ownership TEXT NOT NULL DEFAULT 'unknown' CHECK(ownership IN ('self', 'foreign', 'unknown')),
         policy TEXT NOT NULL DEFAULT 'observe-only' CHECK(policy IN ('actionable', 'observe-only')),
+        write_policy TEXT NOT NULL CHECK(write_policy IN ('owned-active', 'user-authorized', 'observe-only')),
         state TEXT NOT NULL CHECK(state IN ('active', 'unsubscribed')),
         last_delivered_event_seq INTEGER NOT NULL DEFAULT 0,
         created_at INTEGER NOT NULL,
@@ -2986,12 +3013,19 @@ export class StateStore {
 				"ALTER TABLE session_subscriptions ADD COLUMN policy TEXT NOT NULL DEFAULT 'observe-only'",
 			);
 		}
-
+		if (!subscriptionColumns.some((column) => column.name === "write_policy")) {
+			this.db.exec(
+				"ALTER TABLE session_subscriptions ADD COLUMN write_policy TEXT NOT NULL DEFAULT 'observe-only'",
+			);
+			this.db.exec(
+				"UPDATE session_subscriptions SET write_policy = 'owned-active' WHERE source = 'automatic'",
+			);
+		}
 		this.db
 			.prepare(
-				`INSERT OR IGNORE INTO session_subscriptions (subscription_id, session_id, repo, pr_number, source, state, last_delivered_event_seq, created_at, updated_at)
+				`INSERT OR IGNORE INTO session_subscriptions (subscription_id, session_id, repo, pr_number, source, ownership, policy, write_policy, state, last_delivered_event_seq, created_at, updated_at)
 				 SELECT 'legacy:' || session_id || ':' || repo || ':' || pr_number,
-				        session_id, repo, pr_number, 'automatic', 'active', last_delivered_event_seq, created_at, updated_at
+				        session_id, repo, pr_number, 'automatic', 'unknown', 'observe-only', 'owned-active', 'active', last_delivered_event_seq, created_at, updated_at
 				 FROM sessions WHERE pr_number IS NOT NULL`,
 			)
 			.run();

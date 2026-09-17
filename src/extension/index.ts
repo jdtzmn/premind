@@ -199,7 +199,7 @@ export const renderPremindPiStatus = (
 		const subscriptions = (session.subscriptions ?? [])
 			.map(
 				(subscription) =>
-					`${subscription.repo}#${subscription.prNumber} (${subscription.source}/${subscription.state}, pending ${subscription.pendingEventCount})`,
+					`${subscription.repo}#${subscription.prNumber} (${subscription.source}/${subscription.writePolicy}/${subscription.state}, pending ${subscription.pendingEventCount})`,
 			)
 			.join(", ");
 		const subscriptionSummary = subscriptions

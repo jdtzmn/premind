@@ -53,6 +53,7 @@ export const renderPremindStatus = (status: {
       repo: string
       prNumber: number
       source: string
+      writePolicy: string
       state: string
       pendingEventCount: number
     }>
@@ -87,7 +88,7 @@ export const renderPremindStatus = (status: {
       const subscriptions = (session.subscriptions ?? [])
         .map(
           (subscription) =>
-            `${subscription.repo}#${subscription.prNumber} (${subscription.source}/${subscription.state}, pending ${subscription.pendingEventCount})`,
+            `${subscription.repo}#${subscription.prNumber} (${subscription.source}/${subscription.writePolicy}/${subscription.state}, pending ${subscription.pendingEventCount})`,
         )
         .join(", ")
       const subscriptionSummary = subscriptions ? ` | subscriptions ${subscriptions}` : ""

@@ -472,6 +472,7 @@ describe("premind Pi extension", () => {
 								repo: "other/repo",
 								prNumber: 456,
 								source: "manual",
+								writePolicy: "observe-only",
 								state: "active",
 								pendingEventCount: 4,
 							},
@@ -479,7 +480,7 @@ describe("premind Pi extension", () => {
 					},
 				],
 			}),
-			/worktree owner\/repo @ feature\/pi \(watching\) \| subscriptions other\/repo#456 \(manual\/active, pending 4\)/,
+			/worktree owner\/repo @ feature\/pi \(watching\) \| subscriptions other\/repo#456 \(manual\/observe-only\/active, pending 4\)/,
 		);
 	});
 

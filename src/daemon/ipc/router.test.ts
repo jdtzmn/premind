@@ -125,7 +125,7 @@ describe("Router worktree subscription operations", () => {
     const wireSubscription = (manualResponse.result as { subscription: Record<string, unknown> }).subscription;
     assert.deepEqual(Object.keys(wireSubscription).sort(), [
       "lastDeliveredEventSeq", "prNumber", "repo", "sessionId", "source",
-      "state", "subscriptionId", "updatedAt",
+      "state", "subscriptionId", "updatedAt", "writePolicy",
     ]);
     assert.equal(
       store.getSubscription("session-1", "acme/repo", 42)?.source,
@@ -319,6 +319,7 @@ describe("Router worktree subscription operations", () => {
         repo: "acme/repo",
         prNumber: 42,
         source: "automatic",
+        writePolicy: "owned-active",
         state: "active",
         pendingEventCount: 1,
       },
@@ -326,6 +327,7 @@ describe("Router worktree subscription operations", () => {
         repo: "other/repo",
         prNumber: 99,
         source: "manual",
+        writePolicy: "observe-only",
         state: "unsubscribed",
         pendingEventCount: 0,
       },
