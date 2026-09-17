@@ -27,12 +27,15 @@ const seed = (store: StateStore, source: "automatic" | "manual" = "manual") => {
     status: "active",
     busyState: "idle",
   })
-  const subscription = store.upsertSubscription({
-    sessionId: "session",
-    repo: "acme/repo",
-    prNumber: 13,
-    source,
+  store.upsertWorktreeBinding({
+    sessionId: "session", root: "/repo", gitDir: "/repo/.git", repo: "acme/repo",
+    branch: "feature/x", headSha: "head-old", state: "following_automatic_pr",
   })
+  const subscription = source === "automatic"
+    ? store.baselineAutomaticSubscription({ sessionId: "session", repo: "acme/repo", prNumber: 13 })
+    : store.upsertSubscription({
+      sessionId: "session", repo: "acme/repo", prNumber: 13, source,
+    })
   store.insertEvents("acme/repo", 13, [{
     dedupeKey: "comment:1",
     kind: "issue_comment.created",
