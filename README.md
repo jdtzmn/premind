@@ -121,7 +121,8 @@ Earlier versions documented a top-level `premind` key inside `opencode.jsonc`. T
 premind registers these slash commands automatically:
 
 - `/premind-status` — show current daemon state, active worktrees, subscriptions, and pending reminder counts
-- `/premind-send-now` — send one pending PR update immediately, skipping the idle countdown
+- `/premind:deliver` — deliver queued PR updates immediately at the earliest safe harness boundary
+- `/premind-send-now` — deprecated OpenCode alias for `/premind:deliver`
 - `/premind-disable` — disable GitHub polling globally
 - `/premind-enable` — re-enable GitHub polling globally
 

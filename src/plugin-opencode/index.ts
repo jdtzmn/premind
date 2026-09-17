@@ -758,17 +758,17 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
   }
 
 
-  const handleSendNowCommand = async (sessionID: string, inputRef?: { agent?: string; model?: { providerID: string; modelID: string } }) => {
+  const deliverPendingNow = async (sessionID: string) => {
     const pending = await daemon.getPendingReminder(sessionID)
-    if (!pending.batch) {
-      await injectResponse(sessionID, "premind: no pending PR updates to send", inputRef)
-      return
-    }
-    // Cancel the countdown timer and deliver immediately.
+    if (!pending.batch) return "premind: no pending PR updates to deliver"
     stopToastCountdown(sessionID)
     cancelDelivery(sessionID)
     await deliverPendingReminder(sessionID)
-    await injectResponse(sessionID, "premind: sending PR updates now", inputRef)
+    return "premind: delivering PR updates now"
+  }
+
+  const handleSendNowCommand = async (sessionID: string, inputRef?: { agent?: string; model?: { providerID: string; modelID: string } }) => {
+    await injectResponse(sessionID, await deliverPendingNow(sessionID), inputRef)
   }
 
   const handleDisableCommand = async (sessionID: string, inputRef?: { agent?: string; model?: { providerID: string; modelID: string } }) => {
@@ -789,6 +789,17 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
     )
   }
 
+  const deliverTool = tool({
+    description: "Deliver pending PR updates to the current session immediately, without waiting for the idle countdown",
+    args: {},
+    async execute(_args, ctx) {
+      const sessionId = ctx.sessionID ?? lastPrimarySessionId
+      if (!sessionId) return "premind deliver failed: no active session"
+      ownedSessions.add(sessionId)
+      return deliverPendingNow(sessionId)
+    },
+  })
+
   return {
     // Register slash commands via config mutation.
     config: async (configInput: any) => {
@@ -803,9 +814,13 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
         template: COMMAND_MARKERS.status,
         description: "Show premind daemon status, attached sessions, and pending reminders",
       }
+      configInput.command["premind:deliver"] = {
+        template: COMMAND_MARKERS.sendNow,
+        description: "Deliver pending PR updates to this session immediately",
+      }
       configInput.command["premind-send-now"] = {
         template: COMMAND_MARKERS.sendNow,
-        description: "Send pending PR updates to this session immediately without waiting for the idle countdown",
+        description: "Deprecated alias for /premind:deliver",
       }
       configInput.command["premind-disable"] = {
         template: COMMAND_MARKERS.disable,
@@ -886,21 +901,8 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
           return `premind unsubscribed from ${args.repo ?? "active worktree"}#${args.prNumber}.`
         },
       }),
-      premind_send_now: tool({
-        description: "Send pending PR updates to the current session immediately, without waiting for the idle countdown",
-        args: {},
-        async execute(_args, ctx) {
-          const sessionId = ctx.sessionID ?? lastPrimarySessionId
-          if (!sessionId) return "premind send-now failed: no active session"
-          ownedSessions.add(sessionId)
-          const pending = await daemon.getPendingReminder(sessionId)
-          if (!pending.batch) return "premind: no pending PR updates to send"
-          stopToastCountdown(sessionId)
-          cancelDelivery(sessionId)
-          await deliverPendingReminder(sessionId)
-          return "premind: sending PR updates now"
-        },
-      }),
+      premind_deliver: deliverTool,
+      premind_send_now: deliverTool,
       premind_disable: tool({
         description: "Disable premind globally. Stops GitHub polling across all sessions and projects; the daemon stays up so sessions keep registering. Useful for avoiding GitHub API rate limits.",
         args: {},

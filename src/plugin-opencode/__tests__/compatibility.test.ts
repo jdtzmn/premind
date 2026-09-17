@@ -112,6 +112,8 @@ describe("premind plugin compatibility harness", () => {
     assert.ok(registeredConfig.command, "config hook should register commands")
     const commands = registeredConfig.command as Record<string, { template: string; description: string }>
     assert.ok(commands["premind-status"], "should register premind-status command")
+    assert.ok(commands["premind:deliver"], "should register premind:deliver command")
+    assert.ok(commands["premind-send-now"], "should retain premind-send-now alias")
     assert.equal(commands["premind-pause"], undefined)
     assert.equal(commands["premind-resume"], undefined)
     assert.ok(commands["premind-disable"], "should register premind-disable command")
@@ -180,6 +182,8 @@ describe("premind plugin compatibility harness", () => {
 
     // 8. Tools are registered and callable.
     assert.ok(runtime.tool.premind_status, "premind_status tool should exist")
+    assert.ok(runtime.tool.premind_deliver, "premind_deliver tool should exist")
+    assert.ok(runtime.tool.premind_send_now, "premind_send_now alias should exist")
     assert.equal(runtime.tool.premind_pause, undefined)
     assert.equal(runtime.tool.premind_resume, undefined)
     assert.ok(runtime.tool.premind_set_active_checkout, "premind_set_active_checkout tool should exist")
@@ -192,6 +196,9 @@ describe("premind plugin compatibility harness", () => {
 
     const toolStatusResult = await runtime.tool.premind_status.execute({}, { sessionID: "session-1" })
     assert.match(toolStatusResult, /premind status/)
+
+    const toolDeliverResult = await runtime.tool.premind_deliver.execute({}, { sessionID: "session-1" })
+    assert.match(toolDeliverResult, /delivering PR updates now/)
 
     const toolSetActiveCheckoutResult = await runtime.tool.premind_set_active_checkout.execute(
       { path: "/tmp/other-worktree" },

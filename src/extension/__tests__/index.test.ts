@@ -334,9 +334,11 @@ describe("premind Pi extension", () => {
 		assert.ok(mock.commands.has("premind:unsubscribe"));
 		assert.equal(mock.commands.has("premind:pause"), false);
 		assert.equal(mock.commands.has("premind:resume"), false);
+		assert.ok(mock.commands.has("premind:deliver"));
 		assert.ok(mock.commands.has("premind:flush"));
 		assert.equal(mock.tools.has("premind_pause"), false);
 		assert.equal(mock.tools.has("premind_resume"), false);
+		assert.ok(mock.tools.has("premind_deliver"));
 		assert.ok(mock.tools.has("premind_set_active_checkout"));
 		assert.equal(mock.tools.has("premind_activate_worktree"), false);
 		assert.ok(mock.tools.has("premind_subscribe"));
@@ -977,7 +979,7 @@ describe("premind Pi extension", () => {
 		);
 	});
 
-	test("/premind:flush reports when there is no pending reminder", async () => {
+	test("/premind:deliver reports when there is no pending reminder", async () => {
 		const mock = createMockPi();
 		const client = createClient();
 		const notifications: Array<{ message: string; level: string }> = [];
@@ -986,7 +988,7 @@ describe("premind Pi extension", () => {
 			config: { statusPollIntervalMs: 0 },
 		})(mock.pi as never);
 
-		const command = mock.commands.get("premind:flush");
+		const command = mock.commands.get("premind:deliver");
 		assert.ok(command);
 		await command.handler("", createCommandContext(notifications));
 
@@ -1000,7 +1002,7 @@ describe("premind Pi extension", () => {
 		);
 	});
 
-	test("/premind:flush sends a follow-up message and confirms the batch", async () => {
+	test("/premind:deliver sends a follow-up message and confirms the batch", async () => {
 		const mock = createMockPi();
 		const client = createClient({ pendingBatch: reminderBatch });
 		const notifications: Array<{ message: string; level: string }> = [];
@@ -1009,7 +1011,7 @@ describe("premind Pi extension", () => {
 			config: { statusPollIntervalMs: 0 },
 		})(mock.pi as never);
 
-		const command = mock.commands.get("premind:flush");
+		const command = mock.commands.get("premind:deliver");
 		assert.ok(command);
 		await command.handler("", createCommandContext(notifications));
 
@@ -1033,6 +1035,31 @@ describe("premind Pi extension", () => {
 			"premind delivered 1 reminder batch.",
 		);
 	});
+	test("premind_deliver tool uses the canonical delivery path", async () => {
+		const mock = createMockPi();
+		const client = createClient({ pendingBatch: reminderBatch });
+		createPremindPiExtension({
+			createDaemonClient: () => client.client,
+			config: { statusPollIntervalMs: 0 },
+		})(mock.pi as never);
+
+		const tool = mock.tools.get("premind_deliver");
+		assert.ok(tool);
+		const result = await tool.execute(
+			"tool-call-1",
+			{},
+			undefined,
+			undefined,
+			createCommandContext([]),
+		);
+
+		assert.equal(result.content[0]?.text, "premind delivered 1 reminder batch.");
+		assert.deepEqual(client.operations, [
+			"claimReminderBundle:/tmp/session.jsonl",
+			"ackReminderBundle:/tmp/session.jsonl:confirmed",
+		]);
+	});
+
 
 	test("premind_status tool returns daemon status", async () => {
 		const mock = createMockPi();

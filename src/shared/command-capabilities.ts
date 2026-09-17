@@ -58,21 +58,19 @@ export const commandCapabilities = {
 		description: "Deliver queued reminders at the earliest safe harness boundary.",
 		harnesses: {
 			pi: {
-				commands: ["premind:flush"],
-				tools: [],
-				exceptions: { tools: "The existing Pi surface is command-only." },
+				commands: ["premind:deliver", "premind:flush"],
+				tools: ["premind_deliver"],
 			},
 			claude: {
-				commands: [],
+				commands: ["premind:deliver"],
 				tools: [],
 				exceptions: {
-					commands: "Planned Stop-boundary command in issue 45.",
 					tools: "Claude delivery remains owned by the Stop hook.",
 				},
 			},
 			opencode: {
-				commands: ["premind-send-now"],
-				tools: ["premind_send_now"],
+				commands: ["premind:deliver", "premind-send-now"],
+				tools: ["premind_deliver", "premind_send_now"],
 			},
 		},
 	},

@@ -90,7 +90,7 @@ export type PremindPiExtensionDependencies = {
 
 const STATUS_ERROR_PREFIX = "premind status failed";
 const PRUNE_ERROR_PREFIX = "premind prune failed";
-const FLUSH_ERROR_PREFIX = "premind flush failed";
+const DELIVER_ERROR_PREFIX = "premind deliver failed";
 const CHECKOUT_ERROR_PREFIX = "premind active checkout update failed";
 const SUBSCRIPTION_ERROR_PREFIX = "premind subscription update failed";
 const SESSION_SOURCE = "pi-extension";
@@ -729,7 +729,7 @@ export const createPremindPiExtension = (
 			},
 		});
 
-		pi.registerCommand("premind:flush", {
+		const deliverCommand = {
 			description:
 				"Deliver all pending premind reminders for the current session, if any",
 			handler: async (_args, ctx) => {
@@ -750,11 +750,16 @@ export const createPremindPiExtension = (
 					);
 				} catch (error) {
 					ctx.ui.notify(
-						`${FLUSH_ERROR_PREFIX}: ${error instanceof Error ? error.message : String(error)}`,
+						`${DELIVER_ERROR_PREFIX}: ${error instanceof Error ? error.message : String(error)}`,
 						"error",
 					);
 				}
 			},
+		} satisfies Parameters<ExtensionAPI["registerCommand"]>[1];
+		pi.registerCommand("premind:deliver", deliverCommand);
+		pi.registerCommand("premind:flush", {
+			...deliverCommand,
+			description: "Deprecated alias for /premind:deliver",
 		});
 
 		pi.registerTool({
@@ -818,6 +823,31 @@ export const createPremindPiExtension = (
 					content: [
 						{ type: "text" as const, text: `premind unsubscribed from ${target}.` },
 					],
+					details: {},
+				};
+			},
+		});
+
+		pi.registerTool({
+			name: "premind_deliver",
+			label: "Premind Deliver",
+			description:
+				"Deliver all pending premind reminders for the current session at the earliest safe boundary.",
+			parameters: Type.Object({}),
+			async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+				const sessionId = currentSessionId ?? getPiSessionId(ctx);
+				const result = await deliverPendingReminders(
+					sessionId,
+					sessionGeneration,
+					{ force: true },
+				);
+				if (result.delivered) setStatus(ctx, undefined);
+				else await refreshStatusbar(ctx);
+				const text = result.delivered
+					? `premind delivered ${result.batches.length} reminder batch${result.batches.length === 1 ? "" : "es"}.`
+					: "premind has no pending reminders for this session.";
+				return {
+					content: [{ type: "text" as const, text }],
 					details: {},
 				};
 			},
