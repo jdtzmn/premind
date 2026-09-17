@@ -1,6 +1,18 @@
 import { randomUUID } from "node:crypto"
-import { PREMIND_CLOSED_SESSION_RETENTION_MS, PREMIND_DAEMON_LOG_PATH, PREMIND_IDLE_SHUTDOWN_GRACE_MS, PREMIND_REMINDER_HANDOFF_STALE_MS, PREMIND_SESSION_STALE_MS } from "../shared/constants.ts"
+import {
+  PREMIND_CLOSED_SESSION_RETENTION_MS,
+  PREMIND_COMPATIBILITY_LOCK_PATH,
+  PREMIND_COMPATIBILITY_MARKER_PATH,
+  PREMIND_DAEMON_LOG_PATH,
+  PREMIND_DB_PATH,
+  PREMIND_IDLE_SHUTDOWN_GRACE_MS,
+  PREMIND_REMINDER_HANDOFF_STALE_MS,
+  PREMIND_SESSION_STALE_MS,
+} from "../shared/constants.ts"
 import { isSocketReachable } from "../shared/daemon-startup.ts"
+import { reconcileCompatibilityMarker } from "../shared/protocol/compatibility-marker-reconciler.ts"
+import { PREMIND_VERSION } from "../shared/version.ts"
+import { StateStore } from "./persistence/store.ts"
 import { createLogger } from "./logging/logger.ts"
 import { IpcServer } from "./ipc/server.ts"
 import { GitHubClient } from "./github/client.ts"
@@ -22,7 +34,30 @@ async function main() {
     logger.info("daemon startup skipped; another process owns the socket")
     return
   }
-  const server = new IpcServer()
+  const compatibility = reconcileCompatibilityMarker({
+    markerPath: PREMIND_COMPATIBILITY_MARKER_PATH,
+    lockPath: PREMIND_COMPATIBILITY_LOCK_PATH,
+    dbPath: PREMIND_DB_PATH,
+    currentVersion: PREMIND_VERSION,
+    candidate: {
+      markerFormat: 1,
+      highestDaemonVersion: PREMIND_VERSION,
+      minimumDaemonVersion: "0.0.0",
+      serviceSupportFloor: "0.0.0",
+      serviceSupportNotBefore: Number.MAX_SAFE_INTEGER,
+      storageEpoch: 1,
+      generation: 0,
+    },
+  })
+  const store = new StateStore()
+  const databaseStorageEpoch = store.getStorageEpoch()
+  if (databaseStorageEpoch !== compatibility.storageEpoch) {
+    store.close()
+    throw new Error(
+      `STORAGE_EPOCH_MISMATCH: marker=${compatibility.storageEpoch} database=${databaseStorageEpoch}`,
+    )
+  }
+  const server = new IpcServer(store)
   let daemonLease = server.store.claimDaemonInstanceLease({
     instanceId: server.daemonInstanceId,
     incarnationNonce: randomUUID(),

@@ -3474,6 +3474,11 @@ export class StateStore {
       VALUES (1, 1, 0)
       ON CONFLICT(singleton) DO NOTHING;
 
+      CREATE TABLE IF NOT EXISTS compatibility_marker_v1 (
+        singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+        marker_bytes BLOB NOT NULL
+      );
+
       CREATE TABLE IF NOT EXISTS daemon_instance_leases (
         instance_id TEXT PRIMARY KEY,
         incarnation_nonce TEXT NOT NULL,
@@ -3893,7 +3898,8 @@ export class StateStore {
 		const tables = this.db
 			.prepare(
 				`SELECT name FROM sqlite_master
-				 WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name != 'storage_metadata'`,
+				 WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+				 AND name NOT IN ('storage_metadata', 'compatibility_marker_v1')`,
 			)
 			.all() as Array<{ name: string }>;
 		for (const { name } of tables) {
