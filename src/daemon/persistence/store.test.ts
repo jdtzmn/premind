@@ -1933,6 +1933,11 @@ describe("StateStore", () => {
       .db.prepare(`PRAGMA table_info(pr_events)`)
       .all()
     assert.ok(columns.some((c) => c.name === "reference_link"))
+    const subscriptionColumns = (reopened as unknown as { db: { prepare: (sql: string) => { all: () => Array<{ name: string }> } } })
+      .db.prepare(`PRAGMA table_info(session_subscriptions)`)
+      .all()
+    assert.ok(subscriptionColumns.some((c) => c.name === "ownership"))
+    assert.ok(subscriptionColumns.some((c) => c.name === "policy"))
     reopened.close()
   })
 
@@ -2042,6 +2047,8 @@ describe("StateStore", () => {
     })
 
     assert.equal(upgraded.source, "manual")
+    assert.equal(upgraded.ownership, "unknown")
+    assert.equal(upgraded.policy, "observe-only")
     assert.equal(store.listSessionSubscriptions("session-subscriptions", "active").length, 2)
 
     store.deactivateAutomaticSubscriptions("session-subscriptions")
