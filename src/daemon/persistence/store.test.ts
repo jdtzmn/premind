@@ -140,9 +140,9 @@ describe("StateStore", () => {
         if (scenario.stale || (!scenario.failing && !scenario.conflict)) {
           assert.doesNotMatch(batch.reminderText, /Action required:/)
         } else if (scenario.manual) {
-          assert.match(batch.reminderText, /Do not make changes unless the user explicitly asks you to/)
-          assert.match(batch.reminderText, /Action required: report .*wait for authorization before making changes/)
-          assert.doesNotMatch(batch.reminderText, /Action required: resolve/)
+          assert.match(batch.reminderText, /This PR is observation-only/)
+          assert.match(batch.reminderText, /Observation-only CI\/conflict update/)
+          assert.doesNotMatch(batch.reminderText, /wait for authorization/)
         } else {
           assert.match(batch.reminderText, /target worktree is not active/)
           assert.match(batch.reminderText, /do not make changes until you activate the matching worktree/)
@@ -190,7 +190,11 @@ describe("StateStore", () => {
     assert.equal(batch.events.length, 2)
     assert.match(
       batch.reminderText,
+<<<<<<< HEAD
       /target worktree is not active/,
+=======
+      /Action required for this owned PR: investigate the current-HEAD CI failure\(s\)\/merge conflict\(s\)/,
+>>>>>>> 30c4fe5 (Clarify scoped reminder actions)
     )
 
     const pending = store.getPendingReminder("session-1")
@@ -291,7 +295,11 @@ describe("StateStore", () => {
     assert.ok(batch.events.some((event) => event.kind === "check.superseded" && event.summary.includes("lint") === false))
     assert.match(batch.reminderText, /Changes:\n1\. check\.failed - Check failed: build/)
     assert.match(batch.reminderText, /Superseded:\n1\. check\.superseded - 1 failed on sha-old \(superseded by sha-new\)/)
+<<<<<<< HEAD
     assert.match(batch.reminderText, /target worktree is not active/)
+=======
+    assert.match(batch.reminderText, /Action required for this owned PR: investigate the current-HEAD CI failure\(s\)\/merge conflict\(s\)/)
+>>>>>>> 30c4fe5 (Clarify scoped reminder actions)
 
     store.close()
   })
@@ -1824,9 +1832,9 @@ describe("StateStore", () => {
     }])
     const staleBatch = store.buildReminderBatchForSubscription(manual.subscriptionId)
     assert.ok(staleBatch)
-    assert.match(staleBatch.reminderText, /manually subscribed/)
-    assert.match(staleBatch.reminderText, /Do not make changes unless the user explicitly asks/)
-    assert.match(staleBatch.reminderText, /wait for authorization before making changes/)
+    assert.match(staleBatch.reminderText, /observation-only/i)
+    assert.match(staleBatch.reminderText, /Do not edit, push to, rebase, merge, or comment on this PR/)
+    assert.match(staleBatch.reminderText, /Observation-only CI\/conflict update/)
     ;(store as any).db
       .prepare(`UPDATE session_subscriptions SET state = 'unsubscribed' WHERE subscription_id = ?`)
       .run(manual.subscriptionId)

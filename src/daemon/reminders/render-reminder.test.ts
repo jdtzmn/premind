@@ -28,15 +28,17 @@ const render = (
  }).reminderText
 
 for (const kind of ["pr.snapshot.initialized", "pr.review_decision.changes_requested", "review.changes_requested"]) {
-  test(`${kind} has explicit review policy without a CI instruction`, () => {
+  test(`${kind} gives scoped review guidance`, () => {
     const rows = [row(kind, { reviewId: 1 })]
     const text = render(rows, snapshot())
-    assert.match(text, /Review action required: assess the requested changes/)
+    assert.match(text, /Review action for this owned PR: triage the requested changes/)
     assert.match(text, /explain anything you decline or cannot resolve/)
-    assert.doesNotMatch(text, /Action required: resolve the failing/)
+    assert.match(text, /Continue unrelated assigned work if appropriate/)
+    assert.doesNotMatch(text, /CI failure/)
     const manual = render(rows, snapshot(), "manual")
-    assert.match(manual, /report the requested changes and wait for authorization/)
-    assert.doesNotMatch(manual, /assess the requested changes/)
+    assert.match(manual, /observation-only/i)
+    assert.match(manual, /Do not edit, push to, rebase, merge, or comment on this PR/)
+    assert.doesNotMatch(manual, /wait for authorization/i)
   })
 }
 
@@ -45,7 +47,7 @@ for (const state of ["MERGED", "CLOSED"]) {
     const current = snapshot()
     current.core.state = state
     for (const kind of ["pr.snapshot.initialized", "pr.review_decision.changes_requested", "review.changes_requested"]) {
-      assert.doesNotMatch(render([row(kind, { reviewId: 1 })], current), /Review action required:/)
+      assert.doesNotMatch(render([row(kind, { reviewId: 1 })], current), /Review action for this owned PR:/)
     }
   })
 }
@@ -54,13 +56,13 @@ test("approved, dismissed and superseded reviews are not actionable", () => {
   const rows = [row("review.changes_requested", { reviewId: 1 })]
   const current = snapshot()
   current.core.reviewDecision = "APPROVED"
-  assert.doesNotMatch(render(rows, current), /Review action required:/)
+  assert.doesNotMatch(render(rows, current), /Review action for this owned PR:/)
   current.core.reviewDecision = "CHANGES_REQUESTED"
   current.reviews[0]!.state = "DISMISSED"
-  assert.doesNotMatch(render(rows, current), /Review action required:/)
+  assert.doesNotMatch(render(rows, current), /Review action for this owned PR:/)
   current.reviews[0]!.state = "CHANGES_REQUESTED"
   current.reviews.push({ id: 2, state: "APPROVED", user: { login: "ALICE" }, submitted_at: "2026-01-02T00:00:00Z" })
-  assert.doesNotMatch(render(rows, current), /Review action required:/)
+  assert.doesNotMatch(render(rows, current), /Review action for this owned PR:/)
 })
 
 
@@ -80,7 +82,7 @@ test("unknown review history requires verification rather than asserting a curre
   for (const current of [null, { ...snapshot(), reviews: [] }]) {
     const text = render([row("review.changes_requested", { reviewId: 99 })], current)
     assert.match(text, /UNVERIFIED/)
-    assert.doesNotMatch(text, /Review action required:/)
+    assert.doesNotMatch(text, /Review action for this owned PR:/)
   }
 })
 
@@ -97,7 +99,7 @@ test("nested grouped reviews reconcile individually and request action only once
     { summary: "bob requested changes", payload: { reviewId: 2 } },
   ] })], current)
   assert.match(text, /review.resolved/)
-  assert.equal(text.match(/Review action required:/g)?.length, 1)
+  assert.equal(text.match(/Review action for this owned PR:/g)?.length, 1)
 })
 
 for (const source of ["automatic", "manual"] as const) {
@@ -115,15 +117,24 @@ for (const source of ["automatic", "manual"] as const) {
       store.saveSnapshotAndEvents("acme/repo", 7, current, diffSnapshot(previous, current))
       const batch = registry.getPendingReminder("session")!
       assert.ok(batch)
-      assert.match(batch.reminderText, /Review action required:/)
-      assert.equal(batch.reminderText.match(/Review action required:/g)?.length, 1)
+      assert.match(
+        batch.reminderText,
+        source === "automatic" ? /Review action for this owned PR:/ : /Observation-only review feedback:/,
+      )
+      assert.equal(
+        batch.reminderText.match(source === "automatic" ? /Review action for this owned PR:/g : /Observation-only review feedback:/g)?.length,
+        1,
+      )
       const max = store.getReminderBatchRecord(batch.batchId)!.maxEventSeq
       current.core.reviewDecision = "APPROVED"
       store.saveSnapshot("acme/repo", 7, current)
       const refreshed = registry.getPendingReminder("session")!
       assert.equal(refreshed.batchId, batch.batchId)
       assert.equal(store.getReminderBatchRecord(batch.batchId)!.maxEventSeq, max)
-      assert.doesNotMatch(refreshed.reminderText, /Review action required:/)
+      assert.doesNotMatch(
+        refreshed.reminderText,
+        source === "automatic" ? /Review action for this owned PR:/ : /Observation-only review feedback:/,
+      )
     } finally {
       registry.close()
       store.close()

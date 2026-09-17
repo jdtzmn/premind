@@ -141,8 +141,8 @@ const setupLive = (source: "automatic" | "manual" = "automatic") => {
   return { store, registry, subscription, save }
 }
 const assertAction = (text: string, actionable: boolean) => {
-  if (actionable) assert.match(text, /Action required: resolve .*on HEAD/)
-  else assert.doesNotMatch(text, /Action required:/)
+  if (actionable) assert.match(text, /Action required for this owned PR: investigate the current-HEAD CI failure\(s\)\/merge conflict\(s\)/)
+  else assert.doesNotMatch(text, /Action required for this owned PR:/)
 }
 
 describe("pending reminder live reconciliation", () => {
@@ -370,7 +370,7 @@ describe("pending reminder live reconciliation", () => {
       save(liveSnapshot())
       store.insertEvents("acme/repo", 13, [failureEvent()])
       const first = store.buildReminderBatchForSubscription(subscription.subscriptionId)!
-      assert.match(first.reminderText, /Action required: report .*wait for authorization/)
+      assert.match(first.reminderText, /Observation-only CI\/conflict update/)
       const external = store.upsertSubscription({ sessionId: "session", repo: "other/repo", prNumber: 99, source: "manual" })
       store.saveSnapshot("other/repo", 99, liveSnapshot([]))
       store.insertEvents("other/repo", 99, [{ ...failureEvent(), dedupeKey: "external" }])
@@ -379,11 +379,11 @@ describe("pending reminder live reconciliation", () => {
       assert.equal(other.prNumber, 99)
       assert.match(other.reminderText, /UNVERIFIED/)
       assertAction(other.reminderText, false)
-      assert.match(store.buildReminderBatchForSubscription(subscription.subscriptionId)!.reminderText, /Action required: report/)
+      assert.match(store.buildReminderBatchForSubscription(subscription.subscriptionId)!.reminderText, /Observation-only CI\/conflict update/)
       save(liveSnapshot([check("SUCCESS")]))
       const refreshed = registry.getPendingReminder("session")!
       assert.equal(refreshed.batchId, first.batchId)
-      assert.match(refreshed.reminderText, /Do not make changes unless the user explicitly asks/)
+      assert.match(refreshed.reminderText, /This PR is observation-only/)
       assertAction(refreshed.reminderText, false)
     } finally { registry.close(); store.close() }
   })
