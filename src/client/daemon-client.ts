@@ -40,7 +40,7 @@ const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 500;
 const isUnsupportedOperation = (error: unknown) =>
   error instanceof Error && error.message.startsWith("BAD_REQUEST:");
-const REQUEST_TIMEOUT_MS = 2_000;
+const REQUEST_TIMEOUT_MS = 30_000;
 
 export type PremindDaemonClientOptions = {
   socketPath?: string;

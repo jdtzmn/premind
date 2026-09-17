@@ -278,4 +278,35 @@ describe("PremindDaemonClient Codex operations", () => {
       fs.rmSync(directory, { recursive: true, force: true });
     }
   });
+
+  test("allows ordinary operations to outlast a short GitHub CLI call", async () => {
+    const directory = fs.mkdtempSync(
+      path.join(os.tmpdir(), "premind-client-slow-operation-"),
+    );
+    const socketPath = path.join(directory, "premind.sock");
+    const server = net.createServer((socket) => {
+      socket.once("data", () => {
+        setTimeout(() => {
+          socket.end(
+            `${JSON.stringify({ ok: true, protocolVersion: 1, result: {} })}\n`,
+          );
+        }, 2_100);
+      });
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(socketPath, resolve);
+    });
+    try {
+      const client = new PremindDaemonClient({
+        socketPath,
+        ensureDaemon: async () => undefined,
+        maxRetries: 0,
+      });
+      await client.heartbeat();
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
 });
