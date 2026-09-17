@@ -33,6 +33,20 @@ export const withCompatibilityMarkerLock = <T>(
     fs.rmSync(lockPath, { force: true });
   }
 };
+export const withCompatibilityMarkerLockAsync = async <T>(
+  lockPath: string,
+  operation: () => Promise<T>,
+): Promise<T> => {
+  fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+  const lockFd = fs.openSync(lockPath, "wx", 0o600);
+  try {
+    return await operation();
+  } finally {
+    fs.closeSync(lockFd);
+    fs.rmSync(lockPath, { force: true });
+  }
+};
+
 
 export const writeCompatibilityMarkerFileDurably = (
   markerPath: string,
