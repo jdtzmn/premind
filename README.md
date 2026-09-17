@@ -57,7 +57,7 @@ The plugin requires **Node 22.13+** for `node:sqlite`. Its hooks start or reuse 
 
 Claude reminders are delivered only at a `Stop` boundary. A delivered batch is confirmed on Claude's next continuation Stop hook; interrupted handoffs become retryable, so duplicates are preferred to lost reminders. Inactive Claude sessions are not woken in v0.2.
 
-The plugin exposes namespaced MCP tools for `status`, `probe`, global `enable`/`disable`, and session-scoped `activate_worktree`, `subscribe`, and `unsubscribe`. Session-scoped tools derive the session solely from `CLAUDE_CODE_SESSION_ID`; missing or mismatched hook/MCP identity fails closed and asks you to reload the plugin. Claude commands are `/premind:status`, `/premind:doctor`, `/premind:enable`, `/premind:disable`, `/premind:subscribe`, and `/premind:unsubscribe`.
+The plugin exposes namespaced MCP tools for `status`, `probe`, global `enable`/`disable`, and session-scoped `set_active_checkout`, `subscribe`, and `unsubscribe`. Set the active checkout at the start of any PR work—including when already in the startup checkout—and again after switching branches before creating or following a PR. Session-scoped tools derive the session solely from `CLAUDE_CODE_SESSION_ID`; missing or mismatched hook/MCP identity fails closed and asks you to reload the plugin. Claude commands are `/premind:status`, `/premind:doctor`, `/premind:enable`, `/premind:disable`, `/premind:subscribe`, and `/premind:unsubscribe`.
 
 For an opt-in authenticated Claude CLI compatibility check (not part of CI), run:
 

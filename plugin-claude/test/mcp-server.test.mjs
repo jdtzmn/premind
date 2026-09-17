@@ -61,12 +61,49 @@ test("session-scoped tools derive the Claude ID from the environment", async () 
   ]);
 });
 
+test("lists set_active_checkout without the old worktree tool", async () => {
+  const result = await handleMcpRequest({ method: "tools/list" });
+  const names = result.tools.map((tool) => tool.name);
+  assert.ok(names.includes("set_active_checkout"));
+  assert.ok(!names.includes("activate_worktree"));
+  const activeCheckout = result.tools.find(
+    (tool) => tool.name === "set_active_checkout",
+  );
+  assert.match(activeCheckout.description, /start of any PR work/i);
+  assert.match(activeCheckout.description, /switching branches/i);
+});
+
+test("set_active_checkout binds the environment-derived Claude session", async () => {
+  const calls = [];
+  const result = await handleMcpRequest(
+    {
+      method: "tools/call",
+      params: {
+        name: "set_active_checkout",
+        arguments: { path: "/repo" },
+      },
+    },
+    async (type, payload) => {
+      calls.push({ type, payload });
+      return { binding: { repo: "acme/repo" } };
+    },
+    { CLAUDE_CODE_SESSION_ID: "claude-1" },
+  );
+  assert.match(result.content[0].text, /active checkout/i);
+  assert.deepEqual(calls, [
+    {
+      type: "activateWorktree",
+      payload: { sessionId: "claude-1", path: "/repo" },
+    },
+  ]);
+});
+
 test("session-scoped tools fail closed without CLAUDE_CODE_SESSION_ID", async () => {
   const calls = [];
   const result = await handleMcpRequest(
     {
       method: "tools/call",
-      params: { name: "activate_worktree", arguments: { path: "/repo" } },
+      params: { name: "set_active_checkout", arguments: { path: "/repo" } },
     },
     async (type, payload) => calls.push({ type, payload }),
     {},

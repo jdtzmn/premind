@@ -45,8 +45,9 @@ const tools = [
     },
   },
   {
-    name: "activate_worktree",
-    description: "Bind the current Claude session to a worktree path.",
+    name: "set_active_checkout",
+    description:
+      "Set the active Git checkout for this Claude session. Call this at the start of any PR work, including when already in the startup checkout, and again after switching branches before creating or following a PR.",
     inputSchema: {
       type: "object",
       properties: { path: { type: "string" } },
@@ -142,13 +143,13 @@ export const handleMcpRequest = async (
 
   const sessionId = getBoundClaudeSessionId(environment);
   if (!sessionId) return bindingError();
-  if (name === "activate_worktree") {
+  if (name === "set_active_checkout") {
     const result = await ipc("activateWorktree", {
       sessionId,
       path: args.path,
     });
     return text(
-      `Premind is watching ${result.binding.repo} from this Claude session.`,
+      `Premind set the active checkout for this Claude session to ${result.binding.repo}.`,
     );
   }
   if (name === "subscribe" || name === "unsubscribe") {
