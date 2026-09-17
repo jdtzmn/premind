@@ -19,6 +19,51 @@ test("status redacts session records", async () => {
   assert.match(value, /activeSessions/);
   assert.doesNotMatch(value, /secret|private\/repo/);
 });
+test("probe reports runtime, plugin, config, daemon, and delivery health", async () => {
+  const result = await handleMcpRequest(
+    { method: "tools/call", params: { name: "probe" } },
+    async (type) =>
+      type === "getGlobalDisabled"
+        ? { disabled: false }
+        : { daemon: { protocolVersion: 1 }, sessions: [{ sessionId: "secret" }] },
+    {
+      HOME: "/definitely-missing-premind-home",
+      CLAUDE_PLUGIN_ROOT: "/tmp/premind-plugin",
+    },
+  );
+  const value = JSON.parse(result.content[0].text);
+  assert.deepEqual(value.plugin, { version: "0.2.0", root: "/tmp/premind-plugin" });
+  assert.equal(value.runtime.requiredNode, ">=22.13.0");
+  assert.equal(value.runtime.compatible, true);
+  assert.deepEqual(value.daemon, {
+    reachable: true,
+    protocolVersion: 1,
+    globallyDisabled: false,
+  });
+  assert.equal(value.configSource, "schema defaults");
+  assert.match(value.delivery, /Stop-boundary only/);
+  assert.doesNotMatch(result.content[0].text, /secret/);
+});
+
+test("probe reports a redacted diagnostic when the daemon is unavailable", async () => {
+  const result = await handleMcpRequest(
+    { method: "tools/call", params: { name: "probe" } },
+    async () => {
+      throw new Error("private/session/path");
+    },
+    { HOME: "/definitely-missing-premind-home" },
+  );
+  const value = JSON.parse(result.content[0].text);
+  assert.deepEqual(value.daemon, {
+    reachable: false,
+    protocolVersion: null,
+    globallyDisabled: null,
+    error: "Premind daemon is unavailable.",
+  });
+  assert.equal(value.runtime.requiredNode, ">=22.13.0");
+  assert.equal(value.configSource, "schema defaults");
+  assert.doesNotMatch(result.content[0].text, /private\/session\/path/);
+});
 
 test("global controls are model-callable and describe their daemon-wide effect", async () => {
   const calls = [];
@@ -61,12 +106,58 @@ test("session-scoped tools derive the Claude ID from the environment", async () 
   ]);
 });
 
+test("lists set_active_checkout without the old worktree tool", async () => {
+  const result = await handleMcpRequest({ method: "tools/list" });
+  const names = result.tools.map((tool) => tool.name);
+  assert.ok(names.includes("set_active_checkout"));
+  assert.ok(!names.includes("activate_worktree"));
+  const activeCheckout = result.tools.find(
+    (tool) => tool.name === "set_active_checkout",
+  );
+  assert.match(activeCheckout.description, /start of any PR work/i);
+  assert.match(activeCheckout.description, /switching branches/i);
+});
+
+test("lists subscribe with mandatory PR tracking guidance", async () => {
+  const result = await handleMcpRequest({ method: "tools/list" });
+  const subscribe = result.tools.find((tool) => tool.name === "subscribe");
+  assert.equal(
+    subscribe.description,
+    "Mandatory PR tracking: Immediately call this tool after creating, opening, discovering, or beginning work on a pull request. Do this before reporting the PR URL or status to the user. Applies after gh pr create, gh stack submit, gh stack link, or any equivalent GitHub operation.",
+  );
+});
+
+test("set_active_checkout binds the environment-derived Claude session", async () => {
+  const calls = [];
+  const result = await handleMcpRequest(
+    {
+      method: "tools/call",
+      params: {
+        name: "set_active_checkout",
+        arguments: { path: "/repo" },
+      },
+    },
+    async (type, payload) => {
+      calls.push({ type, payload });
+      return { binding: { repo: "acme/repo" } };
+    },
+    { CLAUDE_CODE_SESSION_ID: "claude-1" },
+  );
+  assert.match(result.content[0].text, /active checkout/i);
+  assert.deepEqual(calls, [
+    {
+      type: "activateWorktree",
+      payload: { sessionId: "claude-1", path: "/repo" },
+    },
+  ]);
+});
+
 test("session-scoped tools fail closed without CLAUDE_CODE_SESSION_ID", async () => {
   const calls = [];
   const result = await handleMcpRequest(
     {
       method: "tools/call",
-      params: { name: "activate_worktree", arguments: { path: "/repo" } },
+      params: { name: "set_active_checkout", arguments: { path: "/repo" } },
     },
     async (type, payload) => calls.push({ type, payload }),
     {},

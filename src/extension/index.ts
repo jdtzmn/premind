@@ -50,6 +50,7 @@ type DaemonClientLike = {
 	activateWorktree: (payload: ActivateWorktreePayload) => Promise<unknown>;
 	subscribe: (payload: SubscribePayload) => Promise<unknown>;
 	unsubscribe: (payload: UnsubscribePayload) => Promise<unknown>;
+	setGlobalDisabled: (disabled: boolean) => Promise<{ disabled: boolean }>;
 	updateSessionState: (payload: {
 		sessionId: string;
 		busyState: "busy" | "idle";
@@ -90,8 +91,8 @@ export type PremindPiExtensionDependencies = {
 
 const STATUS_ERROR_PREFIX = "premind status failed";
 const PRUNE_ERROR_PREFIX = "premind prune failed";
-const FLUSH_ERROR_PREFIX = "premind flush failed";
-const WORKTREE_ERROR_PREFIX = "premind worktree activation failed";
+const DELIVER_ERROR_PREFIX = "premind deliver failed";
+const CHECKOUT_ERROR_PREFIX = "premind active checkout update failed";
 const SUBSCRIPTION_ERROR_PREFIX = "premind subscription update failed";
 const SESSION_SOURCE = "pi-extension";
 const DEFAULT_HEARTBEAT_MS = 10_000;
@@ -317,9 +318,37 @@ export const createPremindPiExtension = (
 			return renderPremindPiStatus(status);
 		};
 
+		const getDoctorText = async () => {
+			const lines = [
+				`premind doctor ${PREMIND_VERSION_LABEL}`,
+				"- host: pi",
+				`- extension: ${config.enabled ? "enabled" : "disabled"}`,
+				`- automatic delivery: ${config.autoDeliver ? "enabled" : "disabled"}`,
+				`- status polling: ${config.statusPollIntervalMs === 0 ? "disabled" : `${config.statusPollIntervalMs}ms`}`,
+				`- session: ${currentSessionId ? `attached (${formatSessionId(currentSessionId)})` : "not attached"}`,
+				"- delivery: follow-up messages can wake an idle Pi session",
+			];
+			try {
+				const status = await createDaemonClient().debugStatus();
+				lines.splice(2, 0, `- daemon: reachable (protocol ${status.daemon.protocolVersion})`);
+			} catch (error) {
+				lines.splice(
+					2,
+					0,
+					`- daemon: unreachable (${error instanceof Error ? error.message : String(error)})`,
+				);
+			}
+			return lines.join("\n");
+		};
+
 		const pruneClosedSessions = async () => {
 			const result = await createDaemonClient().pruneClosedSessions();
 			return result as PruneClosedSessionsResult;
+		};
+
+		const setGlobalPolling = async (disabled: boolean) => {
+			const result = await createDaemonClient().setGlobalDisabled(disabled);
+			return `premind polling is ${result.disabled ? "disabled" : "enabled"} globally.`;
 		};
 
 		const setStatus = (
@@ -648,6 +677,27 @@ export const createPremindPiExtension = (
 			},
 		});
 
+		pi.registerCommand("premind:doctor", {
+			description: "Diagnose premind extension, configuration, and daemon health",
+			handler: async (_args, ctx) => {
+				ctx.ui.notify(await getDoctorText(), "info");
+			},
+		});
+
+		pi.registerCommand("premind:enable", {
+			description: "Enable premind GitHub polling globally",
+			handler: async (_args, ctx) => {
+				ctx.ui.notify(await setGlobalPolling(false), "info");
+			},
+		});
+
+		pi.registerCommand("premind:disable", {
+			description: "Disable premind GitHub polling globally",
+			handler: async (_args, ctx) => {
+				ctx.ui.notify(await setGlobalPolling(true), "info");
+			},
+		});
+
 		pi.registerCommand("premind:prune", {
 			description:
 				"Remove closed premind sessions and their pending reminder batches from daemon state",
@@ -663,12 +713,12 @@ export const createPremindPiExtension = (
 			},
 		});
 
-		pi.registerCommand("premind:activate-worktree", {
-			description: "Activate a Git worktree for the current premind session",
+		pi.registerCommand("premind:set-active-checkout", {
+			description: "Set the active Git checkout for the current premind session",
 			handler: async (args, ctx) => {
 				const path = args.trim();
 				if (!path) {
-					ctx.ui.notify(`${WORKTREE_ERROR_PREFIX}: expected: <path>`, "error");
+					ctx.ui.notify(`${CHECKOUT_ERROR_PREFIX}: expected: <path>`, "error");
 					return;
 				}
 				try {
@@ -676,10 +726,10 @@ export const createPremindPiExtension = (
 						sessionId: currentSessionId ?? getPiSessionId(ctx),
 						path,
 					});
-					ctx.ui.notify(`premind activated worktree ${path}.`, "info");
+					ctx.ui.notify(`premind set active checkout ${path}.`, "info");
 				} catch (error) {
 					ctx.ui.notify(
-						`${WORKTREE_ERROR_PREFIX}: ${error instanceof Error ? error.message : String(error)}`,
+						`${CHECKOUT_ERROR_PREFIX}: ${error instanceof Error ? error.message : String(error)}`,
 						"error",
 					);
 				}
@@ -730,7 +780,7 @@ export const createPremindPiExtension = (
 			},
 		});
 
-		pi.registerCommand("premind:flush", {
+		const deliverCommand = {
 			description:
 				"Deliver all pending premind reminders for the current session, if any",
 			handler: async (_args, ctx) => {
@@ -751,21 +801,25 @@ export const createPremindPiExtension = (
 					);
 				} catch (error) {
 					ctx.ui.notify(
-						`${FLUSH_ERROR_PREFIX}: ${error instanceof Error ? error.message : String(error)}`,
+						`${DELIVER_ERROR_PREFIX}: ${error instanceof Error ? error.message : String(error)}`,
 						"error",
 					);
 				}
 			},
+		} satisfies Parameters<ExtensionAPI["registerCommand"]>[1];
+		pi.registerCommand("premind:deliver", deliverCommand);
+		pi.registerCommand("premind:flush", {
+			...deliverCommand,
+			description: "Deprecated alias for /premind:deliver",
 		});
 
 		pi.registerTool({
-			name: "premind_activate_worktree",
-			label: "Premind Activate Worktree",
-			description: "Activate a Git worktree for the current premind session.",
-			promptSnippet:
-				"Tell premind which Git worktree this session is actively using.",
+			name: "premind_set_active_checkout",
+			label: "Premind Set Active Checkout",
+			description: "Set the active Git checkout for the current premind session.",
+			promptSnippet: "Tell premind which Git checkout this session is actively using.",
 			promptGuidelines: [
-				"Call premind_activate_worktree whenever you begin working in a different linked or nested Git worktree than the session's startup directory, including before that branch has a pull request.",
+				"Call premind_set_active_checkout at the start of any PR work, including when already in the startup checkout, and again after switching branches before creating or following a PR.",
 			],
 			parameters: Type.Object({ path: Type.String({ minLength: 1 }) }),
 			async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
@@ -775,7 +829,7 @@ export const createPremindPiExtension = (
 					content: [
 						{
 							type: "text" as const,
-							text: `premind activated worktree ${params.path}.`,
+							text: `premind set active checkout ${params.path}.`,
 						},
 					],
 					details: {},
@@ -786,7 +840,8 @@ export const createPremindPiExtension = (
 		pi.registerTool({
 			name: "premind_subscribe",
 			label: "Premind Subscribe",
-			description: "Subscribe the current session to a pull request.",
+			description:
+				"Mandatory PR tracking: Immediately call this tool after creating, opening, discovering, or beginning work on a pull request. Do this before reporting the PR URL or status to the user. Applies after gh pr create, gh stack submit, gh stack link, or any equivalent GitHub operation.",
 			parameters: Type.Object({
 				prNumber: Type.Integer({ minimum: 1 }),
 				repo: Type.Optional(Type.String({ minLength: 1 })),
@@ -820,6 +875,70 @@ export const createPremindPiExtension = (
 					content: [
 						{ type: "text" as const, text: `premind unsubscribed from ${target}.` },
 					],
+					details: {},
+				};
+			},
+		});
+
+		pi.registerTool({
+			name: "premind_deliver",
+			label: "Premind Deliver",
+			description:
+				"Deliver all pending premind reminders for the current session at the earliest safe boundary.",
+			parameters: Type.Object({}),
+			async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+				const sessionId = currentSessionId ?? getPiSessionId(ctx);
+				const result = await deliverPendingReminders(
+					sessionId,
+					sessionGeneration,
+					{ force: true },
+				);
+				if (result.delivered) setStatus(ctx, undefined);
+				else await refreshStatusbar(ctx);
+				const text = result.delivered
+					? `premind delivered ${result.batches.length} reminder batch${result.batches.length === 1 ? "" : "es"}.`
+					: "premind has no pending reminders for this session.";
+				return {
+					content: [{ type: "text" as const, text }],
+					details: {},
+				};
+			},
+		});
+
+		pi.registerTool({
+			name: "premind_enable",
+			label: "Premind Enable",
+			description: "Enable premind GitHub polling globally.",
+			parameters: Type.Object({}),
+			async execute() {
+				return {
+					content: [{ type: "text" as const, text: await setGlobalPolling(false) }],
+					details: {},
+				};
+			},
+		});
+
+		pi.registerTool({
+			name: "premind_disable",
+			label: "Premind Disable",
+			description: "Disable premind GitHub polling globally.",
+			parameters: Type.Object({}),
+			async execute() {
+				return {
+					content: [{ type: "text" as const, text: await setGlobalPolling(true) }],
+					details: {},
+				};
+			},
+		});
+
+		pi.registerTool({
+			name: "premind_doctor",
+			label: "Premind Doctor",
+			description: "Diagnose premind extension, configuration, and daemon health.",
+			parameters: Type.Object({}),
+			async execute() {
+				return {
+					content: [{ type: "text" as const, text: await getDoctorText() }],
 					details: {},
 				};
 			},

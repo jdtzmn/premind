@@ -107,7 +107,7 @@ describe("premind plugin compatibility harness", () => {
       config: (input: Record<string, unknown>) => Promise<void>
       event: (input: { event: unknown }) => Promise<void>
       "chat.message": (input: unknown, output: unknown) => Promise<void>
-      tool: Record<string, { execute: (args: unknown, ctx: unknown) => Promise<string> }>
+      tool: Record<string, { description?: string; execute: (args: unknown, ctx: unknown) => Promise<string> }>
     }
 
     // 1. Config hook registers slash commands.
@@ -115,6 +115,9 @@ describe("premind plugin compatibility harness", () => {
     assert.ok(registeredConfig.command, "config hook should register commands")
     const commands = registeredConfig.command as Record<string, { template: string; description: string }>
     assert.ok(commands["premind-status"], "should register premind-status command")
+    assert.ok(commands["premind:doctor"], "should register premind:doctor command")
+    assert.ok(commands["premind:deliver"], "should register premind:deliver command")
+    assert.ok(commands["premind-send-now"], "should retain premind-send-now alias")
     assert.equal(commands["premind-pause"], undefined)
     assert.equal(commands["premind-resume"], undefined)
     assert.ok(commands["premind-disable"], "should register premind-disable command")
@@ -155,6 +158,36 @@ describe("premind plugin compatibility harness", () => {
     assert.equal(statusPrompt.noReply, true, "status response should be noReply")
 
 
+    const doctorMarker = commands["premind:doctor"].template
+    try {
+      await runtime["chat.message"](
+        { sessionID: "session-1" },
+        { message: { parts: [{ type: "text", text: doctorMarker }] }, parts: [{ type: "text", text: doctorMarker }] },
+      )
+      assert.fail("expected throw for handled command")
+    } catch (error) {
+      assert.match((error as Error).message, /PREMIND_HANDLED/)
+    }
+    const doctorPrompt = syncPrompts.find((prompt) => prompt.text.includes("premind doctor"))
+    assert.ok(doctorPrompt, "should have injected doctor response")
+    assert.match(doctorPrompt.text, /host: opencode/)
+
+
+    // 5. Canonical delivery command routes through chat.message.
+    const deliverMarker = commands["premind:deliver"].template
+    try {
+      await runtime["chat.message"](
+        { sessionID: "session-1" },
+        { message: { parts: [{ type: "text", text: deliverMarker }] }, parts: [{ type: "text", text: deliverMarker }] },
+      )
+      assert.fail("expected throw for handled command")
+    } catch (error) {
+      assert.match((error as Error).message, /PREMIND_HANDLED/)
+    }
+    assert.equal(asyncPrompts.length, 2, "canonical delivery command should inject the pending reminder")
+    const deliveryPrompt = syncPrompts.find((prompt) => prompt.text.includes("delivering PR updates now"))
+    assert.ok(deliveryPrompt, "canonical delivery command should inject a no-reply response")
+    assert.equal(deliveryPrompt.noReply, true)
     // 7a. Slash command via chat.message: premind-disable.
     const disableMarker = commands["premind-disable"].template
     try {
@@ -183,10 +216,17 @@ describe("premind plugin compatibility harness", () => {
 
     // 8. Tools are registered and callable.
     assert.ok(runtime.tool.premind_status, "premind_status tool should exist")
+    assert.ok(runtime.tool.premind_deliver, "premind_deliver tool should exist")
+    assert.ok(runtime.tool.premind_send_now, "premind_send_now alias should exist")
     assert.equal(runtime.tool.premind_pause, undefined)
     assert.equal(runtime.tool.premind_resume, undefined)
-    assert.ok(runtime.tool.premind_activate_worktree, "premind_activate_worktree tool should exist")
+    assert.ok(runtime.tool.premind_set_active_checkout, "premind_set_active_checkout tool should exist")
+    assert.equal(runtime.tool.premind_activate_worktree, undefined)
     assert.ok(runtime.tool.premind_subscribe, "premind_subscribe tool should exist")
+    assert.equal(
+      runtime.tool.premind_subscribe.description,
+      "Mandatory PR tracking: Immediately call this tool after creating, opening, discovering, or beginning work on a pull request. Do this before reporting the PR URL or status to the user. Applies after gh pr create, gh stack submit, gh stack link, or any equivalent GitHub operation.",
+    )
     assert.ok(runtime.tool.premind_unsubscribe, "premind_unsubscribe tool should exist")
     assert.ok(runtime.tool.premind_disable, "premind_disable tool should exist")
     assert.ok(runtime.tool.premind_enable, "premind_enable tool should exist")
@@ -195,12 +235,14 @@ describe("premind plugin compatibility harness", () => {
     const toolStatusResult = await runtime.tool.premind_status.execute({}, { sessionID: "session-1" })
     assert.match(toolStatusResult, /premind status/)
 
+    const toolDeliverResult = await runtime.tool.premind_deliver.execute({}, { sessionID: "session-1" })
+    assert.match(toolDeliverResult, /delivering PR updates now/)
 
-    const toolActivateResult = await runtime.tool.premind_activate_worktree.execute(
+    const toolSetActiveCheckoutResult = await runtime.tool.premind_set_active_checkout.execute(
       { path: "/tmp/other-worktree" },
       { sessionID: "session-1" },
     )
-    assert.match(toolActivateResult, /activated worktree \/tmp\/other-worktree/)
+    assert.match(toolSetActiveCheckoutResult, /set active checkout \/tmp\/other-worktree/)
 
     const toolSubscribeResult = await runtime.tool.premind_subscribe.execute(
       { prNumber: 13, repo: "acme/repo" },
@@ -224,7 +266,7 @@ describe("premind plugin compatibility harness", () => {
     assert.match(toolEnableResult, /premind re-enabled globally/)
 
     const toolProbeResult = await runtime.tool.premind_probe.execute({}, { sessionID: "session-1" })
-    assert.match(toolProbeResult, /premind probe/)
+    assert.match(toolProbeResult, /premind doctor/)
     assert.match(toolProbeResult, /commands registered: yes/)
 
     // 9. session.deleted starts explicit retention.

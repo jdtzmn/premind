@@ -23,6 +23,7 @@ type Fixture = {
       number: number
       title: string
       url: string
+      author: { login: string }
       state: string
       isDraft: boolean
       headRefName: string
@@ -58,6 +59,7 @@ const fullFixture = (): Fixture => ({
       number: 42,
       title: "Feature",
       url: "https://github.com/acme/repo/pull/42",
+      author: { login: "jdtzmn" },
       state: "OPEN",
       isDraft: false,
       headRefName: "feature/test",
@@ -168,6 +170,7 @@ describe("fetchPullRequestSnapshotGraphQL", () => {
 
     const snapshot = result.snapshot
     assert.equal(snapshot.core.number, 42)
+    assert.equal(snapshot.core.authorLogin, "jdtzmn")
     assert.equal(snapshot.core.reviewDecision, "APPROVED")
     assert.equal(snapshot.core.headRefOid, "sha-1")
     assert.deepEqual(

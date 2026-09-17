@@ -148,7 +148,8 @@ describe("StateStore", () => {
           assert.match(batch.reminderText, /Action required: report .*wait for authorization before making changes/)
           assert.doesNotMatch(batch.reminderText, /Action required: resolve/)
         } else {
-          assert.match(batch.reminderText, /Action required: resolve the failing check\(s\)\/merge conflict\(s\) on HEAD before continuing/)
+          assert.match(batch.reminderText, /target worktree is not active/)
+          assert.match(batch.reminderText, /do not make changes until you activate the matching worktree/)
         }
       } finally {
         store.close()
@@ -193,7 +194,7 @@ describe("StateStore", () => {
     assert.equal(batch.events.length, 2)
     assert.match(
       batch.reminderText,
-      /Action required: resolve the failing check\(s\)\/merge conflict\(s\) on HEAD before continuing/,
+      /target worktree is not active/,
     )
 
     const pending = store.getPendingReminder("session-1")
@@ -294,7 +295,7 @@ describe("StateStore", () => {
     assert.ok(batch.events.some((event) => event.kind === "check.superseded" && event.summary.includes("lint") === false))
     assert.match(batch.reminderText, /Changes:\n1\. check\.failed - Check failed: build/)
     assert.match(batch.reminderText, /Superseded:\n1\. check\.superseded - 1 failed on sha-old \(superseded by sha-new\)/)
-    assert.match(batch.reminderText, /Action required: resolve the failing check\(s\)\/merge conflict\(s\) on HEAD before continuing/)
+    assert.match(batch.reminderText, /target worktree is not active/)
 
     store.close()
   })
@@ -1939,6 +1940,53 @@ describe("StateStore", () => {
     reopened.close()
   })
 
+  test("migrates legacy subscriptions to an observe-only policy", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "premind-store-test-"))
+    const dbPath = path.join(dir, "premind.db")
+    tempPaths.push(dir)
+    const seeded = new StateStore(dbPath)
+    seeded.registerClient("client-policy-migration", { pid: 1, projectRoot: "/repo" })
+    seeded.registerSession({
+      clientId: "client-policy-migration", sessionId: "session-policy-migration", repo: "acme/repo",
+      branch: "feature/policy", isPrimary: true, status: "active", busyState: "idle",
+    })
+    seeded.close()
+
+    const legacy = new DatabaseSync(dbPath)
+    legacy.exec(`
+      PRAGMA foreign_keys = OFF;
+      DROP TABLE session_subscriptions;
+      CREATE TABLE session_subscriptions (
+        subscription_id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        repo TEXT NOT NULL,
+        pr_number INTEGER NOT NULL,
+        source TEXT NOT NULL,
+        state TEXT NOT NULL,
+        last_delivered_event_seq INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        UNIQUE(session_id, repo, pr_number)
+      );
+    `)
+    legacy.prepare(`
+      INSERT INTO session_subscriptions (subscription_id, session_id, repo, pr_number, source, state, last_delivered_event_seq, created_at, updated_at)
+      VALUES ('legacy-subscription', 'session-policy-migration', 'acme/repo', 7, 'automatic', 'active', 0, 1, 1)
+    `).run()
+    legacy.close()
+
+    const store = new StateStore(dbPath)
+    assert.deepEqual(
+      store.getSubscription("session-policy-migration", "acme/repo", 7) && [
+        store.getSubscription("session-policy-migration", "acme/repo", 7)!.ownership,
+        store.getSubscription("session-policy-migration", "acme/repo", 7)!.policy,
+      ],
+      ["unknown", "observe-only"],
+    )
+    store.close()
+  })
+
+
   test("migration is idempotent and a no-op on a fresh database", () => {
     // First open creates the new schema directly.
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "premind-store-test-"))
@@ -1954,6 +2002,11 @@ describe("StateStore", () => {
       .db.prepare(`PRAGMA table_info(pr_events)`)
       .all()
     assert.ok(columns.some((c) => c.name === "reference_link"))
+    const subscriptionColumns = (reopened as unknown as { db: { prepare: (sql: string) => { all: () => Array<{ name: string }> } } })
+      .db.prepare(`PRAGMA table_info(session_subscriptions)`)
+      .all()
+    assert.ok(subscriptionColumns.some((c) => c.name === "ownership"))
+    assert.ok(subscriptionColumns.some((c) => c.name === "policy"))
     reopened.close()
   })
 
@@ -2063,6 +2116,8 @@ describe("StateStore", () => {
     })
 
     assert.equal(upgraded.source, "manual")
+    assert.equal(upgraded.ownership, "unknown")
+    assert.equal(upgraded.policy, "observe-only")
     assert.equal(store.listSessionSubscriptions("session-subscriptions", "active").length, 2)
 
     store.deactivateAutomaticSubscriptions("session-subscriptions")

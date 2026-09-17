@@ -333,13 +333,23 @@ export class Router {
 			);
 		}
 
+		const stored = this.store.upsertSubscription({
+			sessionId: payload.sessionId,
+			repo,
+			prNumber: payload.prNumber,
+			source: "manual",
+		});
 		return this.ok({
-			subscription: this.store.upsertSubscription({
-				sessionId: payload.sessionId,
-				repo,
-				prNumber: payload.prNumber,
-				source: "manual",
-			}),
+			subscription: {
+				subscriptionId: stored.subscriptionId,
+				sessionId: stored.sessionId,
+				repo: stored.repo,
+				prNumber: stored.prNumber,
+				source: stored.source,
+				state: stored.state,
+				lastDeliveredEventSeq: stored.lastDeliveredEventSeq,
+				updatedAt: stored.updatedAt,
+			},
 		});
 	}
 

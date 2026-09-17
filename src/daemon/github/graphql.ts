@@ -26,6 +26,7 @@ export const PR_SNAPSHOT_QUERY = /* GraphQL */ `
         number
         title
         url
+        author { login }
         state
         isDraft
         headRefName
@@ -170,6 +171,7 @@ type PullRequestQueryData = {
       title: string
       url: string
       state: string
+      author?: { login?: string | null } | null
       isDraft: boolean
       headRefName: string
       baseRefName: string
@@ -346,6 +348,7 @@ export async function fetchPullRequestSnapshotGraphQL(
     number: pr.number,
     title: pr.title,
     url: pr.url,
+    authorLogin: pr.author?.login ?? null,
     state: pr.state,
     isDraft: pr.isDraft,
     headRefName: pr.headRefName,

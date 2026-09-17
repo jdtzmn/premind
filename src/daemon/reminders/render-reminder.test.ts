@@ -20,8 +20,12 @@ const row = (kind: string, payload: Record<string, unknown> = {}): ReminderSourc
   seq: 1, kind, priority: "high", summary: "alice requested changes", reference_link: null,
   payload_json: JSON.stringify(payload),
 })
-const render = (rows: ReminderSourceEvent[], current: PullRequestSnapshot | null, source: "automatic" | "manual" = "automatic") =>
-  renderReminder(rows, current, { repo: "acme/repo", prNumber: 7, source }).reminderText
+const render = (
+  rows: ReminderSourceEvent[], current: PullRequestSnapshot | null, source: "automatic" | "manual" = "automatic",
+  policy?: "actionable" | "observe-only", worktreeMatchesTarget?: boolean,
+ ) => renderReminder(rows, current, {
+  repo: "acme/repo", prNumber: 7, source, policy, worktreeMatchesTarget,
+ }).reminderText
 
 for (const kind of ["pr.snapshot.initialized", "pr.review_decision.changes_requested", "review.changes_requested"]) {
   test(`${kind} has explicit review policy without a CI instruction`, () => {
@@ -59,6 +63,19 @@ test("approved, dismissed and superseded reviews are not actionable", () => {
   assert.doesNotMatch(render(rows, current), /Review action required:/)
 })
 
+
+test("verified self-owned manual subscriptions can act only from the target worktree", () => {
+  const current = snapshot()
+  current.checks = [{ name: "lint", state: "FAILURE" }]
+  const failed = row("check.failed", { name: "lint", headSha: "head" })
+  const ready = render([failed], current, "manual", "actionable", true)
+  assert.match(ready, /verified as yours/)
+  assert.match(ready, /resolve the failing check/)
+  assert.doesNotMatch(ready, /wait for authorization/)
+  const wrongWorktree = render([failed], current, "manual", "actionable", false)
+  assert.match(wrongWorktree, /do not make changes until you activate the matching worktree/)
+  assert.doesNotMatch(wrongWorktree, /resolve the failing check/)
+})
 test("unknown review history requires verification rather than asserting a current blocker", () => {
   for (const current of [null, { ...snapshot(), reviews: [] }]) {
     const text = render([row("review.changes_requested", { reviewId: 99 })], current)

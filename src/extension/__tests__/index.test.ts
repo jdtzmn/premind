@@ -83,6 +83,9 @@ type ToolResult = { content: Array<{ type: "text"; text: string }> };
 
 type ToolDefinition = {
 	name: string;
+	description?: string;
+	promptSnippet?: string;
+	promptGuidelines?: string[];
 	execute: (
 		toolCallId: string,
 		params: Record<string, unknown>,
@@ -256,6 +259,10 @@ const createClient = (
 					`unsubscribe:${payload.sessionId}:${payload.repo ?? "default"}:${payload.prNumber}`,
 				);
 			},
+			setGlobalDisabled: async (disabled: boolean) => {
+				operations.push(`setGlobalDisabled:${disabled}`);
+				return { disabled };
+			},
 			updateSessionState: async (payload: {
 				sessionId: string;
 				busyState: string;
@@ -326,19 +333,44 @@ describe("premind Pi extension", () => {
 		assert.ok(mock.events.has("turn_end"));
 		assert.ok(mock.renderers.has("premind-reminder"));
 		assert.ok(mock.commands.has("premind:status"));
+		assert.ok(mock.commands.has("premind:doctor"));
+		assert.ok(mock.commands.has("premind:enable"));
+		assert.ok(mock.commands.has("premind:disable"));
 		assert.ok(mock.commands.has("premind:prune"));
-		assert.ok(mock.commands.has("premind:activate-worktree"));
+		assert.ok(mock.commands.has("premind:set-active-checkout"));
+		assert.equal(mock.commands.has("premind:activate-worktree"), false);
 		assert.ok(mock.commands.has("premind:subscribe"));
 		assert.ok(mock.commands.has("premind:unsubscribe"));
 		assert.equal(mock.commands.has("premind:pause"), false);
 		assert.equal(mock.commands.has("premind:resume"), false);
+		assert.ok(mock.commands.has("premind:deliver"));
 		assert.ok(mock.commands.has("premind:flush"));
 		assert.equal(mock.tools.has("premind_pause"), false);
 		assert.equal(mock.tools.has("premind_resume"), false);
-		assert.ok(mock.tools.has("premind_activate_worktree"));
+		assert.ok(mock.tools.has("premind_deliver"));
+		assert.ok(mock.tools.has("premind_doctor"));
+		assert.ok(mock.tools.has("premind_enable"));
+		assert.ok(mock.tools.has("premind_disable"));
+		assert.ok(mock.tools.has("premind_set_active_checkout"));
+		assert.equal(mock.tools.has("premind_activate_worktree"), false);
 		assert.ok(mock.tools.has("premind_subscribe"));
 		assert.ok(mock.tools.has("premind_unsubscribe"));
 		assert.ok(mock.tools.has("premind_status"));
+		const activeCheckoutTool = mock.tools.get("premind_set_active_checkout");
+		assert.ok(activeCheckoutTool);
+		assert.equal(
+			activeCheckoutTool.description,
+			"Set the active Git checkout for the current premind session.",
+		);
+		assert.deepEqual(activeCheckoutTool.promptGuidelines, [
+			"Call premind_set_active_checkout at the start of any PR work, including when already in the startup checkout, and again after switching branches before creating or following a PR.",
+		]);
+		const subscribeTool = mock.tools.get("premind_subscribe");
+		assert.ok(subscribeTool);
+		assert.equal(
+			subscribeTool.description,
+			"Mandatory PR tracking: Immediately call this tool after creating, opening, discovering, or beginning work on a pull request. Do this before reporting the PR URL or status to the user. Applies after gh pr create, gh stack submit, gh stack link, or any equivalent GitHub operation.",
+		);
 	});
 
 	test("renders reminder messages as concise PR change bullets", () => {
@@ -876,6 +908,63 @@ describe("premind Pi extension", () => {
 		);
 	});
 
+	test("/premind:doctor reports Pi runtime and delivery health", async () => {
+		const mock = createMockPi();
+		const client = createClient();
+		const notifications: Array<{ message: string; level: string }> = [];
+		createPremindPiExtension({
+			createDaemonClient: () => client.client,
+			config: { statusPollIntervalMs: 0 },
+		})(mock.pi as never);
+
+		const command = mock.commands.get("premind:doctor");
+		assert.ok(command);
+		await command.handler("", createCommandContext(notifications));
+
+		assert.match(notifications[0]?.message ?? "", /premind doctor v\d+\.\d+\.\d+/);
+		assert.match(notifications[0]?.message ?? "", /host: pi/);
+		assert.match(notifications[0]?.message ?? "", /daemon: reachable \(protocol 1\)/);
+		assert.match(notifications[0]?.message ?? "", /follow-up messages can wake an idle Pi session/);
+	});
+
+	test("global polling commands and tools target the daemon-wide switch", async () => {
+		const mock = createMockPi();
+		const client = createClient();
+		const notifications: Array<{ message: string; level: string }> = [];
+		createPremindPiExtension({
+			createDaemonClient: () => client.client,
+			config: { statusPollIntervalMs: 0 },
+		})(mock.pi as never);
+
+		const disable = mock.commands.get("premind:disable");
+		const enable = mock.commands.get("premind:enable");
+		const disableTool = mock.tools.get("premind_disable");
+		const enableTool = mock.tools.get("premind_enable");
+		assert.ok(disable);
+		assert.ok(enable);
+		assert.ok(disableTool);
+		assert.ok(enableTool);
+
+		await disable.handler("", createCommandContext(notifications));
+		await enable.handler("", createCommandContext(notifications));
+		await disableTool.execute("tool-1", {}, undefined, undefined, {});
+		await enableTool.execute("tool-2", {}, undefined, undefined, {});
+
+		assert.deepEqual(client.operations, [
+			"setGlobalDisabled:true",
+			"setGlobalDisabled:false",
+			"setGlobalDisabled:true",
+			"setGlobalDisabled:false",
+		]);
+		assert.deepEqual(
+			notifications.map(({ message }) => message),
+			[
+				"premind polling is disabled globally.",
+				"premind polling is enabled globally.",
+			],
+		);
+	});
+
 	test("/premind:prune prunes closed sessions", async () => {
 		const mock = createMockPi();
 		const client = createClient({
@@ -899,7 +988,7 @@ describe("premind Pi extension", () => {
 		);
 	});
 
-	test("worktree and subscription commands and tools target the current session", async () => {
+	test("active checkout and subscription commands and tools target the current session", async () => {
 		const mock = createMockPi();
 		const client = createClient();
 		const notifications: Array<{ message: string; level: string }> = [];
@@ -908,24 +997,24 @@ describe("premind Pi extension", () => {
 			config: { statusPollIntervalMs: 0 },
 		})(mock.pi as never);
 
-		const activate = mock.commands.get("premind:activate-worktree");
+		const setActiveCheckout = mock.commands.get("premind:set-active-checkout");
 		const subscribe = mock.commands.get("premind:subscribe");
 		const unsubscribe = mock.commands.get("premind:unsubscribe");
-		const activateTool = mock.tools.get("premind_activate_worktree");
+		const setActiveCheckoutTool = mock.tools.get("premind_set_active_checkout");
 		const subscribeTool = mock.tools.get("premind_subscribe");
 		const unsubscribeTool = mock.tools.get("premind_unsubscribe");
-		assert.ok(activate);
+		assert.ok(setActiveCheckout);
 		assert.ok(subscribe);
 		assert.ok(unsubscribe);
-		assert.ok(activateTool);
+		assert.ok(setActiveCheckoutTool);
 		assert.ok(subscribeTool);
 		assert.ok(unsubscribeTool);
 
 		const ctx = createCommandContext(notifications);
-		await activate.handler("/tmp/other-worktree", ctx);
+		await setActiveCheckout.handler("/tmp/other-worktree", ctx);
 		await subscribe.handler("42 owner/repo", ctx);
 		await unsubscribe.handler("42 owner/repo", ctx);
-		await activateTool.execute(
+		await setActiveCheckoutTool.execute(
 			"tool-call-1",
 			{ path: "/tmp/tool-worktree" },
 			undefined,
@@ -958,14 +1047,14 @@ describe("premind Pi extension", () => {
 		assert.deepEqual(
 			notifications.map((notification) => notification.message),
 			[
-				"premind activated worktree /tmp/other-worktree.",
+				"premind set active checkout /tmp/other-worktree.",
 				"premind subscribed to owner/repo#42.",
 				"premind unsubscribed from owner/repo#42.",
 			],
 		);
 	});
 
-	test("/premind:flush reports when there is no pending reminder", async () => {
+	test("/premind:deliver reports when there is no pending reminder", async () => {
 		const mock = createMockPi();
 		const client = createClient();
 		const notifications: Array<{ message: string; level: string }> = [];
@@ -974,7 +1063,7 @@ describe("premind Pi extension", () => {
 			config: { statusPollIntervalMs: 0 },
 		})(mock.pi as never);
 
-		const command = mock.commands.get("premind:flush");
+		const command = mock.commands.get("premind:deliver");
 		assert.ok(command);
 		await command.handler("", createCommandContext(notifications));
 
@@ -1030,7 +1119,7 @@ describe("premind Pi extension", () => {
 		);
 	});
 
-	test("/premind:flush sends a follow-up message and confirms the batch", async () => {
+	test("/premind:deliver sends a follow-up message and confirms the batch", async () => {
 		const mock = createMockPi();
 		const client = createClient({ pendingBatch: reminderBatch });
 		const notifications: Array<{ message: string; level: string }> = [];
@@ -1039,7 +1128,7 @@ describe("premind Pi extension", () => {
 			config: { statusPollIntervalMs: 0 },
 		})(mock.pi as never);
 
-		const command = mock.commands.get("premind:flush");
+		const command = mock.commands.get("premind:deliver");
 		assert.ok(command);
 		await command.handler("", createCommandContext(notifications));
 
@@ -1063,6 +1152,31 @@ describe("premind Pi extension", () => {
 			"premind delivered 1 reminder batch.",
 		);
 	});
+	test("premind_deliver tool uses the canonical delivery path", async () => {
+		const mock = createMockPi();
+		const client = createClient({ pendingBatch: reminderBatch });
+		createPremindPiExtension({
+			createDaemonClient: () => client.client,
+			config: { statusPollIntervalMs: 0 },
+		})(mock.pi as never);
+
+		const tool = mock.tools.get("premind_deliver");
+		assert.ok(tool);
+		const result = await tool.execute(
+			"tool-call-1",
+			{},
+			undefined,
+			undefined,
+			createCommandContext([]),
+		);
+
+		assert.equal(result.content[0]?.text, "premind delivered 1 reminder batch.");
+		assert.deepEqual(client.operations, [
+			"claimReminderBundle:/tmp/session.jsonl",
+			"ackReminderBundle:/tmp/session.jsonl:confirmed",
+		]);
+	});
+
 
 	test("premind_status tool returns daemon status", async () => {
 		const mock = createMockPi();

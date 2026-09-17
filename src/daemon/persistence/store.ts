@@ -78,6 +78,8 @@ type SessionLeaseRow = {
 };
 
 export type SubscriptionSource = "automatic" | "manual";
+export type SubscriptionOwnership = "self" | "foreign" | "unknown";
+export type SubscriptionPolicy = "actionable" | "observe-only";
 export type SubscriptionState = "active" | "unsubscribed";
 
 export type PrWatcherRecord = {
@@ -121,6 +123,8 @@ export type SessionSubscription = {
 	repo: string;
 	prNumber: number;
 	source: SubscriptionSource;
+	ownership: SubscriptionOwnership;
+	policy: SubscriptionPolicy;
 	state: SubscriptionState;
 	lastDeliveredEventSeq: number;
 	updatedAt: number;
@@ -167,8 +171,15 @@ type ReminderTarget = {
 	repo: string;
 	prNumber?: number;
 	source?: SubscriptionSource;
+	policy?: SubscriptionPolicy;
+	worktreeMatchesTarget?: boolean;
 };
 
+
+const ownershipFor = (authorLogin: string | null | undefined, viewerLogin: string | null | undefined): SubscriptionOwnership => {
+  if (!authorLogin || !viewerLogin) return "unknown";
+  return authorLogin.toLowerCase() === viewerLogin.toLowerCase() ? "self" : "foreign";
+};
 type ReminderEventWindow = {
 	sourceEventIds: number[];
 	maximumEventSequence: number;
@@ -812,10 +823,12 @@ export class StateStore {
 			this.db
 				.prepare(
 					`
-					INSERT INTO session_subscriptions (subscription_id, session_id, repo, pr_number, source, state, last_delivered_event_seq, created_at, updated_at)
-					VALUES (:subscriptionId, :sessionId, :repo, :prNumber, :source, 'active', 0, :now, :now)
+					INSERT INTO session_subscriptions (subscription_id, session_id, repo, pr_number, source, ownership, policy, state, last_delivered_event_seq, created_at, updated_at)
+					VALUES (:subscriptionId, :sessionId, :repo, :prNumber, :source, 'unknown', 'observe-only', 'active', 0, :now, :now)
 					ON CONFLICT(session_id, repo, pr_number) DO UPDATE SET
 						source = CASE WHEN session_subscriptions.source = 'manual' OR excluded.source = 'manual' THEN 'manual' ELSE 'automatic' END,
+						ownership = CASE WHEN session_subscriptions.source = 'manual' OR excluded.source = 'manual' THEN 'unknown' ELSE session_subscriptions.ownership END,
+						policy = CASE WHEN session_subscriptions.source = 'manual' OR excluded.source = 'manual' THEN 'observe-only' ELSE session_subscriptions.policy END,
 						state = 'active',
 						updated_at = excluded.updated_at
 					`,
@@ -823,6 +836,35 @@ export class StateStore {
 				.run({ ...input, subscriptionId: randomUUID(), now });
 			this.touchPrWatcher(input.repo, input.prNumber, now);
 			return this.getSubscription(input.sessionId, input.repo, input.prNumber)!;
+		});
+	}
+
+	reconcileSubscriptionPolicies(
+		repo: string,
+		prNumber: number,
+		authorLogin: string | null | undefined,
+		viewerLogin: string | null | undefined,
+		now = Date.now(),
+	): number {
+		const ownership = ownershipFor(authorLogin, viewerLogin);
+		const policy: SubscriptionPolicy = ownership === "self" ? "actionable" : "observe-only";
+		return this.transaction(() => {
+			const result = this.db.prepare(`
+				UPDATE session_subscriptions
+				SET ownership = :ownership, policy = :policy, updated_at = :now
+				WHERE repo = :repo AND pr_number = :prNumber AND state = 'active'
+				  AND (ownership != :ownership OR policy != :policy)
+			`).run({ repo, prNumber, ownership, policy, now });
+			if ((result.changes as number) > 0) {
+				this.db.prepare(`
+					DELETE FROM reminder_batches
+					WHERE state != 'handed_off' AND subscription_id IN (
+						SELECT subscription_id FROM session_subscriptions
+						WHERE repo = :repo AND pr_number = :prNumber AND state = 'active'
+					)
+				`).run({ repo, prNumber });
+			}
+			return result.changes as number;
 		});
 	}
 
@@ -842,6 +884,8 @@ export class StateStore {
 					repo: string;
 					pr_number: number;
 					source: SubscriptionSource;
+					ownership: SubscriptionOwnership;
+					policy: SubscriptionPolicy;
 					state: SubscriptionState;
 					last_delivered_event_seq: number;
 					updated_at: number;
@@ -860,6 +904,8 @@ export class StateStore {
 					repo: string;
 					pr_number: number;
 					source: SubscriptionSource;
+					ownership: SubscriptionOwnership;
+					policy: SubscriptionPolicy;
 					state: SubscriptionState;
 					last_delivered_event_seq: number;
 					updated_at: number;
@@ -874,6 +920,8 @@ export class StateStore {
 		repo: string;
 		pr_number: number;
 		source: SubscriptionSource;
+		ownership: SubscriptionOwnership;
+		policy: SubscriptionPolicy;
 		state: SubscriptionState;
 		last_delivered_event_seq: number;
 		updated_at: number;
@@ -884,6 +932,8 @@ export class StateStore {
 			repo: row.repo,
 			prNumber: row.pr_number,
 			source: row.source,
+			ownership: row.ownership,
+			policy: row.policy,
 			state: row.state,
 			lastDeliveredEventSeq: row.last_delivered_event_seq,
 			updatedAt: row.updated_at,
@@ -909,6 +959,8 @@ export class StateStore {
 			repo: string;
 			pr_number: number;
 			source: SubscriptionSource;
+			ownership: SubscriptionOwnership;
+			policy: SubscriptionPolicy;
 			state: SubscriptionState;
 			last_delivered_event_seq: number;
 			updated_at: number;
@@ -919,6 +971,8 @@ export class StateStore {
 			repo: row.repo,
 			prNumber: row.pr_number,
 			source: row.source,
+			ownership: row.ownership,
+			policy: row.policy,
 			state: row.state,
 			lastDeliveredEventSeq: row.last_delivered_event_seq,
 			updatedAt: row.updated_at,
@@ -946,6 +1000,8 @@ export class StateStore {
 			repo: string;
 			pr_number: number;
 			source: SubscriptionSource;
+			ownership: SubscriptionOwnership;
+			policy: SubscriptionPolicy;
 			state: SubscriptionState;
 			last_delivered_event_seq: number;
 			updated_at: number;
@@ -956,6 +1012,8 @@ export class StateStore {
 			repo: row.repo,
 			prNumber: row.pr_number,
 			source: row.source,
+			ownership: row.ownership,
+			policy: row.policy,
 			state: row.state,
 			lastDeliveredEventSeq: row.last_delivered_event_seq,
 			updatedAt: row.updated_at,
@@ -972,8 +1030,7 @@ export class StateStore {
 				input.repo,
 				input.prNumber,
 			);
-			if (existing?.source === "manual" || existing?.state === "active")
-				return existing;
+			if (existing?.source === "manual") return existing;
 
 			// A session that already held this subscription is re-attaching (every
 			// `activateWorktree` deactivates automatic subscriptions, so this happens
@@ -995,12 +1052,14 @@ export class StateStore {
 			const subscriptionId = existing?.subscriptionId ?? randomUUID();
 			this.db
 				.prepare(
-					`INSERT INTO session_subscriptions (subscription_id, session_id, repo, pr_number, source, state, last_delivered_event_seq, created_at, updated_at)
-					 VALUES (:subscriptionId, :sessionId, :repo, :prNumber, 'automatic', 'active', :cursor, :now, :now)
+					`INSERT INTO session_subscriptions (subscription_id, session_id, repo, pr_number, source, ownership, policy, state, last_delivered_event_seq, created_at, updated_at)
+					 VALUES (:subscriptionId, :sessionId, :repo, :prNumber, 'automatic', 'self', 'actionable', 'active', :cursor, :now, :now)
 					 ON CONFLICT(session_id, repo, pr_number) DO UPDATE SET
+					   ownership = 'self',
+					   policy = 'actionable',
 					   state = 'active',
 					   last_delivered_event_seq = :cursor,
-					   updated_at = :now`,
+					   updated_at = :now`
 				)
 				.run({ ...input, subscriptionId, cursor, now });
 			this.touchPrWatcher(input.repo, input.prNumber, now);
@@ -2431,15 +2490,32 @@ export class StateStore {
 		record: ReminderBatchRecord,
 	): ReminderTarget | null {
 		const session = this.getSession(record.sessionId);
-		const repo = record.repo ?? session?.repo;
+		const subscription = record.subscriptionId
+			? this.getSubscriptionById(record.subscriptionId)
+			: null;
+		const repo = subscription?.repo ?? record.repo ?? session?.repo;
 		if (!repo) {
 			return null;
 		}
 
+		const prNumber =
+			subscription?.prNumber ?? record.prNumber ?? session?.pr_number ?? undefined;
+		const policy = subscription?.policy;
+		const snapshot = prNumber ? this.getSnapshot(repo, prNumber) : null;
+		const worktree = policy === "actionable"
+			? this.getWorktreeBinding(record.sessionId)
+			: null;
+		const worktreeMatchesTarget = policy === "actionable"
+			? worktree?.repo === repo &&
+				worktree.branch === snapshot?.core.headRefName
+			: undefined;
+
 		return {
 			repo,
-			prNumber: record.prNumber ?? session?.pr_number ?? undefined,
-			source: record.source,
+			prNumber,
+			source: subscription?.source ?? record.source,
+			policy,
+			worktreeMatchesTarget,
 		};
 	}
 
@@ -2820,13 +2896,22 @@ export class StateStore {
 			: this.listUndeliveredEvents(sessionId);
 		if (events.length === 0) return null;
 		const maxEventSeq = events.at(-1)!.seq;
+		const targetSnapshot = targetPrNumber
+			? this.getSnapshot(targetRepo, targetPrNumber) : null;
+		const worktree = subscription?.policy === "actionable"
+			? this.getWorktreeBinding(sessionId) : null;
+		const worktreeMatchesTarget = subscription?.policy === "actionable"
+			? worktree?.repo === targetRepo &&
+				worktree.branch === targetSnapshot?.core.headRefName : undefined;
 		const { reminderText, events: condensed } = renderReminder(
 			events,
-			targetPrNumber ? this.getSnapshot(targetRepo, targetPrNumber) : null,
+			targetSnapshot,
 			{
 				repo: targetRepo,
 				prNumber: targetPrNumber ?? undefined,
 				source: subscription?.source,
+				policy: subscription?.policy,
+				worktreeMatchesTarget,
 			},
 		);
 		const batchId = this.createOrReplaceReminder(
@@ -3014,6 +3099,8 @@ export class StateStore {
         repo TEXT NOT NULL,
         pr_number INTEGER NOT NULL,
         source TEXT NOT NULL CHECK(source IN ('automatic', 'manual')),
+        ownership TEXT NOT NULL DEFAULT 'unknown' CHECK(ownership IN ('self', 'foreign', 'unknown')),
+        policy TEXT NOT NULL DEFAULT 'observe-only' CHECK(policy IN ('actionable', 'observe-only')),
         state TEXT NOT NULL CHECK(state IN ('active', 'unsubscribed')),
         last_delivered_event_seq INTEGER NOT NULL DEFAULT 0,
         created_at INTEGER NOT NULL,
@@ -3149,6 +3236,20 @@ export class StateStore {
 			CREATE UNIQUE INDEX IF NOT EXISTS sessions_host_session_id_unique
 			ON sessions(host, host_session_id);
 		`);
+
+		const subscriptionColumns = this.db
+			.prepare(`PRAGMA table_info(session_subscriptions)`)
+			.all() as Array<{ name: string }>;
+		if (!subscriptionColumns.some((column) => column.name === "ownership")) {
+			this.db.exec(
+				"ALTER TABLE session_subscriptions ADD COLUMN ownership TEXT NOT NULL DEFAULT 'unknown'",
+			);
+		}
+		if (!subscriptionColumns.some((column) => column.name === "policy")) {
+			this.db.exec(
+				"ALTER TABLE session_subscriptions ADD COLUMN policy TEXT NOT NULL DEFAULT 'observe-only'",
+			);
+		}
 
 		this.db
 			.prepare(

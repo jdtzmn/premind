@@ -2,6 +2,8 @@ export type PullRequestCore = {
   number: number
   title: string
   url: string
+  /** GitHub login of the PR author, when the snapshot could verify it. */
+  authorLogin?: string | null
   state: string
   isDraft: boolean
   headRefName: string

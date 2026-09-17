@@ -14,9 +14,9 @@ Ship Claude Code support as a self-contained `plugin-claude/` plugin. It reuses 
 6. **Mismatch safety:** if a hook/MCP session identity mismatch is observed, session-scoped tools fail closed and instruct the user to reload/restart the plugin. Do not guess based on cwd, MCP connection IDs, or a process-global map.
 7. **Session lifecycle:** persist an explicit session host/origin. Lease-orphan pruning applies only to lease-backed hosts (OpenCode/Pi). Claude sessions close through `SessionEnd` and stale-session reaping; active Claude sessions and their queued reminders must survive generic lease pruning.
 8. **Reminder acknowledgement:** use two-phase confirmation. A Stop hook atomically claims a batch as `handed_off` and emits it. On the next Stop event with `stop_hook_active: true`, atomically confirm that same session's prior handoff. If that continuation never happens, stale-handoff recovery makes the batch retryable. Never confirm merely because hook output was prepared.
-9. **MCP tools:** plugin MCP names are platform-owned (`mcp__plugin_premind_premind__<tool>`). v0.2 ships `status`, `probe`, `enable`, `disable`, `activate_worktree`, `subscribe`, and `unsubscribe`; it does not ship `send_now`. Status/probe redact unrelated session metadata. Keep enable/disable model-callable for Pi/OpenCode parity and make their daemon-wide effect explicit in descriptions/results.
+9. **MCP tools:** plugin MCP names are platform-owned (`mcp__plugin_premind_premind__<tool>`). v0.2 ships `status`, `probe`, `enable`, `disable`, `set_active_checkout`, `subscribe`, and `unsubscribe`. It does not ship a delivery MCP tool because `/premind:deliver` ends its command turn and lets the normal Stop hook own the complete claim/inject/confirm lifecycle. Call `set_active_checkout` at the start of any PR work—including when already in the startup checkout—and again after switching branches before creating or following a PR. Status/probe redact unrelated session metadata. Keep enable/disable model-callable for Pi/OpenCode parity and make their daemon-wide effect explicit in descriptions/results.
 10. **Config migration:** prefer `~/.config/premind/premind.jsonc`; fall back to the OpenCode path through v0.2 and remove fallback in v0.3. A valid empty new config masks legacy settings. A malformed new config logs a warning and uses a valid legacy file during the grace release. `idleDeliveryThresholdMs` is OpenCode-only.
-11. **User UX:** ship `/premind:status`, `/premind:doctor`, `/premind:enable`, `/premind:disable`, `/premind:subscribe`, and `/premind:unsubscribe`. Doctor reports Node/runtime compatibility, plugin version/root, daemon/socket protocol reachability, config source, and Stop-boundary semantics. The first Claude reminder briefly explains that inactive sessions are not woken in v0.2.
+11. **User UX:** ship `/premind:status`, `/premind:doctor`, `/premind:deliver`, `/premind:enable`, `/premind:disable`, `/premind:subscribe`, and `/premind:unsubscribe`. Doctor reports Node/runtime compatibility, plugin version/root, daemon/socket protocol reachability, config source, and Stop-boundary semantics. Deliver is a no-op command turn that triggers the normal Stop delivery path. The first Claude reminder briefly explains that inactive sessions are not woken in v0.2.
 
 ## Phase 0 evidence
 
@@ -99,8 +99,8 @@ The plugin-bundled stdio MCP server is a thin IPC proxy. It reads `CLAUDE_CODE_S
 - `status` returns aggregate, redacted daemon information.
 - `probe` reports plugin/daemon/config/runtime health without unrelated session details.
 - `enable` and `disable` change the existing daemon-wide polling switch and state their global effect.
-- `activate_worktree`, `subscribe`, and `unsubscribe` act only on the validated environment-derived Claude session.
-- `send_now` is deferred because it conflicts with Stop-only delivery acknowledgement.
+- `set_active_checkout` updates the active checkout for the validated environment-derived Claude session; call it at the start of PR work and after a branch switch. `subscribe` and `unsubscribe` also act only on that session.
+- Delivery remains command-and-hook driven: `/premind:deliver` ends its turn and the Stop hook performs the existing recoverable handoff.
 
 ## Implementation phases
 

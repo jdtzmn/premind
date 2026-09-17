@@ -1,8 +1,30 @@
 #!/usr/bin/env node
+import { existsSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
 import { request } from "./lib.mjs";
 import { ensureDaemonRunning } from "./ensure-daemon.mjs";
+
+const PLUGIN_VERSION = "0.2.0";
+const REQUIRED_NODE = { major: 22, minor: 13 };
+const defaultPluginRoot = fileURLToPath(new URL("../", import.meta.url));
+
+const isNodeCompatible = (version = process.versions.node) => {
+  const [major = 0, minor = 0] = version.split(".").map(Number);
+  return major > REQUIRED_NODE.major ||
+    (major === REQUIRED_NODE.major && minor >= REQUIRED_NODE.minor);
+};
+
+const resolveConfigSource = (environment = process.env) => {
+  const home = environment.HOME ?? homedir();
+  const primary = join(home, ".config", "premind", "premind.jsonc");
+  const legacy = join(home, ".config", "opencode", "premind.jsonc");
+  if (existsSync(primary)) return primary;
+  if (existsSync(legacy)) return `${legacy} (legacy fallback)`;
+  return "schema defaults";
+};
 
 const tools = [
   {
@@ -17,7 +39,7 @@ const tools = [
   {
     name: "probe",
     description:
-      "Check whether the Premind daemon is reachable without exposing session data.",
+      "Report Claude plugin, Node runtime, configuration, daemon, and delivery health without exposing session data.",
     inputSchema: {
       type: "object",
       properties: {},
@@ -45,8 +67,9 @@ const tools = [
     },
   },
   {
-    name: "activate_worktree",
-    description: "Bind the current Claude session to a worktree path.",
+    name: "set_active_checkout",
+    description:
+      "Set the active Git checkout for this Claude session. Call this at the start of any PR work, including when already in the startup checkout, and again after switching branches before creating or following a PR.",
     inputSchema: {
       type: "object",
       properties: { path: { type: "string" } },
@@ -56,7 +79,8 @@ const tools = [
   },
   {
     name: "subscribe",
-    description: "Subscribe the current Claude session to a pull request.",
+    description:
+      "Mandatory PR tracking: Immediately call this tool after creating, opening, discovering, or beginning work on a pull request. Do this before reporting the PR URL or status to the user. Applies after gh pr create, gh stack submit, gh stack link, or any equivalent GitHub operation.",
     inputSchema: {
       type: "object",
       properties: {
@@ -121,11 +145,34 @@ export const handleMcpRequest = async (
     );
   }
   if (name === "probe") {
-    const disabled = await ipc("getGlobalDisabled", {});
+    const [disabledResult, statusResult] = await Promise.allSettled([
+      ipc("getGlobalDisabled", {}),
+      ipc("debugStatus", {}),
+    ]);
+    const reachable =
+      disabledResult.status === "fulfilled" && statusResult.status === "fulfilled";
+    const disabled =
+      disabledResult.status === "fulfilled" ? disabledResult.value : undefined;
+    const status =
+      statusResult.status === "fulfilled" ? statusResult.value : undefined;
     return text(
       JSON.stringify({
-        reachable: true,
-        globallyDisabled: Boolean(disabled.disabled),
+        plugin: {
+          version: PLUGIN_VERSION,
+          root: environment.CLAUDE_PLUGIN_ROOT ?? defaultPluginRoot,
+        },
+        runtime: {
+          node: process.versions.node,
+          requiredNode: ">=22.13.0",
+          compatible: isNodeCompatible(),
+        },
+        daemon: {
+          reachable,
+          protocolVersion: status?.daemon?.protocolVersion ?? null,
+          globallyDisabled: disabled ? Boolean(disabled.disabled) : null,
+          ...(reachable ? {} : { error: "Premind daemon is unavailable." }),
+        },
+        configSource: resolveConfigSource(environment),
         delivery:
           "Stop-boundary only; inactive Claude sessions are not woken in v0.2",
       }),
@@ -142,13 +189,13 @@ export const handleMcpRequest = async (
 
   const sessionId = getBoundClaudeSessionId(environment);
   if (!sessionId) return bindingError();
-  if (name === "activate_worktree") {
+  if (name === "set_active_checkout") {
     const result = await ipc("activateWorktree", {
       sessionId,
       path: args.path,
     });
     return text(
-      `Premind is watching ${result.binding.repo} from this Claude session.`,
+      `Premind set the active checkout for this Claude session to ${result.binding.repo}.`,
     );
   }
   if (name === "subscribe" || name === "unsubscribe") {
