@@ -57,7 +57,8 @@ const tools = [
   },
   {
     name: "subscribe",
-    description: "Subscribe the current Claude session to a pull request.",
+    description:
+      "Mandatory PR tracking: Immediately call this tool after creating, opening, discovering, or beginning work on a pull request. Do this before reporting the PR URL or status to the user. Applies after gh pr create, gh stack submit, gh stack link, or any equivalent GitHub operation.",
     inputSchema: {
       type: "object",
       properties: {

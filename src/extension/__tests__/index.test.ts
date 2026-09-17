@@ -351,6 +351,12 @@ describe("premind Pi extension", () => {
 		assert.deepEqual(activeCheckoutTool.promptGuidelines, [
 			"Call premind_set_active_checkout at the start of any PR work, including when already in the startup checkout, and again after switching branches before creating or following a PR.",
 		]);
+		const subscribeTool = mock.tools.get("premind_subscribe");
+		assert.ok(subscribeTool);
+		assert.equal(
+			subscribeTool.description,
+			"Mandatory PR tracking: Immediately call this tool after creating, opening, discovering, or beginning work on a pull request. Do this before reporting the PR URL or status to the user. Applies after gh pr create, gh stack submit, gh stack link, or any equivalent GitHub operation.",
+		);
 	});
 
 	test("renders reminder messages as concise PR change bullets", () => {

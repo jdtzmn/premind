@@ -853,7 +853,7 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
         },
       }),
       premind_subscribe: tool({
-        description: "Subscribe the current premind session to a pull request.",
+        description: "Mandatory PR tracking: Immediately call this tool after creating, opening, discovering, or beginning work on a pull request. Do this before reporting the PR URL or status to the user. Applies after gh pr create, gh stack submit, gh stack link, or any equivalent GitHub operation.",
         args: {
           prNumber: tool.schema.number().int().positive().describe("Pull request number"),
           repo: tool.schema.string().min(1).optional().describe("Optional owner/repository; defaults to the active worktree repository"),

@@ -73,6 +73,15 @@ test("lists set_active_checkout without the old worktree tool", async () => {
   assert.match(activeCheckout.description, /switching branches/i);
 });
 
+test("lists subscribe with mandatory PR tracking guidance", async () => {
+  const result = await handleMcpRequest({ method: "tools/list" });
+  const subscribe = result.tools.find((tool) => tool.name === "subscribe");
+  assert.equal(
+    subscribe.description,
+    "Mandatory PR tracking: Immediately call this tool after creating, opening, discovering, or beginning work on a pull request. Do this before reporting the PR URL or status to the user. Applies after gh pr create, gh stack submit, gh stack link, or any equivalent GitHub operation.",
+  );
+});
+
 test("set_active_checkout binds the environment-derived Claude session", async () => {
   const calls = [];
   const result = await handleMcpRequest(

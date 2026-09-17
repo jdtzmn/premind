@@ -104,7 +104,7 @@ describe("premind plugin compatibility harness", () => {
       config: (input: Record<string, unknown>) => Promise<void>
       event: (input: { event: unknown }) => Promise<void>
       "chat.message": (input: unknown, output: unknown) => Promise<void>
-      tool: Record<string, { execute: (args: unknown, ctx: unknown) => Promise<string> }>
+      tool: Record<string, { description?: string; execute: (args: unknown, ctx: unknown) => Promise<string> }>
     }
 
     // 1. Config hook registers slash commands.
@@ -185,6 +185,10 @@ describe("premind plugin compatibility harness", () => {
     assert.ok(runtime.tool.premind_set_active_checkout, "premind_set_active_checkout tool should exist")
     assert.equal(runtime.tool.premind_activate_worktree, undefined)
     assert.ok(runtime.tool.premind_subscribe, "premind_subscribe tool should exist")
+    assert.equal(
+      runtime.tool.premind_subscribe.description,
+      "Mandatory PR tracking: Immediately call this tool after creating, opening, discovering, or beginning work on a pull request. Do this before reporting the PR URL or status to the user. Applies after gh pr create, gh stack submit, gh stack link, or any equivalent GitHub operation.",
+    )
     assert.ok(runtime.tool.premind_unsubscribe, "premind_unsubscribe tool should exist")
     assert.ok(runtime.tool.premind_disable, "premind_disable tool should exist")
     assert.ok(runtime.tool.premind_enable, "premind_enable tool should exist")

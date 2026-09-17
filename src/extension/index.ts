@@ -784,7 +784,8 @@ export const createPremindPiExtension = (
 		pi.registerTool({
 			name: "premind_subscribe",
 			label: "Premind Subscribe",
-			description: "Subscribe the current session to a pull request.",
+			description:
+				"Mandatory PR tracking: Immediately call this tool after creating, opening, discovering, or beginning work on a pull request. Do this before reporting the PR URL or status to the user. Applies after gh pr create, gh stack submit, gh stack link, or any equivalent GitHub operation.",
 			parameters: Type.Object({
 				prNumber: Type.Integer({ minimum: 1 }),
 				repo: Type.Optional(Type.String({ minLength: 1 })),
