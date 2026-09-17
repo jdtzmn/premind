@@ -36,14 +36,7 @@ export const commandCapabilities = {
 		scope: "daemon",
 		description: "Diagnose adapter, configuration, and daemon health.",
 		harnesses: {
-			pi: {
-				commands: [],
-				tools: [],
-				exceptions: {
-					commands: "Planned parity work in issue 45.",
-					tools: "Planned parity work in issue 45.",
-				},
-			},
+			pi: { commands: ["premind:doctor"], tools: ["premind_doctor"] },
 			claude: { commands: ["premind:doctor"], tools: ["probe"] },
 			opencode: {
 				commands: [],

@@ -327,6 +327,7 @@ describe("premind Pi extension", () => {
 		assert.ok(mock.events.has("turn_end"));
 		assert.ok(mock.renderers.has("premind-reminder"));
 		assert.ok(mock.commands.has("premind:status"));
+		assert.ok(mock.commands.has("premind:doctor"));
 		assert.ok(mock.commands.has("premind:prune"));
 		assert.ok(mock.commands.has("premind:set-active-checkout"));
 		assert.equal(mock.commands.has("premind:activate-worktree"), false);
@@ -339,6 +340,7 @@ describe("premind Pi extension", () => {
 		assert.equal(mock.tools.has("premind_pause"), false);
 		assert.equal(mock.tools.has("premind_resume"), false);
 		assert.ok(mock.tools.has("premind_deliver"));
+		assert.ok(mock.tools.has("premind_doctor"));
 		assert.ok(mock.tools.has("premind_set_active_checkout"));
 		assert.equal(mock.tools.has("premind_activate_worktree"), false);
 		assert.ok(mock.tools.has("premind_subscribe"));
@@ -888,6 +890,25 @@ describe("premind Pi extension", () => {
 			notifications[0]?.message ?? "",
 			/owner\/repo @ feature\/pi \(PR #123\)/,
 		);
+	});
+
+	test("/premind:doctor reports Pi runtime and delivery health", async () => {
+		const mock = createMockPi();
+		const client = createClient();
+		const notifications: Array<{ message: string; level: string }> = [];
+		createPremindPiExtension({
+			createDaemonClient: () => client.client,
+			config: { statusPollIntervalMs: 0 },
+		})(mock.pi as never);
+
+		const command = mock.commands.get("premind:doctor");
+		assert.ok(command);
+		await command.handler("", createCommandContext(notifications));
+
+		assert.match(notifications[0]?.message ?? "", /premind doctor v\d+\.\d+\.\d+/);
+		assert.match(notifications[0]?.message ?? "", /host: pi/);
+		assert.match(notifications[0]?.message ?? "", /daemon: reachable \(protocol 1\)/);
+		assert.match(notifications[0]?.message ?? "", /follow-up messages can wake an idle Pi session/);
 	});
 
 	test("/premind:prune prunes closed sessions", async () => {

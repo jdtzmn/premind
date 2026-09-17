@@ -316,6 +316,29 @@ export const createPremindPiExtension = (
 			return renderPremindPiStatus(status);
 		};
 
+		const getDoctorText = async () => {
+			const lines = [
+				`premind doctor ${PREMIND_VERSION_LABEL}`,
+				"- host: pi",
+				`- extension: ${config.enabled ? "enabled" : "disabled"}`,
+				`- automatic delivery: ${config.autoDeliver ? "enabled" : "disabled"}`,
+				`- status polling: ${config.statusPollIntervalMs === 0 ? "disabled" : `${config.statusPollIntervalMs}ms`}`,
+				`- session: ${currentSessionId ? `attached (${formatSessionId(currentSessionId)})` : "not attached"}`,
+				"- delivery: follow-up messages can wake an idle Pi session",
+			];
+			try {
+				const status = await createDaemonClient().debugStatus();
+				lines.splice(2, 0, `- daemon: reachable (protocol ${status.daemon.protocolVersion})`);
+			} catch (error) {
+				lines.splice(
+					2,
+					0,
+					`- daemon: unreachable (${error instanceof Error ? error.message : String(error)})`,
+				);
+			}
+			return lines.join("\n");
+		};
+
 		const pruneClosedSessions = async () => {
 			const result = await createDaemonClient().pruneClosedSessions();
 			return result as PruneClosedSessionsResult;
@@ -647,6 +670,13 @@ export const createPremindPiExtension = (
 			},
 		});
 
+		pi.registerCommand("premind:doctor", {
+			description: "Diagnose premind extension, configuration, and daemon health",
+			handler: async (_args, ctx) => {
+				ctx.ui.notify(await getDoctorText(), "info");
+			},
+		});
+
 		pi.registerCommand("premind:prune", {
 			description:
 				"Remove closed premind sessions and their pending reminder batches from daemon state",
@@ -848,6 +878,19 @@ export const createPremindPiExtension = (
 					: "premind has no pending reminders for this session.";
 				return {
 					content: [{ type: "text" as const, text }],
+					details: {},
+				};
+			},
+		});
+
+		pi.registerTool({
+			name: "premind_doctor",
+			label: "Premind Doctor",
+			description: "Diagnose premind extension, configuration, and daemon health.",
+			parameters: Type.Object({}),
+			async execute() {
+				return {
+					content: [{ type: "text" as const, text: await getDoctorText() }],
 					details: {},
 				};
 			},
