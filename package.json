@@ -44,12 +44,15 @@
   "dependencies": {
     "@opencode-ai/plugin": "latest",
     "@opencode-ai/sdk": "latest",
+    "jsonc-parser": "^3.3.1",
+    "semver": "^7.8.5",
     "tsx": "^4.20.6",
     "xstate": "^5.32.6",
     "zod": "^3.25.76"
   },
   "devDependencies": {
     "@types/node": "^24.6.0",
+    "@types/semver": "^7.8.0",
     "typescript": "^5.9.3"
   },
   "pi": {
