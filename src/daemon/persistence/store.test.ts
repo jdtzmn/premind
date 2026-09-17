@@ -834,19 +834,27 @@ describe("StateStore", () => {
     assert.equal(recovery.prunedClients, 1)
     assert.equal(store.countActiveClients(), 0)
 
-    // The uncertain handed-off batch survives as failed so the registry can retry it.
+    // The uncertain handoff survives durably but cannot be injected while detached.
     assert.equal(recovery.resetBatches, 1)
     assert.equal(store.getReminderBatchRecord(batch.batchId)?.state, "failed")
-    assert.equal(store.getPendingReminder("session-restart")?.batchId, batch.batchId)
 
-    // Only one session on its branch — nothing deduplicated.
+    // Session, watcher state, and reminder cursor survive without an owner.
     assert.equal(recovery.dedupedSessions, 0)
-
-    // Session and watcher state should survive.
     assert.equal(recovery.recoveredSessions, 1)
-    assert.ok(store.getSession("session-restart"))
+    assert.equal(store.getSession("session-restart")?.status, "detached")
+    assert.equal(store.getPendingReminder("session-restart"), null)
 
-    // Events survive, so rebuilding should work after a new client registers.
+    // Reattachment revives delivery from the retained cursor.
+    store.registerClient("client-new", { pid: 222, projectRoot: "/tmp/project" })
+    store.ensureSessionControl({
+      clientId: "client-new",
+      sessionId: "session-restart",
+      repo: "acme/repo",
+      branch: "feature/restart",
+      isPrimary: true,
+      busyState: "idle",
+      paused: false,
+    })
     const rebuilt = store.buildReminderBatch("session-restart")
     assert.ok(rebuilt)
     assert.equal(rebuilt.events.length, 1)
@@ -1075,7 +1083,7 @@ describe("StateStore", () => {
     assert.equal(result.reaped, 1)
 
     assert.equal(store.getSession("session-fresh")?.status, "active")
-    assert.equal(store.getSession("session-stale")?.status, "closed")
+    assert.equal(store.getSession("session-stale")?.status, "detached")
     store.close()
   })
 
@@ -1100,7 +1108,7 @@ describe("StateStore", () => {
 
     const result = store.reapStaleSessions(threshold, now)
     assert.equal(result.reaped, 1)
-    assert.equal(store.getSession("session-paused-stale")?.status, "closed")
+    assert.equal(store.getSession("session-paused-stale")?.status, "detached")
     store.close()
   })
 
@@ -1623,8 +1631,17 @@ describe("StateStore", () => {
     const recovery = store.recoverFromRestart()
     assert.equal(recovery.dedupedSessions, 0)
     assert.equal(recovery.recoveredSessions, 2)
-    assert.equal(store.getSession("same-branch-a")?.status, "active")
-    assert.equal(store.getSession("same-branch-b")?.status, "active")
+    assert.equal(store.getSession("same-branch-a")?.status, "detached")
+    assert.equal(store.getSession("same-branch-b")?.status, "detached")
+    assert.equal(store.getPendingReminder("same-branch-b"), null)
+
+    store.registerClient("client-restarted", { pid: 2, projectRoot: "/tmp/project" })
+    for (const sessionId of ["same-branch-a", "same-branch-b"]) {
+      store.ensureSessionControl({
+        clientId: "client-restarted", sessionId, repo: "acme/repo",
+        branch: "feature/shared", isPrimary: true, busyState: "idle", paused: false,
+      })
+    }
     assert.equal(store.getPendingReminder("same-branch-b")?.batchId, firstB.batchId)
     confirmReminder(store, firstB.batchId, "same-branch-b")
 
@@ -2211,7 +2228,7 @@ describe("migrate: legacy pr_watchers upgrade", () => {
 })
 
 describe("migrate: session hosts", () => {
-  test("backfills legacy hosts and preserves active Claude reminder batches during lease pruning", () => {
+  test("backfills legacy hosts and preserves dormant sessions during pruning", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "premind-host-migrate-"))
     tempPaths.push(dir)
     const dbPath = path.join(dir, "premind.db")
@@ -2236,8 +2253,8 @@ describe("migrate: session hosts", () => {
     const batchId = store.createOrReplaceReminder("legacy-claude", null, "keep me", [], 0)
 
     const pruned = store.pruneClosedOrOrphanedSessions()
-    assert.equal(pruned.sessions, 1)
-    assert.equal(store.getSession("legacy-opencode"), undefined)
+    assert.equal(pruned.sessions, 0)
+    assert.equal(store.getSession("legacy-opencode")?.status, "active")
     assert.equal(store.getSession("legacy-claude")?.status, "active")
     assert.equal(store.getReminderBatchRecord(batchId, "legacy-claude")?.reminderText, "keep me")
     store.close()

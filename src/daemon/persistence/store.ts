@@ -4,6 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { createHash, randomUUID } from "node:crypto";
 import {
 	PREMIND_CLIENT_LEASE_TTL_MS,
+	PREMIND_CLOSED_SESSION_RETENTION_MS,
 	PREMIND_DB_PATH,
 	PREMIND_DATABASE_BUSY_TIMEOUT_MS,
 	PREMIND_PR_STREAM_RETENTION_MS,
@@ -414,21 +415,7 @@ export class StateStore {
 	}
 
 	recoverFromRestart(now = Date.now()) {
-		// Prune all client leases — previous daemon process is dead,
-		// so all leases from it are stale regardless of expiry.
-		const deletedClients = this.db.prepare(`DELETE FROM client_leases`).run();
-
-		// A crash leaves handed-off delivery uncertain. Preserve the durable batch
-		// and its cursor, but move it through the valid failure transition so the
-		// handoff registry can explicitly retry it after reconstruction.
-		const resetBatches = this.db
-			.prepare(
-				`UPDATE reminder_batches SET state = 'failed', updated_at = :now
-				 WHERE state = 'handed_off'`,
-			)
-			.run({ now });
-
-		// Count what we're recovering.
+		// Record retained state before fencing every process-owned session.
 		const sessions = this.countActiveSessions();
 		const branchWatchers = (
 			this.db
@@ -438,6 +425,26 @@ export class StateStore {
 				.get() as { count: number }
 		).count;
 		const prWatchers = this.countActiveWatchers();
+
+		// Previous-process owners cannot survive a daemon restart. Preserve their
+		// durable state, but make it ineligible for delivery until reattachment.
+		this.db
+			.prepare(
+				`UPDATE sessions SET status = 'detached', busy_state = 'idle', updated_at = :now
+				 WHERE host IN ('opencode', 'pi') AND status IN ('active', 'paused')`,
+			)
+			.run({ now });
+		const deletedClients = this.db.prepare(`DELETE FROM client_leases`).run();
+
+		// A crash leaves handed-off delivery uncertain. Preserve the durable batch
+		// and its cursor, but make it explicitly retryable after reattachment.
+		const resetBatches = this.db
+			.prepare(
+				`UPDATE reminder_batches SET state = 'failed', updated_at = :now
+				 WHERE state = 'handed_off'`,
+			)
+			.run({ now });
+		this.refreshWatcherCounts(now);
 
 		return {
 			prunedClients: deletedClients.changes as number,
@@ -1167,8 +1174,8 @@ export class StateStore {
 	}
 
 	/**
-	 * Marks any non-closed session whose last_activity_at is older than the
-	 * threshold as "closed". Also refreshes watcher counts when any rows were
+	 * Detaches active or paused sessions whose last_activity_at is older than
+	 * the threshold without starting explicit-deletion retention.
 	 * reaped so the next poll tick reflects reality.
 	 *
 	 * Records lastReapAt/lastReapCount on every call (including no-op sweeps)
@@ -1181,7 +1188,8 @@ export class StateStore {
 		const cutoff = now - thresholdMs;
 		const result = this.db
 			.prepare(
-				`UPDATE sessions SET status = 'closed', updated_at = :now WHERE status != 'closed' AND last_activity_at < :cutoff`,
+				`UPDATE sessions SET status = 'detached', busy_state = 'idle', updated_at = :now
+				 WHERE status IN ('active', 'paused') AND last_activity_at < :cutoff`,
 			)
 			.run({ now, cutoff });
 
@@ -1190,7 +1198,8 @@ export class StateStore {
 
 		const oldestRow = this.db
 			.prepare(
-				`SELECT MIN(last_activity_at) AS oldest FROM sessions WHERE status != 'closed'`,
+				`SELECT MIN(last_activity_at) AS oldest FROM sessions
+				 WHERE status IN ('active', 'paused')`,
 			)
 			.get() as { oldest: number | null };
 		const oldestAgeMs = oldestRow.oldest === null ? null : now - oldestRow.oldest;
@@ -1228,22 +1237,33 @@ export class StateStore {
 		return result.changes as number;
 	}
 
-	pruneClosedOrOrphanedSessions() {
-		// Claude sessions are hook-owned rather than lease-owned. An active Claude
-		// session therefore has no client lease by design and must retain queued
-		// batches until SessionEnd or stale-session cleanup closes it.
-		const predicate = `status = 'closed' OR (host IN ('opencode', 'pi') AND NOT EXISTS (SELECT 1 FROM client_leases WHERE client_leases.client_id = sessions.client_id))`;
-		const deletedBatches = this.db
-			.prepare(
-				`DELETE FROM reminder_batches WHERE session_id IN (SELECT session_id FROM sessions WHERE ${predicate})`,
-			)
-			.run();
+	pruneClosedOrOrphanedSessions(
+		now = Date.now(),
+		retentionMs = PREMIND_CLOSED_SESSION_RETENTION_MS,
+	) {
+		// Compatibility entry point: lack of a live process lease no longer makes
+		// durable session state orphaned. Only explicit deletion starts retention.
+		const cutoff = now - retentionMs;
+		const deletedBatches = (
+			this.db
+				.prepare(
+					`SELECT COUNT(*) AS count FROM reminder_batches
+					 WHERE session_id IN (
+					   SELECT session_id FROM sessions
+					   WHERE status = 'closed' AND updated_at < :cutoff
+					 )`,
+				)
+				.get({ cutoff }) as { count: number }
+		).count;
 		const deletedSessions = this.db
-			.prepare(`DELETE FROM sessions WHERE ${predicate}`)
-			.run();
+			.prepare(
+				`DELETE FROM sessions
+				 WHERE status = 'closed' AND updated_at < :cutoff`,
+			)
+			.run({ cutoff });
 		return {
 			sessions: deletedSessions.changes as number,
-			reminderBatches: deletedBatches.changes as number,
+			reminderBatches: deletedBatches,
 		};
 	}
 
@@ -2009,6 +2029,8 @@ export class StateStore {
 	}
 
 	getPendingReminder(sessionId: string): ReminderBatch | null {
+		const session = this.getSession(sessionId);
+		if (!session || session.status !== "active") return null;
 		const record = this.getPendingReminderRecord(sessionId);
 		return record ? this.refreshPendingReminder(record) : null;
 	}
@@ -2019,6 +2041,8 @@ export class StateStore {
 		now = Date.now(),
 	): ReminderBundleClaim | null {
 		return this.transaction(() => {
+			const session = this.getSession(sessionId);
+			if (!session || session.status !== "active") return null;
 			this.expireStaleHandoffs(undefined, now);
 			if (this.listInFlightReminderBatchRecords(sessionId).length > 0) return null;
 
@@ -2756,8 +2780,7 @@ export class StateStore {
 		subscriptionId?: string,
 	): ReminderBatch | null {
 		const session = this.getSession(sessionId);
-		if (!session || session.status === "paused" || session.status === "closed")
-			return null;
+		if (!session || session.status !== "active") return null;
 
 		const subscription = subscriptionId
 			? this.getSubscriptionById(subscriptionId)
