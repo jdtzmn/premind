@@ -324,6 +324,7 @@ export type UnregisterSessionPayload = z.infer<
   typeof unregisterSessionPayloadSchema
 >;
 export type DeleteSessionPayload = z.infer<typeof deleteSessionPayloadSchema>;
+export type SessionLeaseToken = z.infer<typeof sessionLeaseTokenSchema>;
 export type SessionControlPayload = z.infer<typeof sessionControlPayloadSchema>;
 export type ClaudeSessionPayload = z.infer<typeof claudeSessionPayloadSchema>;
 export type ActivateWorktreePayload = z.infer<

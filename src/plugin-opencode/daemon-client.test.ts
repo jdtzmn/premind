@@ -75,6 +75,72 @@ describe("PremindDaemonClient.ensureSessionControl", () => {
   })
 })
 
+describe("PremindDaemonClient session leases", () => {
+  test("claims, renews, and releases session ownership", async () => {
+    const client = new PremindDaemonClient()
+    const requests: Request[] = []
+    const lease = {
+      sessionId: "session-1",
+      ownerInstanceId: "daemon-a",
+      generation: 1,
+      clientIncarnationNonce: client.clientId,
+      leaseToken: "00000000-0000-4000-8000-000000000001",
+      claimedAt: 1,
+      expiresAt: 60_001,
+    }
+    const testClient = client as unknown as {
+      protocolVersion: 2
+      daemonInstanceId: string
+      supportedOperations: Set<string>
+      requestWithRetry: (request: Request) => Promise<unknown>
+    }
+    testClient.protocolVersion = 2
+    testClient.daemonInstanceId = "daemon-a"
+    testClient.supportedOperations = new Set([
+      "claimSessionLease",
+      "renewSessionLease",
+      "releaseSessionLease",
+    ])
+    testClient.requestWithRetry = async (request) => {
+      requests.push(request)
+      if (request.type === "claimSessionLease") return { lease }
+      if (request.type === "renewSessionLease") {
+        return { lease: { ...lease, expiresAt: 120_001 } }
+      }
+      if (request.type === "releaseSessionLease") return { released: true }
+      return undefined
+    }
+
+    await client.registerSession({
+      sessionId: "session-1",
+      repo: "acme/repo",
+      branch: "feature/x",
+      isPrimary: true,
+      status: "active",
+      busyState: "idle",
+    })
+    await client.heartbeat()
+    await client.unregisterSession("session-1")
+
+    assert.deepEqual(
+      requests.map(({ type }) => type),
+      [
+        "claimSessionLease",
+        "registerSession",
+        "heartbeatClient",
+        "renewSessionLease",
+        "releaseSessionLease",
+        "unregisterSession",
+      ],
+    )
+    const releaseRequest = requests.find(({ type }) => type === "releaseSessionLease")
+    assert.equal(
+      (releaseRequest?.payload.lease as { expiresAt?: number } | undefined)?.expiresAt,
+      120_001,
+    )
+  })
+})
+
 describe("subscription compatibility", () => {
   test("accepts the previous protocol-v1 response shape", async () => {
     const client = new PremindDaemonClient()

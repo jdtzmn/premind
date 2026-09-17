@@ -2429,6 +2429,29 @@ describe("session daemon leases", () => {
       firstStore.close()
     }
   })
+
+  test("fences previous daemon leases during restart recovery", () => {
+    const store = createStore()
+    try {
+      const previous = store.claimSessionLease({
+        sessionId: "session-1",
+        ownerInstanceId: "daemon-a",
+        clientIncarnationNonce: "client-a-1",
+      }, 1_000)
+
+      store.recoverFromRestart(1_001)
+      assert.equal(store.validateSessionLease(previous, 1_001), false)
+
+      const replacement = store.claimSessionLease({
+        sessionId: "session-1",
+        ownerInstanceId: "daemon-b",
+        clientIncarnationNonce: "client-b-1",
+      }, 1_001)
+      assert.equal(replacement.generation, 2)
+    } finally {
+      store.close()
+    }
+  })
 })
 
 describe("session detach and deletion", () => {

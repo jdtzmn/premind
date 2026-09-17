@@ -445,6 +445,14 @@ export class StateStore {
 				 WHERE host IN ('opencode', 'pi') AND status IN ('active', 'paused')`,
 			)
 			.run({ now });
+		this.db
+			.prepare(
+				`UPDATE session_daemon_leases
+				 SET owner_instance_id = NULL, client_incarnation_nonce = NULL,
+				     lease_token_hash = NULL, expires_at = NULL
+				 WHERE owner_instance_id IS NOT NULL`,
+			)
+			.run();
 		const deletedClients = this.db.prepare(`DELETE FROM client_leases`).run();
 
 		// A crash leaves handed-off delivery uncertain. Preserve the durable batch

@@ -18,6 +18,7 @@ import {
   decodeV1DebugStatusResponse,
   isV1UnsupportedOperation,
 } from "../shared/protocol/v1.ts"
+import { sessionLeaseTokenSchema } from "../shared/schema.ts"
 import type {
   AckReminderPayload,
   AckReminderBundlePayload,
@@ -25,6 +26,7 @@ import type {
   EnsureSessionControlPayload,
   RegisterSessionPayload,
   SessionHost,
+  SessionLeaseToken,
   SubscribePayload,
   UnsubscribePayload,
   UpdateSessionStatePayload,
@@ -47,6 +49,9 @@ export class PremindDaemonClient {
   private protocolVersion: 1 | typeof PROTOCOL_V2 = PREMIND_PROTOCOL_VERSION
   private initialized = false
 
+  private daemonInstanceId?: string
+  private supportedOperations = new Set<string>()
+  private readonly sessionLeases = new Map<string, SessionLeaseToken>()
   constructor(options: PremindDaemonClientOptions = {}) {
     this.host = options.host ?? "opencode"
     this.socketPath = options.socketPath ?? PREMIND_SOCKET_PATH
@@ -93,9 +98,15 @@ export class PremindDaemonClient {
       protocolVersion: PREMIND_PROTOCOL_VERSION,
       payload: { clientId: this.clientId },
     })
+    for (const sessionId of [...this.sessionLeases.keys()]) {
+      await this.renewSessionLease(sessionId)
+    }
   }
 
   async release() {
+    for (const sessionId of [...this.sessionLeases.keys()]) {
+      await this.releaseSessionLease(sessionId)
+    }
     await this.requestWithRetry({
       type: "releaseClient",
       protocolVersion: PREMIND_PROTOCOL_VERSION,
@@ -105,6 +116,7 @@ export class PremindDaemonClient {
   }
 
   async registerSession(payload: Omit<RegisterSessionPayload, "clientId">) {
+    await this.claimSessionLease(payload.sessionId)
     await this.requestWithRetry({
       type: "registerSession",
       protocolVersion: PREMIND_PROTOCOL_VERSION,
@@ -115,6 +127,7 @@ export class PremindDaemonClient {
   async ensureSessionControl(
     payload: Omit<EnsureSessionControlPayload, "clientId">,
   ) {
+    await this.claimSessionLease(payload.sessionId)
     try {
       await this.requestWithRetry({
         type: "ensureSessionControl",
@@ -143,6 +156,7 @@ export class PremindDaemonClient {
   }
 
   async unregisterSession(sessionId: string) {
+    await this.releaseSessionLease(sessionId)
     await this.requestWithRetry({
       type: "unregisterSession",
       protocolVersion: PREMIND_PROTOCOL_VERSION,
@@ -157,6 +171,7 @@ export class PremindDaemonClient {
         protocolVersion: PREMIND_PROTOCOL_VERSION,
         payload: { sessionId },
       })
+      this.sessionLeases.delete(sessionId)
     } catch (error) {
       if (!isV1UnsupportedOperation(error)) throw error
       await this.unregisterSession(sessionId)
@@ -338,6 +353,87 @@ export class PremindDaemonClient {
     })
   }
 
+  private supportsSessionLeaseOperation(operation: string): boolean {
+    return (
+      this.protocolVersion === PROTOCOL_V2 &&
+      this.daemonInstanceId !== undefined &&
+      this.supportedOperations.has(operation)
+    )
+  }
+
+  private async claimSessionLease(sessionId: string): Promise<SessionLeaseToken | null> {
+    if (!this.supportsSessionLeaseOperation("claimSessionLease")) return null
+    const current = this.sessionLeases.get(sessionId)
+    if (
+      current &&
+      current.ownerInstanceId === this.daemonInstanceId &&
+      current.clientIncarnationNonce === this.clientId
+    ) {
+      return current
+    }
+    const response = await this.requestWithRetry({
+      type: "claimSessionLease",
+      protocolVersion: PREMIND_PROTOCOL_VERSION,
+      payload: {
+        sessionId,
+        ownerInstanceId: this.daemonInstanceId,
+        clientIncarnationNonce: this.clientId,
+      },
+    })
+    const lease = sessionLeaseTokenSchema.parse(
+      (response as { lease?: unknown }).lease,
+    )
+    if (
+      lease.sessionId !== sessionId ||
+      lease.ownerInstanceId !== this.daemonInstanceId ||
+      lease.clientIncarnationNonce !== this.clientId
+    ) {
+      throw new Error("SESSION_MOVED: daemon returned a mismatched session lease")
+    }
+    this.sessionLeases.set(sessionId, lease)
+    return lease
+  }
+
+  private async renewSessionLease(sessionId: string): Promise<void> {
+    const current = this.sessionLeases.get(sessionId)
+    if (!current || !this.supportsSessionLeaseOperation("renewSessionLease")) return
+    const response = await this.requestWithRetry({
+      type: "renewSessionLease",
+      protocolVersion: PREMIND_PROTOCOL_VERSION,
+      payload: { lease: current },
+    })
+    const renewed = sessionLeaseTokenSchema.parse(
+      (response as { lease?: unknown }).lease,
+    )
+    if (
+      renewed.sessionId !== current.sessionId ||
+      renewed.ownerInstanceId !== current.ownerInstanceId ||
+      renewed.generation !== current.generation ||
+      renewed.clientIncarnationNonce !== current.clientIncarnationNonce ||
+      renewed.leaseToken !== current.leaseToken
+    ) {
+      this.sessionLeases.delete(sessionId)
+      throw new Error("SESSION_MOVED: daemon renewed a different session lease")
+    }
+    this.sessionLeases.set(sessionId, renewed)
+  }
+
+  private async releaseSessionLease(sessionId: string): Promise<void> {
+    const lease = this.sessionLeases.get(sessionId)
+    if (!lease) return
+    try {
+      if (this.supportsSessionLeaseOperation("releaseSessionLease")) {
+        await this.requestWithRetry({
+          type: "releaseSessionLease",
+          protocolVersion: PREMIND_PROTOCOL_VERSION,
+          payload: { lease },
+        })
+      }
+    } finally {
+      this.sessionLeases.delete(sessionId)
+    }
+  }
+
   private async initializeProtocol() {
     if (this.initialized) return
     const response = await this.requestRaw({
@@ -364,6 +460,17 @@ export class PremindDaemonClient {
       if (selected !== PREMIND_PROTOCOL_VERSION && selected !== PROTOCOL_V2) {
         throw new Error(`PROTOCOL_UNSUPPORTED: Unexpected protocol ${selected}`)
       }
+      const nextDaemonInstanceId = bootstrap.data.result.daemon.instanceId
+      if (
+        this.daemonInstanceId !== undefined &&
+        this.daemonInstanceId !== nextDaemonInstanceId
+      ) {
+        this.sessionLeases.clear()
+      }
+      this.daemonInstanceId = nextDaemonInstanceId
+      this.supportedOperations = new Set(
+        bootstrap.data.result.capabilities.operations,
+      )
       this.protocolVersion = selected
       this.initialized = true
       return
@@ -376,6 +483,9 @@ export class PremindDaemonClient {
       legacy.data.error.code === "BAD_REQUEST"
     ) {
       this.protocolVersion = PREMIND_PROTOCOL_VERSION
+      this.daemonInstanceId = undefined
+      this.supportedOperations.clear()
+      this.sessionLeases.clear()
       this.initialized = true
       return
     }
