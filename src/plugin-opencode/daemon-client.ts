@@ -3,17 +3,19 @@ import { randomUUID } from "node:crypto"
 import { PREMIND_PROTOCOL_VERSION, PREMIND_SOCKET_PATH } from "../shared/constants.ts"
 import {
   ackReminderBundleResponseSchema,
-  claimReminderBundleResponseSchema,
   activateWorktreeResponseSchema,
   getPendingReminderResponseSchema,
   globalDisabledResponseSchema,
-  legacyClaimReminderBundleResponseSchema,
   registerClientResponseSchema,
   responseSchema,
   subscribeResponseSchema,
   unsubscribeResponseSchema,
 } from "../shared/ipc.ts"
-import { decodeV1DebugStatusResponse } from "../shared/protocol/v1.ts"
+import {
+  decodeV1ClaimReminderBundleResponse,
+  decodeV1DebugStatusResponse,
+  isV1UnsupportedOperation,
+} from "../shared/protocol/v1.ts"
 import type {
   AckReminderPayload,
   AckReminderBundlePayload,
@@ -28,8 +30,6 @@ import { ensureDaemonRunning } from "./daemon-launcher.ts"
 
 const MAX_RETRIES = 3
 const RETRY_DELAY_MS = 500
-const isUnsupportedOperation = (error: unknown) =>
-  error instanceof Error && error.message.startsWith("BAD_REQUEST:")
 
 export class PremindDaemonClient {
   readonly clientId = randomUUID()
@@ -102,9 +102,7 @@ export class PremindDaemonClient {
       // A long-lived daemon from a pre-control-operation package reports the new
       // request as BAD_REQUEST. Fall back to its compatible registration path so
       // clients keep working until that daemon exits naturally.
-      if (!(error instanceof Error) || !error.message.startsWith("BAD_REQUEST:")) {
-        throw error
-      }
+      if (!isV1UnsupportedOperation(error)) throw error
       const { paused, ...session } = payload
       await this.registerSession({
         ...session,
@@ -179,21 +177,18 @@ export class PremindDaemonClient {
         protocolVersion: PREMIND_PROTOCOL_VERSION,
         payload: { sessionId },
       })
-      const current = claimReminderBundleResponseSchema.safeParse(response)
-      if (current.success) return current.data
-
-      const legacy = legacyClaimReminderBundleResponseSchema.safeParse(response)
-      if (!legacy.success) return claimReminderBundleResponseSchema.parse(response)
-      if (legacy.data.batches.length === 0) return { bundle: null }
+      const decoded = decodeV1ClaimReminderBundleResponse(response)
+      if (decoded.variant === "tokenized") return decoded.response
+      if (decoded.response.batches.length === 0) return { bundle: null }
       const handoffId = randomUUID()
       this.legacyBundleClaims.set(sessionId, {
         handoffId,
-        batchIds: legacy.data.batches.map(({ batchId }) => batchId),
+        batchIds: decoded.response.batches.map(({ batchId }) => batchId),
         mode: "legacy-bundle",
       })
-      return { bundle: { handoffId, batches: legacy.data.batches } }
+      return { bundle: { handoffId, batches: decoded.response.batches } }
     } catch (error) {
-      if (!isUnsupportedOperation(error)) throw error
+      if (!isV1UnsupportedOperation(error)) throw error
       const pending = await this.getPendingReminder(sessionId)
       if (!pending.batch) return { bundle: null }
 
@@ -221,7 +216,7 @@ export class PremindDaemonClient {
       })
       return ackReminderBundleResponseSchema.parse(response)
     } catch (error) {
-      if (!isUnsupportedOperation(error)) throw error
+      if (!isV1UnsupportedOperation(error)) throw error
       const claim = this.legacyBundleClaims.get(payload.sessionId)
       if (!claim || claim.handoffId !== payload.handoffId) {
         return { acknowledged: 0 }
