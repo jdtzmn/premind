@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { PremindDaemonClient } from "../../client/daemon-client.ts";
+import { PremindPrerequisiteError } from "../../client/prerequisites.ts";
 import { IpcServer } from "../../daemon/ipc/server.ts";
 import { StateStore } from "../../daemon/persistence/store.ts";
 import {
@@ -296,6 +297,47 @@ test("returns standard JSON-RPC errors without starting the daemon", async () =>
 		},
 	);
 	assert.equal(starts, 0);
+});
+
+test("returns prerequisite remediation as a server error", async () => {
+	const unused = async () => {
+		throw new Error("unused");
+	};
+	const dependencies: CodexMcpDependencies = {
+		client: {
+			activateWorktree: unused,
+			debugStatus: unused,
+			subscribe: unused,
+			unsubscribe: unused,
+		},
+		pluginData: "/unused",
+		cwd: "/unused",
+		async ensureDaemon() {
+			throw new PremindPrerequisiteError(
+				"Premind requires an authenticated GitHub CLI. Run `gh auth login` and restart Codex.",
+			);
+		},
+	};
+	assert.deepEqual(
+		await handleCodexMcpLine(
+			JSON.stringify({
+				jsonrpc: "2.0",
+				id: 1,
+				method: "tools/call",
+				params: { name: "premind_status", arguments: {} },
+			}),
+			dependencies,
+		),
+		{
+			jsonrpc: "2.0",
+			id: 1,
+			error: {
+				code: -32002,
+				message:
+					"Premind requires an authenticated GitHub CLI. Run `gh auth login` and restart Codex.",
+			},
+		},
+	);
 });
 
 test("redacts daemon internals and returns execution failures as tool results", async () => {

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { Readable, Writable } from "node:stream";
 import { describe, test } from "node:test";
+import { PremindPrerequisiteError } from "../../client/prerequisites.ts";
 import {
 	flushProtocolOutput,
 	readHookInput,
@@ -68,6 +69,29 @@ describe("Codex hook runner", () => {
 		assert.equal(output.value, "{}\n");
 		assert.match(diagnostics.value, /runner setup/);
 		assert.equal(diagnostics.value.includes("not-json"), false);
+	});
+
+	test("reports prerequisite remediation while remaining fail-open", async () => {
+		const output = new CapturingWritable();
+		const diagnostics = new CapturingWritable();
+		await runHookMain({
+			eventName: "Stop",
+			input: Readable.from(["{}"]),
+			output,
+			diagnostics,
+			environment: {},
+			ensurePrerequisites: async () => {
+				throw new PremindPrerequisiteError(
+					"Premind requires Git. Install Git and restart Codex.",
+				);
+			},
+		});
+		await Promise.all([
+			new Promise<void>((resolve) => output.end(resolve)),
+			new Promise<void>((resolve) => diagnostics.end(resolve)),
+		]);
+		assert.equal(output.value, "{}\n");
+		assert.match(diagnostics.value, /Install Git/);
 	});
 
 	test("emits no protocol output for unknown events or SessionEnd parse failure", async () => {

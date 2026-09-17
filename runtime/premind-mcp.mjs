@@ -5448,6 +5448,47 @@ class PremindDaemonClient {
 	}
 }
 
+// src/client/prerequisites.ts
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+var execFileAsync = promisify(execFile);
+
+class PremindPrerequisiteError extends Error {
+	constructor(message) {
+		super(message);
+		this.name = "PremindPrerequisiteError";
+	}
+}
+var runCommand = async (command, args) => {
+	await execFileAsync(command, args);
+};
+var verifyCommand = async (run, command, remediation) => {
+	try {
+		await run(command, ["--version"]);
+	} catch {
+		throw new PremindPrerequisiteError(remediation);
+	}
+};
+var ensurePremindPrerequisites = async (run = runCommand) => {
+	await verifyCommand(
+		run,
+		"git",
+		"Premind requires Git. Install Git and restart Codex.",
+	);
+	await verifyCommand(
+		run,
+		"gh",
+		"Premind requires the GitHub CLI (`gh`). Install it and restart Codex.",
+	);
+	try {
+		await run("gh", ["auth", "status"]);
+	} catch {
+		throw new PremindPrerequisiteError(
+			"Premind requires an authenticated GitHub CLI. Run `gh auth login` and restart Codex.",
+		);
+	}
+};
+
 // src/codex/session-binding.ts
 import fs4 from "node:fs";
 import path5 from "node:path";
@@ -5748,7 +5789,8 @@ var callTool = async (tool, dependencies) => {
 		return text(
 			`Premind unsubscribe result: ${result.unsubscribed ? "removed" : "no active subscription"}.`,
 		);
-	} catch {
+	} catch (error) {
+		if (error instanceof PremindPrerequisiteError) throw error;
 		return toolError();
 	}
 };
@@ -5772,7 +5814,7 @@ var handleCodexMcpRequest = async (message, dependencies) => {
 		throw new JsonRpcError(-32601, "Method not found");
 	}
 	const tool = parseToolCall(request.data.params);
-	return await callTool(tool, dependencies);
+	return callTool(tool, dependencies);
 };
 var handleCodexMcpLine = async (line, dependencies) => {
 	let message;
@@ -5800,10 +5842,14 @@ var handleCodexMcpLine = async (line, dependencies) => {
 		return { jsonrpc: "2.0", id: request.data.id ?? null, result };
 	} catch (error) {
 		if (isNotification) return;
-		const protocolError =
-			error instanceof JsonRpcError
-				? error
-				: new JsonRpcError(-32600, "Invalid Request");
+		let protocolError;
+		if (error instanceof JsonRpcError) {
+			protocolError = error;
+		} else if (error instanceof PremindPrerequisiteError) {
+			protocolError = new JsonRpcError(-32002, error.message);
+		} else {
+			protocolError = new JsonRpcError(-32600, "Invalid Request");
+		}
 		return {
 			jsonrpc: "2.0",
 			id: request.data.id ?? null,
@@ -5825,10 +5871,14 @@ var isMainModule = () => {
 if (isMainModule()) {
 	const pluginData = process.env.PLUGIN_DATA;
 	if (!pluginData) throw new Error("PLUGIN_DATA is required for Premind MCP");
-	const ensureDaemon = createDaemonLauncher({
+	const launchDaemon = createDaemonLauncher({
 		daemonEntry: DAEMON_ENTRY,
 		requiredOperations: CODEX_REQUIRED_DAEMON_OPERATIONS,
 	});
+	const ensureDaemon = async () => {
+		await ensurePremindPrerequisites();
+		await launchDaemon();
+	};
 	const dependencies = {
 		client: new PremindDaemonClient({ ensureDaemon }),
 		pluginData,

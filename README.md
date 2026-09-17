@@ -67,6 +67,23 @@ bun run test:claude:live-contract
 
 It creates a temporary plugin and verifies fresh and resumed hook/MCP session IDs. It reports a skip when the Claude CLI is unavailable or unauthenticated.
 
+## Codex plugin (v0.1)
+
+Install Premind from the repository-local marketplace or from the same layout in a released package:
+
+```sh
+codex plugin marketplace add /path/to/premind
+codex plugin add premind@premind
+```
+
+Review and trust Premind's lifecycle hooks before enabling them. The plugin uses `SessionStart`, `UserPromptSubmit`, `Stop`, `Interrupt`, and `SessionEnd`; it deliberately does **not** install `PostToolUse`. If hooks are not running, open Codex's hook-management UI, review the commands, and trust the current plugin definition.
+
+The installed plugin runs dependency-closed Node bundles from its own `dist/` directory. It requires **Node 22.13+**, `git`, and an authenticated GitHub CLI (`gh auth login`). Bun, `tsx`, a source checkout, and repository `node_modules` are not runtime prerequisites. Hooks and MCP use Codex-managed `PLUGIN_DATA` for local receipts and session handles; Premind only uses network access for GitHub polling.
+
+Codex cannot wake an already-idle stock CLI thread. Updates found while idle remain durable and arrive at the next available `SessionStart`, `UserPromptSubmit`, or `Stop` boundary. An interrupted delivery may be shown again rather than silently lost.
+
+After changing a local checkout, refresh the marketplace/plugin installation and re-review hooks. Remove the plugin with `codex plugin remove premind@premind`, then remove its marketplace source if it is no longer needed.
+
 ## How it works
 
 1. When OpenCode loads premind, the plugin starts a local daemon process.

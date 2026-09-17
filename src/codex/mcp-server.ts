@@ -5,6 +5,10 @@ import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { PremindDaemonClient } from "../client/daemon-client.ts";
 import { createDaemonLauncher } from "../client/daemon-launcher.ts";
+import {
+	ensurePremindPrerequisites,
+	PremindPrerequisiteError,
+} from "../client/prerequisites.ts";
 import { CODEX_REQUIRED_DAEMON_OPERATIONS } from "../shared/daemon-startup.ts";
 import {
 	type CodexSessionBinding,
@@ -116,7 +120,8 @@ const toolError = (): ToolResult => ({
 	content: [
 		{
 			type: "text",
-			text: "Premind could not complete this request. Check premind_status and retry.",
+			text:
+				"Premind could not complete this request. Check premind_status and retry.",
 		},
 	],
 	isError: true,
@@ -124,7 +129,7 @@ const toolError = (): ToolResult => ({
 
 class JsonRpcError extends Error {
 	constructor(
-		readonly code: -32600 | -32601 | -32602,
+		readonly code: -32600 | -32601 | -32602 | -32002,
 		message: string,
 	) {
 		super(message);
@@ -188,21 +193,18 @@ const parseToolCall = (params: unknown): ParsedToolCall => {
 	switch (call.data.name) {
 		case "premind_status": {
 			const args = statusArgumentsSchema.safeParse(rawArguments);
-			if (!args.success)
-				throw new JsonRpcError(-32602, "Invalid tool arguments");
+			if (!args.success) throw new JsonRpcError(-32602, "Invalid tool arguments");
 			return { name: call.data.name, args: args.data };
 		}
 		case "premind_activate_worktree": {
 			const args = activateArgumentsSchema.safeParse(rawArguments);
-			if (!args.success)
-				throw new JsonRpcError(-32602, "Invalid tool arguments");
+			if (!args.success) throw new JsonRpcError(-32602, "Invalid tool arguments");
 			return { name: call.data.name, args: args.data };
 		}
 		case "premind_subscribe":
 		case "premind_unsubscribe": {
 			const args = subscriptionArgumentsSchema.safeParse(rawArguments);
-			if (!args.success)
-				throw new JsonRpcError(-32602, "Invalid tool arguments");
+			if (!args.success) throw new JsonRpcError(-32602, "Invalid tool arguments");
 			return { name: call.data.name, args: args.data };
 		}
 		default:
@@ -222,9 +224,7 @@ const callTool = async (
 				tool.args.sessionHandle,
 			);
 			const current = binding
-				? status.sessions.find(
-						(session) => session.sessionId === binding.sessionId,
-					)
+				? status.sessions.find((session) => session.sessionId === binding.sessionId)
 				: undefined;
 			return text(
 				JSON.stringify({
@@ -276,7 +276,8 @@ const callTool = async (
 		return text(
 			`Premind unsubscribe result: ${result.unsubscribed ? "removed" : "no active subscription"}.`,
 		);
-	} catch {
+	} catch (error) {
+		if (error instanceof PremindPrerequisiteError) throw error;
 		return toolError();
 	}
 };
@@ -304,7 +305,7 @@ export const handleCodexMcpRequest = async (
 		throw new JsonRpcError(-32601, "Method not found");
 	}
 	const tool = parseToolCall(request.data.params);
-	return await callTool(tool, dependencies);
+	return callTool(tool, dependencies);
 };
 
 type JsonRpcReply = {
@@ -343,10 +344,14 @@ export const handleCodexMcpLine = async (
 		return { jsonrpc: "2.0", id: request.data.id ?? null, result };
 	} catch (error) {
 		if (isNotification) return undefined;
-		const protocolError =
-			error instanceof JsonRpcError
-				? error
-				: new JsonRpcError(-32600, "Invalid Request");
+		let protocolError: JsonRpcError;
+		if (error instanceof JsonRpcError) {
+			protocolError = error;
+		} else if (error instanceof PremindPrerequisiteError) {
+			protocolError = new JsonRpcError(-32002, error.message);
+		} else {
+			protocolError = new JsonRpcError(-32600, "Invalid Request");
+		}
 		return {
 			jsonrpc: "2.0",
 			id: request.data.id ?? null,
@@ -370,10 +375,14 @@ const isMainModule = () => {
 if (isMainModule()) {
 	const pluginData = process.env.PLUGIN_DATA;
 	if (!pluginData) throw new Error("PLUGIN_DATA is required for Premind MCP");
-	const ensureDaemon = createDaemonLauncher({
+	const launchDaemon = createDaemonLauncher({
 		daemonEntry: DAEMON_ENTRY,
 		requiredOperations: CODEX_REQUIRED_DAEMON_OPERATIONS,
 	});
+	const ensureDaemon = async () => {
+		await ensurePremindPrerequisites();
+		await launchDaemon();
+	};
 	const dependencies: CodexMcpDependencies = {
 		client: new PremindDaemonClient({ ensureDaemon }),
 		pluginData,

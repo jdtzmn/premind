@@ -1,0 +1,20 @@
+{
+	"name": "premind",
+	"interface": {
+		"displayName": "premind development marketplace"
+	},
+	"plugins": [
+		{
+			"name": "premind",
+			"source": {
+				"source": "local",
+				"path": "./plugins/premind"
+			},
+			"policy": {
+				"installation": "AVAILABLE",
+				"authentication": "ON_USE"
+			},
+			"category": "Developer Tools"
+		}
+	]
+}

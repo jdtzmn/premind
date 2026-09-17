@@ -1,0 +1,11 @@
+{
+	"name": "premind",
+	"version": "0.1.0",
+	"description": "Codex compatibility overlay for premind.",
+	"hooks": "./hooks/hooks.json",
+	"interface": {
+		"displayName": "premind",
+		"shortDescription": "Bring new PR context into Codex turns",
+		"category": "Developer Tools"
+	}
+}

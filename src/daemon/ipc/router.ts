@@ -109,8 +109,7 @@ export class Router {
 					const { created } = this.store.registerSession({
 						...request.payload,
 						host: "claude",
-						hostSessionId:
-							request.payload.hostSessionId ?? request.payload.sessionId,
+						hostSessionId: request.payload.hostSessionId ?? request.payload.sessionId,
 						clientId: `claude:${request.payload.sessionId}`,
 						isPrimary: true,
 						status: "active",
@@ -119,9 +118,7 @@ export class Router {
 				}
 				case "registerCodexSession": {
 					const { reactivate, ...payload } = request.payload;
-					const existingStatus = this.store.getSession(
-						payload.sessionId,
-					)?.status;
+					const existingStatus = this.store.getSession(payload.sessionId)?.status;
 					const { created } = this.store.registerSession({
 						...payload,
 						host: "codex",
@@ -129,15 +126,12 @@ export class Router {
 						clientId: `codex:${payload.sessionId}`,
 						isPrimary: true,
 						status:
-							reactivate === false && existingStatus
-								? existingStatus
-								: "active",
+							reactivate === false && existingStatus ? existingStatus : "active",
 					});
 					return this.ok({
 						registered: true,
 						created,
-						active:
-							this.store.getSession(payload.sessionId)?.status === "active",
+						active: this.store.getSession(payload.sessionId)?.status === "active",
 					});
 				}
 				case "touchClaudeSession": {
@@ -170,9 +164,7 @@ export class Router {
 						),
 					});
 				case "releaseSessionOwner": {
-					const released = this.store.releaseSessionOwner(
-						request.payload.sessionId,
-					);
+					const released = this.store.releaseSessionOwner(request.payload.sessionId);
 					if (!released)
 						return this.fail(
 							"SESSION_NOT_FOUND",
@@ -341,9 +333,7 @@ export class Router {
 			}
 			return this.fail(
 				"WORKTREE_RESOLUTION_FAILED",
-				error instanceof Error
-					? error.message
-					: "Unable to resolve Git worktree",
+				error instanceof Error ? error.message : "Unable to resolve Git worktree",
 			);
 		}
 	}

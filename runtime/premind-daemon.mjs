@@ -10738,10 +10738,10 @@ class Router {
 }
 
 // src/daemon/persistence/store.ts
-import { randomUUID } from "node:crypto";
 import fs3 from "node:fs";
 import path4 from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { randomUUID } from "node:crypto";
 
 // src/daemon/reminders/detail-files.ts
 import fs2 from "node:fs";

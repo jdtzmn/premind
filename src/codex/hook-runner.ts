@@ -4,6 +4,10 @@ import { fileURLToPath } from "node:url";
 import { PremindDaemonClient } from "../client/daemon-client.ts";
 import { createDaemonLauncher } from "../client/daemon-launcher.ts";
 import { detectGitContext } from "../client/git-context.ts";
+import {
+	ensurePremindPrerequisites,
+	PremindPrerequisiteError,
+} from "../client/prerequisites.ts";
 import { CODEX_REQUIRED_DAEMON_OPERATIONS } from "../shared/daemon-startup.ts";
 import { acquireSessionLifecycleLock } from "./delivery-receipts.ts";
 import { runCodexLifecycle } from "./lifecycle.ts";
@@ -71,9 +75,10 @@ const writeDiagnostic = (
 	output: NodeJS.WritableStream,
 	eventName: string,
 	stage: string,
+	remediation?: string,
 ) => {
 	output.write(
-		`premind Codex ${eventName} hook failed during ${stage}; continuing\n`,
+		`premind Codex ${eventName} hook failed during ${stage}; continuing${remediation ? `: ${remediation}` : ""}\n`,
 	);
 };
 
@@ -83,6 +88,7 @@ export const runHookMain = async (
 		environment?: NodeJS.ProcessEnv;
 		input?: NodeJS.ReadableStream;
 		output?: NodeJS.WritableStream;
+		ensurePrerequisites?: () => Promise<void>;
 		diagnostics?: NodeJS.WritableStream;
 	} = {},
 ) => {
@@ -91,6 +97,8 @@ export const runHookMain = async (
 	const input = options.input ?? process.stdin;
 	const output = options.output ?? process.stdout;
 	const diagnostics = options.diagnostics ?? process.stderr;
+	const ensurePrerequisites =
+		options.ensurePrerequisites ?? ensurePremindPrerequisites;
 	if (!isEventName(eventName)) {
 		writeDiagnostic(diagnostics, "unknown", "event validation");
 		return;
@@ -98,10 +106,12 @@ export const runHookMain = async (
 
 	try {
 		const rawInput = await readHookInput(input);
-		const ensureDaemon = createDaemonLauncher({
+		await ensurePrerequisites();
+		const launchDaemon = createDaemonLauncher({
 			daemonEntry: DAEMON_ENTRY,
 			requiredOperations: CODEX_REQUIRED_DAEMON_OPERATIONS,
 		});
+		const ensureDaemon = launchDaemon;
 		const client = new PremindDaemonClient({ ensureDaemon });
 		const cleanupClient = new PremindDaemonClient({
 			ensureDaemon: async () => undefined,
@@ -130,8 +140,13 @@ export const runHookMain = async (
 			reportError: (failedEvent, stage) =>
 				writeDiagnostic(diagnostics, failedEvent, stage),
 		});
-	} catch {
-		writeDiagnostic(diagnostics, eventName, "runner setup");
+	} catch (error) {
+		writeDiagnostic(
+			diagnostics,
+			eventName,
+			"runner setup",
+			error instanceof PremindPrerequisiteError ? error.message : undefined,
+		);
 		if (eventName !== "SessionEnd") {
 			await flushProtocolOutput(output, "{}\n").catch(() => undefined);
 		}

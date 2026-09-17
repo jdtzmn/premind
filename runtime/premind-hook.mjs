@@ -5489,6 +5489,47 @@ async function detectGitContext(cwd) {
 	};
 }
 
+// src/client/prerequisites.ts
+import { execFile as execFile2 } from "node:child_process";
+import { promisify as promisify2 } from "node:util";
+var execFileAsync2 = promisify2(execFile2);
+
+class PremindPrerequisiteError extends Error {
+	constructor(message) {
+		super(message);
+		this.name = "PremindPrerequisiteError";
+	}
+}
+var runCommand = async (command, args) => {
+	await execFileAsync2(command, args);
+};
+var verifyCommand = async (run2, command, remediation) => {
+	try {
+		await run2(command, ["--version"]);
+	} catch {
+		throw new PremindPrerequisiteError(remediation);
+	}
+};
+var ensurePremindPrerequisites = async (run2 = runCommand) => {
+	await verifyCommand(
+		run2,
+		"git",
+		"Premind requires Git. Install Git and restart Codex.",
+	);
+	await verifyCommand(
+		run2,
+		"gh",
+		"Premind requires the GitHub CLI (`gh`). Install it and restart Codex.",
+	);
+	try {
+		await run2("gh", ["auth", "status"]);
+	} catch {
+		throw new PremindPrerequisiteError(
+			"Premind requires an authenticated GitHub CLI. Run `gh auth login` and restart Codex.",
+		);
+	}
+};
+
 // src/codex/delivery-receipts.ts
 import { randomUUID as randomUUID3 } from "node:crypto";
 import fs4 from "node:fs";
@@ -6310,8 +6351,8 @@ var flushProtocolOutput = async (output, value) => {
 	});
 };
 var isEventName = (value) => eventNames.has(value);
-var writeDiagnostic = (output, eventName, stage) => {
-	output.write(`premind Codex ${eventName} hook failed during ${stage}; continuing
+var writeDiagnostic = (output, eventName, stage, remediation) => {
+	output.write(`premind Codex ${eventName} hook failed during ${stage}; continuing${remediation ? `: ${remediation}` : ""}
 `);
 };
 var runHookMain = async (options = {}) => {
@@ -6320,16 +6361,20 @@ var runHookMain = async (options = {}) => {
 	const input = options.input ?? process.stdin;
 	const output = options.output ?? process.stdout;
 	const diagnostics = options.diagnostics ?? process.stderr;
+	const ensurePrerequisites =
+		options.ensurePrerequisites ?? ensurePremindPrerequisites;
 	if (!isEventName(eventName)) {
 		writeDiagnostic(diagnostics, "unknown", "event validation");
 		return;
 	}
 	try {
 		const rawInput = await readHookInput(input);
-		const ensureDaemon = createDaemonLauncher({
+		await ensurePrerequisites();
+		const launchDaemon = createDaemonLauncher({
 			daemonEntry: DAEMON_ENTRY,
 			requiredOperations: CODEX_REQUIRED_DAEMON_OPERATIONS,
 		});
+		const ensureDaemon = launchDaemon;
 		const client = new PremindDaemonClient({ ensureDaemon });
 		const cleanupClient = new PremindDaemonClient({
 			ensureDaemon: async () => {
@@ -6360,8 +6405,13 @@ var runHookMain = async (options = {}) => {
 			reportError: (failedEvent, stage) =>
 				writeDiagnostic(diagnostics, failedEvent, stage),
 		});
-	} catch {
-		writeDiagnostic(diagnostics, eventName, "runner setup");
+	} catch (error) {
+		writeDiagnostic(
+			diagnostics,
+			eventName,
+			"runner setup",
+			error instanceof PremindPrerequisiteError ? error.message : undefined,
+		);
 		if (eventName !== "SessionEnd") {
 			await flushProtocolOutput(
 				output,
