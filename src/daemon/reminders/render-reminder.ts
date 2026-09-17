@@ -219,13 +219,13 @@ export function renderReminder(
     "<system-reminder>",
     `PR update for ${qualified}${snapshot?.core.headRefOid ? ` (HEAD: ${shortSha(snapshot.core.headRefOid)})` : ""}:`,
     ...(target.source === "manual" ? ["", policy === "actionable"
-      ? "This manually subscribed PR has explicit authorization. Follow the current task and repository policy; do not merge, force-push, or take unrelated external actions without authorization."
+      ? "This manually subscribed PR has explicit authorization and is verified as yours. Follow the current task and repository policy; do not merge, force-push, or take unrelated external actions without authorization."
       : "This PR is observation-only. Do not edit, push to, rebase, merge, or comment on this PR unless the user explicitly authorizes it."]
       : ["", "Automatic tracking: this PR author matches the authenticated account. Follow the current task and repository policy; do not merge, force-push, or take unrelated external actions without authorization."]),
     ...(condensedLive.length ? ["", "Changes:", ...condensedLive.map(renderEvent)] : []),
     ...(supersededSummaries.length ? ["", "Superseded:", ...supersededSummaries.map(renderEvent)] : []),
     ...(live.some((item) => item.actionable) ? ["", canModify
-      ? "Action required for this owned PR: investigate the current-HEAD CI failure(s)/merge conflict(s), classify the cause, and modify code only within the assigned task. Continue unrelated assigned work if appropriate."
+      ? "Action required for this owned PR: investigate the current-HEAD CI failure(s)/merge conflict(s), then resolve the applicable failure(s)/conflict(s) on HEAD within the assigned task. Continue unrelated assigned work if appropriate."
       : policy === "actionable" ? `Action required: ${worktreeGate}`
       : "Observation-only CI/conflict update: do not modify this PR. Report the current status if it affects assigned work, then continue that work."] : []),
     ...(live.some((item) => item.reviewAction) ? ["", canModify
