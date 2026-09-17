@@ -685,6 +685,18 @@ describe("reminder bundle IPC", () => {
       protocolVersion: PREMIND_PROTOCOL_VERSION,
       result: { bundle: null },
     });
+    store.expireStaleHandoffs(0, Date.now() + 1);
+    const crashRetry = await router.handle({
+      type: "claimReminderBundle",
+      protocolVersion: PREMIND_PROTOCOL_VERSION,
+      payload: { sessionId: "bundle-session" },
+    } as never);
+    assert.equal(crashRetry.ok, true);
+    if (!crashRetry.ok) return;
+    const crashRetryBundle = (crashRetry.result as {
+      bundle: { handoffId: string } | null;
+    }).bundle;
+    assert.equal(crashRetryBundle?.handoffId, firstBundle.handoffId);
 
     const failed = await router.handle({
       type: "ackReminderBundle",
@@ -756,6 +768,20 @@ describe("reminder bundle IPC", () => {
       },
     } as never);
     assert.deepEqual(confirmed, {
+      ok: true,
+      protocolVersion: PREMIND_PROTOCOL_VERSION,
+      result: { acknowledged: 3 },
+    });
+    const duplicateConfirmation = await router.handle({
+      type: "ackReminderBundle",
+      protocolVersion: PREMIND_PROTOCOL_VERSION,
+      payload: {
+        sessionId: "bundle-session",
+        handoffId: retriedBundle.handoffId,
+        state: "confirmed",
+      },
+    } as never);
+    assert.deepEqual(duplicateConfirmation, {
       ok: true,
       protocolVersion: PREMIND_PROTOCOL_VERSION,
       result: { acknowledged: 3 },

@@ -313,6 +313,13 @@ export class Router {
 							this.ok({
 								bundle: this.reminderHandoffs.claimReminderBundle(
 									request.payload.sessionId,
+									Date.now(),
+									request.sessionLease
+										? {
+											ownerInstanceId: request.sessionLease.ownerInstanceId,
+											sessionGeneration: request.sessionLease.generation,
+										}
+										: undefined,
 								),
 							}),
 						);

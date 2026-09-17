@@ -2510,6 +2510,40 @@ describe("daemon and coordinator fencing", () => {
       store.close()
     }
   })
+
+  test("transfers expired handoff execution without changing its stable id", () => {
+    const store = createStore()
+    try {
+      const first = store.claimHandoffExecution(
+        "00000000-0000-4000-8000-000000000010",
+        "session-1",
+        { ownerInstanceId: "daemon-a", sessionGeneration: 1 },
+        1_000,
+      )
+      assert.equal(first.executionGeneration, 1)
+      assert.throws(
+        () => store.claimHandoffExecution(
+          first.handoffId,
+          first.sessionId,
+          { ownerInstanceId: "daemon-b", sessionGeneration: 2 },
+          first.expiresAt - 1,
+        ),
+        /HANDOFF_BUSY/,
+      )
+      const moved = store.claimHandoffExecution(
+        first.handoffId,
+        first.sessionId,
+        { ownerInstanceId: "daemon-b", sessionGeneration: 2 },
+        first.expiresAt,
+      )
+      assert.equal(moved.handoffId, first.handoffId)
+      assert.equal(moved.executionGeneration, 2)
+      assert.equal(store.validateHandoffExecution(first, first.expiresAt), false)
+      assert.equal(store.validateHandoffExecution(moved, first.expiresAt), true)
+    } finally {
+      store.close()
+    }
+  })
 })
 
 

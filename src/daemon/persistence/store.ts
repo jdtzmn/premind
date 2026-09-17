@@ -189,8 +189,21 @@ export type ReminderBatchRecord = Omit<ReminderBatch, "subscriptionId"> & {
 	handoffSize: number | null;
 };
 
+export type HandoffExecutionOwner = {
+	ownerInstanceId: string;
+	sessionGeneration: number;
+};
+
+export type HandoffExecutionToken = HandoffExecutionOwner & {
+	handoffId: string;
+	sessionId: string;
+	executionGeneration: number;
+	expiresAt: number;
+};
+
 export type ReminderBundleClaim = {
 	handoffId: string;
+	executionGeneration: number;
 	batches: ReminderBatch[];
 };
 
@@ -2372,10 +2385,73 @@ export class StateStore {
 		return record ? this.refreshPendingReminder(record) : null;
 	}
 
+	claimHandoffExecution(
+		handoffId: string,
+		sessionId: string,
+		owner: HandoffExecutionOwner,
+		now = Date.now(),
+	): HandoffExecutionToken {
+		return this.transaction(() => {
+			const existing = this.db.prepare(
+				`SELECT owner_instance_id, session_generation, execution_generation, expires_at, settled_at
+				 FROM reminder_handoff_execution_claims WHERE handoff_id = ?`,
+			).get(handoffId) as {
+				owner_instance_id: string;
+				session_generation: number;
+				execution_generation: number;
+				expires_at: number;
+				settled_at: number | null;
+			} | undefined;
+			if (existing?.settled_at !== null && existing?.settled_at !== undefined) {
+				throw new Error(`HANDOFF_SETTLED: ${handoffId}`);
+			}
+			const active = existing !== undefined && existing.expires_at > now;
+			const sameOwner = active &&
+				existing.owner_instance_id === owner.ownerInstanceId &&
+				existing.session_generation === owner.sessionGeneration;
+			if (active && !sameOwner) throw new Error(`HANDOFF_BUSY: ${handoffId}`);
+			const executionGeneration = sameOwner
+				? existing.execution_generation
+				: (existing?.execution_generation ?? 0) + 1;
+			const expiresAt = now + PREMIND_REMINDER_HANDOFF_STALE_MS;
+			this.db.prepare(
+				`INSERT INTO reminder_handoff_execution_claims
+				 (handoff_id, session_id, owner_instance_id, session_generation, execution_generation, expires_at, settled_at)
+				 VALUES (?, ?, ?, ?, ?, ?, NULL)
+				 ON CONFLICT(handoff_id) DO UPDATE SET
+				 session_id = excluded.session_id, owner_instance_id = excluded.owner_instance_id,
+				 session_generation = excluded.session_generation, execution_generation = excluded.execution_generation,
+				 expires_at = excluded.expires_at, settled_at = NULL`,
+			).run(handoffId, sessionId, owner.ownerInstanceId, owner.sessionGeneration, executionGeneration, expiresAt);
+			return { handoffId, sessionId, ...owner, executionGeneration, expiresAt };
+		});
+	}
+
+	validateHandoffExecution(token: HandoffExecutionToken, now = Date.now()): boolean {
+		return this.db.prepare(
+			`SELECT 1 FROM reminder_handoff_execution_claims
+			 WHERE handoff_id = :handoffId AND session_id = :sessionId
+			 AND owner_instance_id = :ownerInstanceId AND session_generation = :sessionGeneration
+			 AND execution_generation = :executionGeneration AND expires_at > :now AND settled_at IS NULL`,
+		).get({
+			handoffId: token.handoffId,
+			sessionId: token.sessionId,
+			ownerInstanceId: token.ownerInstanceId,
+			sessionGeneration: token.sessionGeneration,
+			executionGeneration: token.executionGeneration,
+			now,
+		}) !== undefined;
+	}
+
+
 	/** Atomically claims every currently deliverable batch for a session. */
 	claimReminderBundle(
 		sessionId: string,
 		now = Date.now(),
+		owner: HandoffExecutionOwner = {
+			ownerInstanceId: "legacy-singleton",
+			sessionGeneration: 0,
+		},
 	): ReminderBundleClaim | null {
 		return this.transaction(() => {
 			const session = this.getSession(sessionId);
@@ -2403,7 +2479,19 @@ export class StateStore {
 			}
 			if (batches.length === 0) return null;
 
-			const handoffId = randomUUID();
+			const reusableHandoffIds = new Set(
+				batches.flatMap((batch) => {
+					const record = this.getReminderBatchRecord(batch.batchId, sessionId);
+					if (!record?.handoffId) return [];
+					const settled = this.db.prepare(
+						`SELECT 1 FROM reminder_handoff_settlements WHERE handoff_id = ?`,
+					).get(record.handoffId);
+					return settled ? [] : [record.handoffId];
+				}),
+			);
+			const handoffId = reusableHandoffIds.size === 1
+				? [...reusableHandoffIds][0]!
+				: randomUUID();
 			const handoffSize = batches.length;
 			for (const batch of batches) {
 				const record = this.getReminderBatchRecord(batch.batchId, sessionId);
@@ -2431,7 +2519,12 @@ export class StateStore {
 				if (result.changes !== 1)
 					throw new Error(`Failed to claim reminder batch ${batch.batchId}`);
 			}
-			return { handoffId, batches };
+			const execution = this.claimHandoffExecution(handoffId, sessionId, owner, now);
+			return {
+				handoffId,
+				executionGeneration: execution.executionGeneration,
+				batches,
+			};
 		});
 	}
 
@@ -2442,7 +2535,17 @@ export class StateStore {
 				payload.sessionId,
 				payload.handoffId,
 			);
-			if (records.length === 0) return 0;
+			if (records.length === 0) {
+				const settlement = this.db.prepare(
+					`SELECT settlement_state, acknowledged_count FROM reminder_handoff_settlements
+					 WHERE handoff_id = ? AND session_id = ?`,
+				).get(payload.handoffId, payload.sessionId) as
+					| { settlement_state: "confirmed" | "failed"; acknowledged_count: number }
+					| undefined;
+				return settlement?.settlement_state === payload.state
+					? settlement.acknowledged_count
+					: 0;
+			}
 			const expectedSize = records[0].handoffSize;
 			if (
 				expectedSize !== records.length ||
@@ -2467,6 +2570,22 @@ export class StateStore {
 				if (!acknowledged)
 					throw new Error(`Failed to acknowledge reminder batch ${record.batchId}`);
 			}
+			this.db.prepare(
+				`INSERT INTO reminder_handoff_settlements
+				 (handoff_id, session_id, settlement_state, acknowledged_count, settled_at)
+				 VALUES (:handoffId, :sessionId, :state, :acknowledgedCount, :settledAt)
+				 ON CONFLICT(handoff_id) DO NOTHING`,
+			).run({
+				handoffId: payload.handoffId,
+				sessionId: payload.sessionId,
+				state: payload.state,
+				acknowledgedCount: records.length,
+				settledAt: now,
+			});
+			this.db.prepare(
+				`UPDATE reminder_handoff_execution_claims SET settled_at = :now
+				 WHERE handoff_id = :handoffId AND session_id = :sessionId AND settled_at IS NULL`,
+			).run({ handoffId: payload.handoffId, sessionId: payload.sessionId, now });
 			if (payload.state === "failed") {
 				this.db
 					.prepare(
@@ -3446,6 +3565,24 @@ export class StateStore {
         updated_at INTEGER NOT NULL,
         FOREIGN KEY(session_id) REFERENCES sessions(session_id) ON DELETE CASCADE,
         FOREIGN KEY(subscription_id) REFERENCES session_subscriptions(subscription_id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS reminder_handoff_settlements (
+        handoff_id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        settlement_state TEXT NOT NULL CHECK(settlement_state IN ('confirmed', 'failed')),
+        acknowledged_count INTEGER NOT NULL,
+        settled_at INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS reminder_handoff_execution_claims (
+        handoff_id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        owner_instance_id TEXT NOT NULL,
+        session_generation INTEGER NOT NULL,
+        execution_generation INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL,
+        settled_at INTEGER
       );
 
       CREATE TABLE IF NOT EXISTS branch_watchers (
