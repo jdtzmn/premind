@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { requestSchema } from "../ipc.ts";
-import type { PremindRequest, PremindResponse } from "../ipc.ts";
+import { sessionLeaseTokenSchema } from "../schema.ts";
+import type { PremindRequest, PremindResponse, RoutedPremindRequest } from "../ipc.ts";
 
 export const PROTOCOL_V2 = 2 as const;
 
@@ -28,7 +29,7 @@ export type ProtocolV2Response = z.infer<typeof protocolV2ResponseSchema>;
 
 export const parseProtocolV2RequestForRouter = (
   value: unknown,
-): PremindRequest => {
+): RoutedPremindRequest => {
   if (typeof value !== "object" || value === null) {
     return requestSchema.parse(value);
   }
@@ -38,7 +39,12 @@ export const parseProtocolV2RequestForRouter = (
     throw new Error(`Expected protocol version ${PROTOCOL_V2}`);
   }
 
-  return requestSchema.parse({ ...request, protocolVersion: 1 });
+  const parsed = requestSchema.parse({ ...request, protocolVersion: 1 });
+  if (request.sessionLease === undefined) return parsed;
+  return {
+    ...parsed,
+    sessionLease: sessionLeaseTokenSchema.parse(request.sessionLease),
+  };
 };
 
 export const toProtocolV2Response = (

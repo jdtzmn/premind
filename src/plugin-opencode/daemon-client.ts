@@ -36,6 +36,12 @@ import { ensureDaemonRunning } from "./daemon-launcher.ts"
 
 const MAX_RETRIES = 3
 const RETRY_DELAY_MS = 500
+const SESSION_LEASE_CONTROL_OPERATIONS = new Set([
+  "claimSessionLease",
+  "renewSessionLease",
+  "transferSessionLease",
+  "releaseSessionLease",
+])
 
 type PremindDaemonClientOptions = {
   host?: SessionHost
@@ -496,9 +502,22 @@ export class PremindDaemonClient {
   private withNegotiatedProtocol(message: unknown): unknown {
     if (typeof message !== "object" || message === null) return message
     if (!("protocolVersion" in message)) return message
+    const request = message as Record<string, unknown>
+    const payload = request.payload
+    const sessionId =
+      typeof payload === "object" && payload !== null && "sessionId" in payload
+        ? (payload as { sessionId?: unknown }).sessionId
+        : undefined
+    const lease = typeof sessionId === "string" ? this.sessionLeases.get(sessionId) : undefined
+    const type = typeof request.type === "string" ? request.type : ""
     return {
-      ...(message as Record<string, unknown>),
+      ...request,
       protocolVersion: this.protocolVersion,
+      ...(this.protocolVersion === PROTOCOL_V2 &&
+      lease &&
+      !SESSION_LEASE_CONTROL_OPERATIONS.has(type)
+        ? { sessionLease: lease }
+        : {}),
     }
   }
 

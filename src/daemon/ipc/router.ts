@@ -12,7 +12,7 @@ import {
 	type SubscribePayload,
 	type UnsubscribePayload,
 } from "../../shared/schema.ts";
-import type { PremindRequest, PremindResponse } from "../../shared/ipc.ts";
+import type { PremindResponse, RoutedPremindRequest } from "../../shared/ipc.ts";
 import { createLogger } from "../logging/logger.ts";
 import type { StateStore } from "../persistence/store.ts";
 import { ReminderHandoffRegistry } from "../reminders/reminder-handoff-registry.ts";
@@ -35,7 +35,7 @@ export class Router {
 		private readonly onDemandChanged: () => void = () => {},
 	) {}
 
-	async handle(request: PremindRequest): Promise<PremindResponse> {
+	async handle(request: RoutedPremindRequest): Promise<PremindResponse> {
 		try {
 			switch (request.type) {
 				case "registerClient":
@@ -164,6 +164,8 @@ export class Router {
 					return this.ok({ suspended: true });
 				}
 				case "updateSessionState": {
+					const leaseFailure = this.validateAttachedSessionLease(request);
+					if (leaseFailure) return leaseFailure;
 					const result = this.store.updateSessionState(request.payload);
 					if (!result.updated)
 						return this.fail(
@@ -411,6 +413,22 @@ export class Router {
 		}
 		return this.ok(result);
 	}
+
+	private validateAttachedSessionLease(
+		request: RoutedPremindRequest,
+	): PremindResponse | null {
+		if (!request.sessionLease) return null;
+		const sessionId = (request.payload as { sessionId?: unknown }).sessionId;
+		if (
+			typeof sessionId !== "string" ||
+			request.sessionLease.sessionId !== sessionId ||
+			!this.store.validateSessionLease(request.sessionLease)
+		) {
+			return this.fail("SESSION_MOVED", "Session lease is stale or belongs elsewhere");
+		}
+		return null;
+	}
+
 
 	private sessionLeaseFailure(error: unknown): PremindResponse {
 		const message = error instanceof Error ? error.message : String(error);

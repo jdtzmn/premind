@@ -773,6 +773,7 @@ describe("reminder bundle IPC", () => {
 describe("session lease IPC", () => {
   test("claims ownership and rejects a concurrent daemon", async () => {
     const store = createStore();
+    registerSession(store);
     const router = new Router(store, async () => worktree);
     const first = await router.handle({
       type: "claimSessionLease",
@@ -819,6 +820,25 @@ describe("session lease IPC", () => {
       : null;
     assert.equal(movedLease?.generation, 2);
     assert.ok(movedLease);
+
+    const staleMutation = await router.handle({
+      type: "updateSessionState",
+      protocolVersion: PREMIND_PROTOCOL_VERSION,
+      sessionLease: lease,
+      payload: { sessionId: "session-1", busyState: "busy" },
+    } as never);
+    assert.equal(staleMutation.ok, false);
+    if (!staleMutation.ok) assert.equal(staleMutation.error.code, "SESSION_MOVED");
+    assert.equal(store.getSession("session-1")?.busy_state, "idle");
+
+    const currentMutation = await router.handle({
+      type: "updateSessionState",
+      protocolVersion: PREMIND_PROTOCOL_VERSION,
+      sessionLease: movedLease,
+      payload: { sessionId: "session-1", busyState: "busy" },
+    } as never);
+    assert.equal(currentMutation.ok, true);
+    assert.equal(store.getSession("session-1")?.busy_state, "busy");
 
     const staleRenewal = await router.handle({
       type: "renewSessionLease",

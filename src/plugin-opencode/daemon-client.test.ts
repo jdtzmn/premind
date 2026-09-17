@@ -4,7 +4,11 @@ import { describe, test } from "node:test"
 import { PremindDaemonClient } from "./daemon-client.ts"
 import type { ReminderBatch } from "../shared/schema.ts"
 
-type Request = { type: string; payload: Record<string, unknown> }
+type Request = {
+  type: string
+  protocolVersion?: number
+  payload: Record<string, unknown>
+}
 
 
 const readV1Fixture = (name: string): unknown =>
@@ -93,6 +97,7 @@ describe("PremindDaemonClient session leases", () => {
       daemonInstanceId: string
       supportedOperations: Set<string>
       requestWithRetry: (request: Request) => Promise<unknown>
+      withNegotiatedProtocol: (request: Request) => Record<string, unknown>
     }
     testClient.protocolVersion = 2
     testClient.daemonInstanceId = "daemon-a"
@@ -119,6 +124,12 @@ describe("PremindDaemonClient session leases", () => {
       status: "active",
       busyState: "idle",
     })
+    const fenced = testClient.withNegotiatedProtocol({
+      type: "updateSessionState",
+      protocolVersion: 1,
+      payload: { sessionId: "session-1", busyState: "busy" },
+    })
+    assert.deepEqual(fenced.sessionLease, lease)
     await client.heartbeat()
     await client.unregisterSession("session-1")
 

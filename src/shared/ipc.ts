@@ -34,6 +34,7 @@ import {
   unregisterSessionPayloadSchema,
   updateSessionStatePayloadSchema,
 } from "./schema.ts";
+import type { SessionLeaseToken } from "./schema.ts";
 
 export const requestSchema = z.discriminatedUnion("type", [
   z.object({
@@ -296,4 +297,7 @@ export const unsubscribeResponseSchema = z
 export { debugStatusResponseSchema };
 
 export type PremindRequest = z.infer<typeof requestSchema>;
+export type RoutedPremindRequest = PremindRequest & {
+  sessionLease?: SessionLeaseToken;
+};
 export type PremindResponse = z.infer<typeof responseSchema>;

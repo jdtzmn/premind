@@ -12,6 +12,7 @@ import {
 } from "./descriptor.ts";
 import {
   PROTOCOL_V2,
+  parseProtocolV2RequestForRouter,
   protocolV2ErrorResponseSchema,
   protocolV2SuccessResponseSchema,
 } from "./v2.ts";
@@ -119,6 +120,25 @@ describe("normal protocol v2 base envelopes", () => {
       }),
     );
   });
+
+  test("preserves a fenced session lease for router validation", () => {
+    const sessionLease = {
+      sessionId: "session-1",
+      ownerInstanceId: "daemon-a",
+      generation: 2,
+      clientIncarnationNonce: "client-a-1",
+      leaseToken: "00000000-0000-4000-8000-000000000001",
+      claimedAt: 1,
+      expiresAt: 60_001,
+    }
+    const parsed = parseProtocolV2RequestForRouter({
+      type: "updateSessionState",
+      protocolVersion: PROTOCOL_V2,
+      sessionLease,
+      payload: { sessionId: "session-1", busyState: "busy" },
+    })
+    assert.deepEqual(parsed.sessionLease, sessionLease)
+  })
 
   test("keeps explicit deletion out of the frozen protocol-v1 allowlist", () => {
     const request = {
