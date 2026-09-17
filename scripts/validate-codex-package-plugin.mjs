@@ -24,6 +24,7 @@ const packageJson = parseJson(
 	fs.readFileSync(path.join(ROOT, "package.json"), "utf8"),
 	"package.json",
 );
+
 const codexHome = fs.mkdtempSync(
 	path.join(os.tmpdir(), "premind-codex-package-home-"),
 );
@@ -42,6 +43,22 @@ const run = (command, args, options = {}) => {
 	);
 	return result.stdout.trim();
 };
+
+const portableArtifactNames = [
+	"premind-daemon.mjs",
+	"premind-hook.mjs",
+	"premind-mcp.mjs",
+];
+const trackedPluginArtifacts = new Set(
+	run("git", ["ls-files", "--", "plugins/premind/dist"])
+		.split("\n")
+		.filter(Boolean),
+);
+for (const name of portableArtifactNames) {
+	const artifact = `plugins/premind/dist/${name}`;
+	assert.ok(trackedPluginArtifacts.has(artifact), `${artifact} is not tracked`);
+	assert.ok(fs.existsSync(path.join(ROOT, artifact)), `${artifact} is missing`);
+}
 
 const runCodex = (args) =>
 	run("codex", args, { env: { ...process.env, CODEX_HOME: codexHome } });

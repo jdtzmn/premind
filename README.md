@@ -83,6 +83,7 @@ The installed plugin runs dependency-closed Node bundles from its own `dist/` di
 Codex cannot wake an already-idle stock CLI thread. Updates found while idle remain durable and arrive at the next available `SessionStart`, `UserPromptSubmit`, or `Stop` boundary. An interrupted delivery may be shown again rather than silently lost.
 
 After changing a local checkout, refresh the marketplace/plugin installation and re-review hooks. Remove the plugin with `codex plugin remove premind@premind`, then remove its marketplace source if it is no longer needed.
+For a source checkout modified locally, run `bun run build:runtime` before refreshing so the marketplace sees updated bundles.
 
 ## How it works
 

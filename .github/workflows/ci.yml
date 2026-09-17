@@ -20,7 +20,7 @@ jobs:
           node-version: "22.13"
       - run: bun install --frozen-lockfile
       - run: bun run build:runtime
-      - run: git diff --exit-code -- runtime plugin-claude/runtime
+      - run: git diff --exit-code -- runtime plugin-claude/runtime plugins/premind/dist
       - run: bun run check
 
   unit:
@@ -37,7 +37,7 @@ jobs:
           node-version: "22.13"
       - run: bun install --frozen-lockfile
       - run: bun run build:runtime
-      - run: bun run test && node --import tsx --test src/client/prerequisites.test.ts
+      - run: bun run test && node --import tsx --test src/client/prerequisites.test.ts && bun run test:codex:contract
 
   harness:
     name: Delivery reliability harness
