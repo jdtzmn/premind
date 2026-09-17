@@ -13,7 +13,17 @@ export const PREMIND_STATE_DIR =
           path.join(os.homedir(), ".local", "state"),
         "premind",
       ));
-export const PREMIND_DB_PATH = path.join(PREMIND_STATE_DIR, "premind.db");
+export const PREMIND_LEGACY_DB_PATH = path.join(PREMIND_STATE_DIR, "premind.db");
+export const PREMIND_DB_PATH = path.join(
+  PREMIND_STATE_DIR,
+  "epochs",
+  "1",
+  "premind.db",
+);
+export const PREMIND_MODERN_SOCKET_PATH = path.join(
+  os.tmpdir(),
+  "premind-modern-epoch-1.sock",
+);
 export const PREMIND_COMPATIBILITY_MARKER_PATH = path.join(
   PREMIND_STATE_DIR,
   "compatibility-v1.json",

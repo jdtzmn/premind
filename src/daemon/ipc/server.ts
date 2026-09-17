@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { createLogger } from "../logging/logger.ts";
 import { legacyRequestSchema } from "../../shared/ipc.ts";
-import type { PremindResponse } from "../../shared/ipc.ts";
+import type { PremindResponse, RoutedPremindRequest } from "../../shared/ipc.ts";
 import { PREMIND_SOCKET_PATH } from "../../shared/constants.ts";
 import {
   bootstrapInitializeRequestSchema,
@@ -108,6 +108,10 @@ export class IpcServer {
 
   get daemonInstanceId() {
     return this.instanceId;
+  }
+
+  handleRequest(request: RoutedPremindRequest) {
+    return this.router.handle(request);
   }
 
 	async listen(socketPath = PREMIND_SOCKET_PATH) {

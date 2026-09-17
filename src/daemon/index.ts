@@ -1,16 +1,24 @@
 import { randomUUID } from "node:crypto"
+import fs from "node:fs"
 import {
   PREMIND_CLOSED_SESSION_RETENTION_MS,
   PREMIND_COMPATIBILITY_LOCK_PATH,
   PREMIND_COMPATIBILITY_MARKER_PATH,
   PREMIND_DAEMON_LOG_PATH,
   PREMIND_DB_PATH,
+  PREMIND_LEGACY_DB_PATH,
+  PREMIND_MODERN_SOCKET_PATH,
+  PREMIND_SOCKET_PATH,
+  PREMIND_STATE_DIR,
   PREMIND_IDLE_SHUTDOWN_GRACE_MS,
   PREMIND_REMINDER_HANDOFF_STALE_MS,
   PREMIND_SESSION_STALE_MS,
 } from "../shared/constants.ts"
 import { isSocketReachable } from "../shared/daemon-startup.ts"
 import { reconcileCompatibilityMarker } from "../shared/protocol/compatibility-marker-reconciler.ts"
+import { LegacyV1GuardServer } from "../shared/protocol/legacy-v1-guard-server.ts"
+import { LegacyV1ProxyRouter } from "../shared/protocol/legacy-v1-proxy.ts"
+import { bridgeLegacyStorage } from "../shared/protocol/storage-bridge.ts"
 import { PREMIND_VERSION } from "../shared/version.ts"
 import { StateStore } from "./persistence/store.ts"
 import { createLogger } from "./logging/logger.ts"
@@ -37,7 +45,7 @@ async function main() {
   const compatibility = reconcileCompatibilityMarker({
     markerPath: PREMIND_COMPATIBILITY_MARKER_PATH,
     lockPath: PREMIND_COMPATIBILITY_LOCK_PATH,
-    dbPath: PREMIND_DB_PATH,
+    dbPath: fs.existsSync(PREMIND_DB_PATH) ? PREMIND_DB_PATH : PREMIND_LEGACY_DB_PATH,
     currentVersion: PREMIND_VERSION,
     candidate: {
       markerFormat: 1,
@@ -49,15 +57,35 @@ async function main() {
       generation: 0,
     },
   })
-  const store = new StateStore()
-  const databaseStorageEpoch = store.getStorageEpoch()
-  if (databaseStorageEpoch !== compatibility.storageEpoch) {
-    store.close()
-    throw new Error(
-      `STORAGE_EPOCH_MISMATCH: marker=${compatibility.storageEpoch} database=${databaseStorageEpoch}`,
-    )
-  }
-  const server = new IpcServer(store)
+  let runtime: { server: IpcServer; guard: LegacyV1GuardServer } | undefined
+  await bridgeLegacyStorage({
+    stateDir: PREMIND_STATE_DIR,
+    legacyDbPath: PREMIND_LEGACY_DB_PATH,
+    modernDbPath: PREMIND_DB_PATH,
+    historicalSocketPath: PREMIND_SOCKET_PATH,
+    compatibilityLockPath: PREMIND_COMPATIBILITY_LOCK_PATH,
+    bindGuard: async () => {
+      const store = new StateStore(PREMIND_DB_PATH)
+      const databaseStorageEpoch = store.getStorageEpoch()
+      if (databaseStorageEpoch !== compatibility.storageEpoch) {
+        store.close()
+        throw new Error(
+          `STORAGE_EPOCH_MISMATCH: marker=${compatibility.storageEpoch} database=${databaseStorageEpoch}`,
+        )
+      }
+      const server = new IpcServer(store)
+      const proxy = new LegacyV1ProxyRouter(
+        store,
+        server.daemonInstanceId,
+        (request) => server.handleRequest(request),
+      )
+      const guard = new LegacyV1GuardServer(proxy)
+      await guard.listen(PREMIND_SOCKET_PATH)
+      runtime = { server, guard }
+    },
+  })
+  if (!runtime) throw new Error("LEGACY_GUARD_NOT_BOUND")
+  const { server, guard } = runtime
   let daemonLease = server.store.claimDaemonInstanceLease({
     instanceId: server.daemonInstanceId,
     incarnationNonce: randomUUID(),
@@ -133,7 +161,7 @@ async function main() {
     logger.info("detail file cleanup", { removed: cleanedFiles })
   }
 
-  await server.listen()
+  await server.listen(PREMIND_MODERN_SOCKET_PATH)
 
   const discoveryScheduler = new PollScheduler(
     "branch-discovery",
@@ -238,7 +266,9 @@ async function main() {
     discoveryScheduler.stop()
     prScheduler.stop()
     pullRequestWatcher.close()
-    void server.close().finally(() => process.exit(1))
+    void guard.close()
+      .then(() => server.close(PREMIND_MODERN_SOCKET_PATH))
+      .finally(() => process.exit(1))
   }, 10_000)
   if (typeof authorityInterval.unref === "function") authorityInterval.unref()
 
@@ -251,10 +281,11 @@ async function main() {
       discoveryScheduler.stop()
       prScheduler.stop()
       pullRequestWatcher.close()
+      await guard.close()
       server.store.releaseCoordinatorLease(coordinatorLease)
       server.store.releaseDaemonInstanceLease(daemonLease)
       logger.info("graceful shutdown", { reason })
-      await server.close()
+      await server.close(PREMIND_MODERN_SOCKET_PATH)
     },
     onStopped: () => process.exit(0),
     onError: (error) => {
