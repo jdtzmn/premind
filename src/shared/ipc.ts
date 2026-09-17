@@ -233,7 +233,7 @@ const subscriptionResponseSchema = z
     repo: z.string().min(1),
     prNumber: z.number().int().positive(),
     source: z.enum(["automatic", "manual"]),
-    writePolicy: z.enum(["owned-active", "user-authorized", "observe-only"]),
+    writePolicy: z.enum(["owned-active", "user-authorized", "observe-only"]).optional(),
     state: z.enum(["active", "unsubscribed"]),
     lastDeliveredEventSeq: z.number().int().nonnegative(),
     updatedAt: z.number().int(),
