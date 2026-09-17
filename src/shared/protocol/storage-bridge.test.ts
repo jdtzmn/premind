@@ -48,7 +48,23 @@ const readModernValue = (dbPath: string) => {
 describe("legacy storage bridge", () => {
   test("backs up retained state and permanently quarantines the historical path", async () => {
     const options = createOptions();
-    assert.equal(await bridgeLegacyStorage(options), "migrated");
+    let guardBound = false;
+    assert.equal(
+      await bridgeLegacyStorage({
+        ...options,
+        bindGuard: async () => {
+          assert.equal(fs.existsSync(path.join(options.stateDir, "daemon-start.lock")), true);
+          assert.equal(fs.existsSync(options.compatibilityLockPath), true);
+          assert.deepEqual(
+            fs.readFileSync(options.legacyDbPath),
+            LEGACY_STORAGE_QUARANTINE_BYTES,
+          );
+          guardBound = true;
+        },
+      }),
+      "migrated",
+    );
+    assert.equal(guardBound, true);
     assert.equal(readModernValue(options.modernDbPath), "preserved");
     assert.deepEqual(fs.readFileSync(options.legacyDbPath), LEGACY_STORAGE_QUARANTINE_BYTES);
     assert.equal(fs.existsSync(`${options.legacyDbPath}.bridge-v1.sqlite`), true);

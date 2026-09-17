@@ -20,6 +20,7 @@ export type StorageBridgeOptions = {
   modernDbPath: string;
   historicalSocketPath: string;
   compatibilityLockPath: string;
+  bindGuard?: () => Promise<void>;
   afterModernPublish?: () => void;
 };
 
@@ -74,6 +75,7 @@ export const bridgeLegacyStorage = async (
           fs.existsSync(options.modernDbPath) &&
           isQuarantineTombstone(options.legacyDbPath)
         ) {
+          await options.bindGuard?.();
           return "already-bridged";
         }
         if (!fs.existsSync(options.legacyDbPath)) {
@@ -114,6 +116,7 @@ export const bridgeLegacyStorage = async (
         fs.rmSync(`${options.legacyDbPath}-wal`, { force: true });
         fs.rmSync(`${options.legacyDbPath}-shm`, { force: true });
         publishQuarantineTombstone(options.legacyDbPath);
+        await options.bindGuard?.();
         return "migrated";
       },
     );
