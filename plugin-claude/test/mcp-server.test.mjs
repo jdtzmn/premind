@@ -45,6 +45,26 @@ test("probe reports runtime, plugin, config, daemon, and delivery health", async
   assert.doesNotMatch(result.content[0].text, /secret/);
 });
 
+test("probe reports a redacted diagnostic when the daemon is unavailable", async () => {
+  const result = await handleMcpRequest(
+    { method: "tools/call", params: { name: "probe" } },
+    async () => {
+      throw new Error("private/session/path");
+    },
+    { HOME: "/definitely-missing-premind-home" },
+  );
+  const value = JSON.parse(result.content[0].text);
+  assert.deepEqual(value.daemon, {
+    reachable: false,
+    protocolVersion: null,
+    globallyDisabled: null,
+    error: "Premind daemon is unavailable.",
+  });
+  assert.equal(value.runtime.requiredNode, ">=22.13.0");
+  assert.equal(value.configSource, "schema defaults");
+  assert.doesNotMatch(result.content[0].text, /private\/session\/path/);
+});
+
 test("global controls are model-callable and describe their daemon-wide effect", async () => {
   const calls = [];
   const result = await handleMcpRequest(

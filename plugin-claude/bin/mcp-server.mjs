@@ -144,10 +144,16 @@ export const handleMcpRequest = async (
     );
   }
   if (name === "probe") {
-    const [disabled, status] = await Promise.all([
+    const [disabledResult, statusResult] = await Promise.allSettled([
       ipc("getGlobalDisabled", {}),
       ipc("debugStatus", {}),
     ]);
+    const reachable =
+      disabledResult.status === "fulfilled" && statusResult.status === "fulfilled";
+    const disabled =
+      disabledResult.status === "fulfilled" ? disabledResult.value : undefined;
+    const status =
+      statusResult.status === "fulfilled" ? statusResult.value : undefined;
     return text(
       JSON.stringify({
         plugin: {
@@ -160,9 +166,10 @@ export const handleMcpRequest = async (
           compatible: isNodeCompatible(),
         },
         daemon: {
-          reachable: true,
-          protocolVersion: status.daemon?.protocolVersion ?? null,
-          globallyDisabled: Boolean(disabled.disabled),
+          reachable,
+          protocolVersion: status?.daemon?.protocolVersion ?? null,
+          globallyDisabled: disabled ? Boolean(disabled.disabled) : null,
+          ...(reachable ? {} : { error: "Premind daemon is unavailable." }),
         },
         configSource: resolveConfigSource(environment),
         delivery:
