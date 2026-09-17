@@ -132,10 +132,15 @@ const failureEvent = (name = "lint"): NormalizedPrEvent => ({
   dedupeKey: `failure:${name}`, kind: "check.failed", priority: "high", summary: `Check failed: ${name}`,
   payload: { name, headSha: "head-old", workflow: "CI", event: "push" },
 })
-const setupLive = (source: "automatic" | "manual" = "automatic") => {
+const setupLive = (
+  source: "automatic" | "manual" = "automatic",
+  writePolicy?: "owned-active" | "user-authorized" | "observe-only",
+ ) => {
   const store = createStore()
   seed(store, source) // Also includes an unrelated comment which must survive reconciliation.
-  const subscription = store.upsertSubscription({ sessionId: "session", repo: "acme/repo", prNumber: 13, source })
+  const subscription = store.upsertSubscription({
+    sessionId: "session", repo: "acme/repo", prNumber: 13, source, writePolicy,
+  })
   const registry = new ReminderHandoffRegistry(store)
   const save = (snapshot: PullRequestSnapshot) => store.saveSnapshot("acme/repo", 13, snapshot)
   return { store, registry, subscription, save }
@@ -150,14 +155,14 @@ describe("pending reminder live reconciliation", () => {
     { name: "matching", switchBranch: false, instruction: /resolve .*on HEAD/ },
     { name: "switched", switchBranch: true, instruction: /target worktree is not active/ },
   ]) {
-    test(`claim-time refresh keeps self-owned manual policy with a ${scenario.name} worktree`, () => {
-      const { store, registry, subscription, save } = setupLive("manual")
+    test(`claim-time refresh keeps user-authorized manual policy with a ${scenario.name} worktree`, () => {
+      const { store, registry, subscription, save } = setupLive("manual", "user-authorized")
       try {
         save(liveSnapshot())
         store.reconcileSubscriptionPolicies("acme/repo", 13, "octocat", "octocat")
         store.insertEvents("acme/repo", 13, [failureEvent()])
         const built = store.buildReminderBatchForSubscription(subscription.subscriptionId)!
-        assert.match(built.reminderText, /verified as yours/)
+        assert.match(built.reminderText, /User-authorized tracking/)
         assert.match(built.reminderText, /resolve .*on HEAD/)
         if (scenario.switchBranch) {
           store.upsertWorktreeBinding({
@@ -167,7 +172,7 @@ describe("pending reminder live reconciliation", () => {
         }
         const claimed = registry.claimReminderBundle("session")?.batches[0]
         assert.ok(claimed)
-        assert.match(claimed.reminderText, /verified as yours/)
+        assert.match(claimed.reminderText, /User-authorized tracking/)
         assert.match(claimed.reminderText, scenario.instruction)
         assert.doesNotMatch(claimed.reminderText, /wait for authorization/)
       } finally { registry.close(); store.close() }

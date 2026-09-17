@@ -90,6 +90,52 @@ test("high-priority approvals and reviewer invitations do not request fixes", ()
   const text = render([row("review.approved"), row("reviewer.requested")], snapshot())
   assert.doesNotMatch(text, /action required:/i)
 })
+test("write policy overrides manual provenance", () => {
+  const current = snapshot()
+  current.checks = [{ name: "lint", state: "FAILURE" }]
+  const text = renderReminder(
+    [row("check.failed", { name: "lint", headSha: "head" })],
+    current,
+    { repo: "acme/repo", prNumber: 7, source: "manual", writePolicy: "user-authorized" },
+  ).reminderText
+  assert.match(text, /User-authorized tracking/)
+  assert.match(text, /Action required for this authorized PR/)
+  assert.doesNotMatch(text, /Observation-only CI\/conflict update/)
+})
+
+test("persisted authority stays gated by the matching worktree", () => {
+  const current = snapshot()
+  current.checks = [{ name: "lint", state: "FAILURE" }]
+  const text = renderReminder(
+    [row("check.failed", { name: "lint", headSha: "head" })],
+    current,
+    { repo: "acme/repo", prNumber: 7, source: "manual", writePolicy: "user-authorized", worktreeMatchesTarget: false },
+  ).reminderText
+  assert.match(text, /User-authorized tracking/)
+  assert.match(text, /target worktree is not active/)
+  assert.doesNotMatch(text, /Action required for this authorized PR/)
+})
+
+test("persisted observe-only policy overrides automatic provenance", () => {
+  const current = snapshot()
+  current.checks = [{ name: "lint", state: "FAILURE" }]
+  const text = renderReminder(
+    [row("check.failed", { name: "lint", headSha: "head" })],
+    current,
+    { repo: "acme/repo", prNumber: 7, source: "automatic", writePolicy: "observe-only", worktreeMatchesTarget: true },
+  ).reminderText
+  assert.match(text, /This PR is observation-only/)
+  assert.match(text, /Observation-only CI\/conflict update/)
+  assert.match(text, /Do not edit, push to, rebase, merge, or comment on this PR/)
+  assert.doesNotMatch(text, /Action required for this owned PR/)
+})
+
+test("terminal events stop PR-specific work", () => {
+  const text = renderReminder([row("pr.merged")], snapshot(), { repo: "acme/repo", prNumber: 7, writePolicy: "owned-active" }).reminderText
+  assert.match(text, /PR merged\. Stop making PR-specific changes/)
+})
+
+
 
 test("nested grouped reviews reconcile individually and request action only once", () => {
   const current = snapshot()
@@ -117,24 +163,18 @@ for (const source of ["automatic", "manual"] as const) {
       store.saveSnapshotAndEvents("acme/repo", 7, current, diffSnapshot(previous, current))
       const batch = registry.getPendingReminder("session")!
       assert.ok(batch)
-      assert.match(
-        batch.reminderText,
-        /Observation-only review feedback:/,
-      )
-      assert.equal(
-        batch.reminderText.match(/Observation-only review feedback:/g)?.length,
-        1,
-      )
+      const reviewInstruction = source === "manual"
+        ? /Observation-only review feedback:/g
+        : /Review action required:/g
+      assert.match(batch.reminderText, reviewInstruction)
+      assert.equal(batch.reminderText.match(reviewInstruction)?.length, 1)
       const max = store.getReminderBatchRecord(batch.batchId)!.maxEventSeq
       current.core.reviewDecision = "APPROVED"
       store.saveSnapshot("acme/repo", 7, current)
       const refreshed = registry.getPendingReminder("session")!
       assert.equal(refreshed.batchId, batch.batchId)
       assert.equal(store.getReminderBatchRecord(batch.batchId)!.maxEventSeq, max)
-      assert.doesNotMatch(
-        refreshed.reminderText,
-        /Observation-only review feedback:/,
-      )
+      assert.doesNotMatch(refreshed.reminderText, reviewInstruction)
     } finally {
       registry.close()
       store.close()

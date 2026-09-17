@@ -2319,6 +2319,20 @@ describe("subscription write policy", () => {
     })
     assert.equal(rediscovered.source, "manual")
     assert.equal(rediscovered.writePolicy, "user-authorized")
+    const current = snapshot()
+    current.core.number = 8
+    current.core.headRefName = "feature/policy"
+    current.checks = [{ name: "lint", state: "FAILURE" }]
+    store.saveSnapshot("acme/repo", 8, current)
+    store.insertEvents("acme/repo", 8, [{
+      dedupeKey: "policy-lint", kind: "check.failed", priority: "high",
+      summary: "Check failed: lint", payload: { name: "lint", headSha: "sha-7" },
+    }])
+    const batch = store.buildReminderBatchForSubscription(authorized.subscriptionId)
+    assert.ok(batch)
+    assert.match(batch.reminderText, /User-authorized tracking/)
+    assert.match(batch.reminderText, /target worktree is not active/)
+    assert.doesNotMatch(batch.reminderText, /Action required for this authorized PR/)
     store.close()
   })
 })

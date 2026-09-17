@@ -2267,11 +2267,15 @@ export class StateStore {
 		const prNumber =
 			subscription?.prNumber ?? record.prNumber ?? session?.pr_number ?? undefined;
 		const policy = subscription?.policy;
+		const writePolicy = subscription?.writePolicy ?? record.writePolicy;
+		const requiresMatchingWorktree = writePolicy
+			? writePolicy !== "observe-only"
+			: policy === "actionable";
 		const snapshot = prNumber ? this.getSnapshot(repo, prNumber) : null;
-		const worktree = policy === "actionable"
+		const worktree = requiresMatchingWorktree
 			? this.getWorktreeBinding(record.sessionId)
 			: null;
-		const worktreeMatchesTarget = policy === "actionable"
+		const worktreeMatchesTarget = requiresMatchingWorktree
 			? worktree?.repo === repo &&
 				worktree.branch === snapshot?.core.headRefName
 			: undefined;
@@ -2282,7 +2286,7 @@ export class StateStore {
 			source: subscription?.source ?? record.source,
 			policy,
 			worktreeMatchesTarget,
-			writePolicy: subscription?.writePolicy ?? record.writePolicy,
+			writePolicy,
 		};
 	}
 
@@ -2667,9 +2671,12 @@ export class StateStore {
 		const maxEventSeq = events.at(-1)!.seq;
 		const targetSnapshot = targetPrNumber
 			? this.getSnapshot(targetRepo, targetPrNumber) : null;
-		const worktree = subscription?.policy === "actionable"
+		const requiresMatchingWorktree = subscription?.writePolicy
+			? subscription.writePolicy !== "observe-only"
+			: subscription?.policy === "actionable";
+		const worktree = requiresMatchingWorktree
 			? this.getWorktreeBinding(sessionId) : null;
-		const worktreeMatchesTarget = subscription?.policy === "actionable"
+		const worktreeMatchesTarget = requiresMatchingWorktree
 			? worktree?.repo === targetRepo &&
 				worktree.branch === targetSnapshot?.core.headRefName : undefined;
 		const { reminderText, events: condensed } = renderReminder(
