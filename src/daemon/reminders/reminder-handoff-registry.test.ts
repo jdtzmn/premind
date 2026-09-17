@@ -146,6 +146,34 @@ const assertAction = (text: string, actionable: boolean) => {
 }
 
 describe("pending reminder live reconciliation", () => {
+  for (const scenario of [
+    { name: "matching", switchBranch: false, instruction: /resolve .*on HEAD/ },
+    { name: "switched", switchBranch: true, instruction: /target worktree is not active/ },
+  ]) {
+    test(`claim-time refresh keeps self-owned manual policy with a ${scenario.name} worktree`, () => {
+      const { store, registry, subscription, save } = setupLive("manual")
+      try {
+        save(liveSnapshot())
+        store.reconcileSubscriptionPolicies("acme/repo", 13, "octocat", "octocat")
+        store.insertEvents("acme/repo", 13, [failureEvent()])
+        const built = store.buildReminderBatchForSubscription(subscription.subscriptionId)!
+        assert.match(built.reminderText, /verified as yours/)
+        assert.match(built.reminderText, /resolve .*on HEAD/)
+        if (scenario.switchBranch) {
+          store.upsertWorktreeBinding({
+            sessionId: "session", root: "/repo/other", gitDir: "/repo/.git", repo: "acme/repo",
+            branch: "feature/other", headSha: "other-head", state: "waiting_for_pr",
+          })
+        }
+        const claimed = registry.claimReminderBundle("session")?.batches[0]
+        assert.ok(claimed)
+        assert.match(claimed.reminderText, /verified as yours/)
+        assert.match(claimed.reminderText, scenario.instruction)
+        assert.doesNotMatch(claimed.reminderText, /wait for authorization/)
+      } finally { registry.close(); store.close() }
+    })
+  }
+
   const check = (state: string, workflow = "CI", event = "push"): PullRequestCheck => ({ name: "lint", state, workflow, event })
   for (const scenario of [
     { name: "explicit live failure", checks: [check("FAILURE")], kind: "check.failed", summary: /Check failed: lint/, action: true },

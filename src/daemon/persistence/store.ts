@@ -146,6 +146,8 @@ type ReminderTarget = {
 	repo: string;
 	prNumber?: number;
 	source?: SubscriptionSource;
+	policy?: SubscriptionPolicy;
+	worktreeMatchesTarget?: boolean;
 };
 
 
@@ -2233,15 +2235,32 @@ export class StateStore {
 		record: ReminderBatchRecord,
 	): ReminderTarget | null {
 		const session = this.getSession(record.sessionId);
-		const repo = record.repo ?? session?.repo;
+		const subscription = record.subscriptionId
+			? this.getSubscriptionById(record.subscriptionId)
+			: null;
+		const repo = subscription?.repo ?? record.repo ?? session?.repo;
 		if (!repo) {
 			return null;
 		}
 
+		const prNumber =
+			subscription?.prNumber ?? record.prNumber ?? session?.pr_number ?? undefined;
+		const policy = subscription?.policy;
+		const snapshot = prNumber ? this.getSnapshot(repo, prNumber) : null;
+		const worktree = policy === "actionable"
+			? this.getWorktreeBinding(record.sessionId)
+			: null;
+		const worktreeMatchesTarget = policy === "actionable"
+			? worktree?.repo === repo &&
+				worktree.branch === snapshot?.core.headRefName
+			: undefined;
+
 		return {
 			repo,
-			prNumber: record.prNumber ?? session?.pr_number ?? undefined,
-			source: record.source,
+			prNumber,
+			source: subscription?.source ?? record.source,
+			policy,
+			worktreeMatchesTarget,
 		};
 	}
 

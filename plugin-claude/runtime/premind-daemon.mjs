@@ -8436,8 +8436,6 @@ var subscriptionResponseSchema = exports_external.object({
   repo: exports_external.string().min(1),
   prNumber: exports_external.number().int().positive(),
   source: exports_external.enum(["automatic", "manual"]),
-  ownership: exports_external.enum(["self", "foreign", "unknown"]),
-  policy: exports_external.enum(["actionable", "observe-only"]),
   state: exports_external.enum(["active", "unsubscribed"]),
   lastDeliveredEventSeq: exports_external.number().int().nonnegative(),
   updatedAt: exports_external.number().int()
@@ -9268,13 +9266,23 @@ class Router {
     if (!repo) {
       return this.fail("WORKTREE_NOT_ACTIVE", "An active worktree is required when repo is omitted");
     }
+    const stored = this.store.upsertSubscription({
+      sessionId: payload.sessionId,
+      repo,
+      prNumber: payload.prNumber,
+      source: "manual"
+    });
     return this.ok({
-      subscription: this.store.upsertSubscription({
-        sessionId: payload.sessionId,
-        repo,
-        prNumber: payload.prNumber,
-        source: "manual"
-      })
+      subscription: {
+        subscriptionId: stored.subscriptionId,
+        sessionId: stored.sessionId,
+        repo: stored.repo,
+        prNumber: stored.prNumber,
+        source: stored.source,
+        state: stored.state,
+        lastDeliveredEventSeq: stored.lastDeliveredEventSeq,
+        updatedAt: stored.updatedAt
+      }
     });
   }
   handleUnsubscribe(payload) {
@@ -10840,14 +10848,22 @@ class StateStore {
   }
   resolveReminderTarget(record) {
     const session = this.getSession(record.sessionId);
-    const repo = record.repo ?? session?.repo;
+    const subscription = record.subscriptionId ? this.getSubscriptionById(record.subscriptionId) : null;
+    const repo = subscription?.repo ?? record.repo ?? session?.repo;
     if (!repo) {
       return null;
     }
+    const prNumber = subscription?.prNumber ?? record.prNumber ?? session?.pr_number ?? undefined;
+    const policy = subscription?.policy;
+    const snapshot = prNumber ? this.getSnapshot(repo, prNumber) : null;
+    const worktree = policy === "actionable" ? this.getWorktreeBinding(record.sessionId) : null;
+    const worktreeMatchesTarget = policy === "actionable" ? worktree?.repo === repo && worktree.branch === snapshot?.core.headRefName : undefined;
     return {
       repo,
-      prNumber: record.prNumber ?? session?.pr_number ?? undefined,
-      source: record.source
+      prNumber,
+      source: subscription?.source ?? record.source,
+      policy,
+      worktreeMatchesTarget
     };
   }
   loadReminderSnapshot(target) {

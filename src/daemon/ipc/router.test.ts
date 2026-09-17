@@ -121,6 +121,12 @@ describe("Router worktree subscription operations", () => {
       payload: { sessionId: "session-1", prNumber: 42 },
     });
     assert.equal(manualResponse.ok, true);
+    if (!manualResponse.ok) throw new Error("subscribe failed");
+    const wireSubscription = (manualResponse.result as { subscription: Record<string, unknown> }).subscription;
+    assert.deepEqual(Object.keys(wireSubscription).sort(), [
+      "lastDeliveredEventSeq", "prNumber", "repo", "sessionId", "source",
+      "state", "subscriptionId", "updatedAt",
+    ]);
     assert.equal(
       store.getSubscription("session-1", "acme/repo", 42)?.source,
       "manual",

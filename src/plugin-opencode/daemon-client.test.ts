@@ -65,6 +65,25 @@ describe("PremindDaemonClient.ensureSessionControl", () => {
   })
 })
 
+describe("subscription compatibility", () => {
+  test("accepts the previous protocol-v1 response shape", async () => {
+    const client = new PremindDaemonClient()
+    const subscription = {
+      subscriptionId: "subscription-1", sessionId: "session-1", repo: "acme/repo",
+      prNumber: 42, source: "manual" as const, state: "active" as const,
+      lastDeliveredEventSeq: 0, updatedAt: 1,
+    }
+    const testClient = client as unknown as {
+      requestWithRetry: (request: Request) => Promise<unknown>
+    }
+    testClient.requestWithRetry = async () => ({ subscription })
+    assert.deepEqual(
+      await client.subscribe({ sessionId: "session-1", repo: "acme/repo", prNumber: 42 }),
+      { subscription },
+    )
+  })
+})
+
 describe("reminder bundle compatibility", () => {
   test("falls back to one legacy batch when bundle operations are unavailable", async () => {
     const client = new PremindDaemonClient()
