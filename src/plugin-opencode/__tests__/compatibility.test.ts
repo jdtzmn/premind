@@ -112,6 +112,7 @@ describe("premind plugin compatibility harness", () => {
     assert.ok(registeredConfig.command, "config hook should register commands")
     const commands = registeredConfig.command as Record<string, { template: string; description: string }>
     assert.ok(commands["premind-status"], "should register premind-status command")
+    assert.ok(commands["premind:doctor"], "should register premind:doctor command")
     assert.ok(commands["premind:deliver"], "should register premind:deliver command")
     assert.ok(commands["premind-send-now"], "should retain premind-send-now alias")
     assert.equal(commands["premind-pause"], undefined)
@@ -153,6 +154,20 @@ describe("premind plugin compatibility harness", () => {
     assert.ok(statusPrompt, "should have injected status response")
     assert.equal(statusPrompt.noReply, true, "status response should be noReply")
 
+
+    const doctorMarker = commands["premind:doctor"].template
+    try {
+      await runtime["chat.message"](
+        { sessionID: "session-1" },
+        { message: { parts: [{ type: "text", text: doctorMarker }] }, parts: [{ type: "text", text: doctorMarker }] },
+      )
+      assert.fail("expected throw for handled command")
+    } catch (error) {
+      assert.match((error as Error).message, /PREMIND_HANDLED/)
+    }
+    const doctorPrompt = syncPrompts.find((prompt) => prompt.text.includes("premind doctor"))
+    assert.ok(doctorPrompt, "should have injected doctor response")
+    assert.match(doctorPrompt.text, /host: opencode/)
 
     // 7a. Slash command via chat.message: premind-disable.
     const disableMarker = commands["premind-disable"].template
@@ -228,7 +243,7 @@ describe("premind plugin compatibility harness", () => {
     assert.match(toolEnableResult, /premind re-enabled globally/)
 
     const toolProbeResult = await runtime.tool.premind_probe.execute({}, { sessionID: "session-1" })
-    assert.match(toolProbeResult, /premind probe/)
+    assert.match(toolProbeResult, /premind doctor/)
     assert.match(toolProbeResult, /commands registered: yes/)
 
     // 9. session.deleted unregisters.

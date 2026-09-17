@@ -39,9 +39,8 @@ export const commandCapabilities = {
 			pi: { commands: ["premind:doctor"], tools: ["premind_doctor"] },
 			claude: { commands: ["premind:doctor"], tools: ["probe"] },
 			opencode: {
-				commands: [],
+				commands: ["premind:doctor"],
 				tools: ["premind_probe"],
-				exceptions: { commands: "Planned parity work in issue 45." },
 			},
 		},
 	},
