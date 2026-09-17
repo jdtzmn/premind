@@ -86,6 +86,39 @@ export const unregisterSessionPayloadSchema = z
   })
   .strict();
 export const deleteSessionPayloadSchema = unregisterSessionPayloadSchema;
+export const sessionLeaseTokenSchema = z
+  .object({
+    sessionId: z.string().min(1),
+    ownerInstanceId: z.string().min(1),
+    generation: z.number().int().positive(),
+    clientIncarnationNonce: z.string().min(1),
+    leaseToken: z.string().uuid(),
+    claimedAt: z.number().int().nonnegative(),
+    expiresAt: z.number().int().positive(),
+  })
+  .strict();
+export const claimSessionLeasePayloadSchema = z
+  .object({
+    sessionId: z.string().min(1),
+    ownerInstanceId: z.string().min(1),
+    clientIncarnationNonce: z.string().min(1),
+  })
+  .strict();
+export const renewSessionLeasePayloadSchema = z
+  .object({ lease: sessionLeaseTokenSchema })
+  .strict();
+export const releaseSessionLeasePayloadSchema = renewSessionLeasePayloadSchema;
+export const transferSessionLeasePayloadSchema = z
+  .object({
+    lease: sessionLeaseTokenSchema,
+    nextOwner: z
+      .object({
+        ownerInstanceId: z.string().min(1),
+        clientIncarnationNonce: z.string().min(1),
+      })
+      .strict(),
+  })
+  .strict();
 export const ensureSessionControlPayloadSchema = z
   .object({
     clientId: z.string().min(1),

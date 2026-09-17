@@ -128,5 +128,16 @@ describe("normal protocol v2 base envelopes", () => {
     }
     assert.equal(requestSchema.safeParse(request).success, true)
     assert.equal(legacyRequestSchema.safeParse(request).success, false)
+    const claimRequest = {
+      type: "claimSessionLease",
+      protocolVersion: 1,
+      payload: {
+        sessionId: "session-1",
+        ownerInstanceId: "daemon-a",
+        clientIncarnationNonce: "client-a-1",
+      },
+    }
+    assert.equal(requestSchema.safeParse(claimRequest).success, true)
+    assert.equal(legacyRequestSchema.safeParse(claimRequest).success, false)
   })
 });

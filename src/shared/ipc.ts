@@ -11,6 +11,7 @@ import {
   activateWorktreePayloadSchema,
   confirmClaudeHandoffPayloadSchema,
   claudeSessionPayloadSchema,
+  claimSessionLeasePayloadSchema,
   debugStatusPayloadSchema,
   deleteSessionPayloadSchema,
   debugStatusResponseSchema,
@@ -21,11 +22,14 @@ import {
   registerClientPayloadSchema,
   registerSessionPayloadSchema,
   releaseClientPayloadSchema,
+  releaseSessionLeasePayloadSchema,
+  renewSessionLeasePayloadSchema,
   reminderBatchSchema,
   sessionControlPayloadSchema,
   setGlobalDisabledPayloadSchema,
   suspendClaudeSessionPayloadSchema,
   subscribePayloadSchema,
+  transferSessionLeasePayloadSchema,
   unsubscribePayloadSchema,
   unregisterSessionPayloadSchema,
   updateSessionStatePayloadSchema,
@@ -46,6 +50,26 @@ export const requestSchema = z.discriminatedUnion("type", [
     type: z.literal("releaseClient"),
     protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION),
     payload: releaseClientPayloadSchema,
+  }),
+  z.object({
+    type: z.literal("claimSessionLease"),
+    protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION),
+    payload: claimSessionLeasePayloadSchema,
+  }),
+  z.object({
+    type: z.literal("renewSessionLease"),
+    protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION),
+    payload: renewSessionLeasePayloadSchema,
+  }),
+  z.object({
+    type: z.literal("transferSessionLease"),
+    protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION),
+    payload: transferSessionLeasePayloadSchema,
+  }),
+  z.object({
+    type: z.literal("releaseSessionLease"),
+    protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION),
+    payload: releaseSessionLeasePayloadSchema,
   }),
   z.object({
     type: z.literal("registerSession"),
@@ -168,7 +192,14 @@ export const requestSchema = z.discriminatedUnion("type", [
 ]);
 
 export const legacyRequestSchema = requestSchema.refine(
-  (request) => request.type !== "deleteSession",
+  (request) =>
+    ![
+      "claimSessionLease",
+      "renewSessionLease",
+      "transferSessionLease",
+      "releaseSessionLease",
+      "deleteSession",
+    ].includes(request.type),
   { message: "Operation is not available in frozen protocol v1" },
 );
 

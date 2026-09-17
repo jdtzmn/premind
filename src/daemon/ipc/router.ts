@@ -52,6 +52,35 @@ export class Router {
 				case "releaseClient":
 					this.store.releaseClient(request.payload.clientId);
 					return this.ok({ released: true });
+				case "claimSessionLease":
+					try {
+						return this.ok({ lease: this.store.claimSessionLease(request.payload) });
+					} catch (error) {
+						return this.sessionLeaseFailure(error);
+					}
+				case "renewSessionLease": {
+					const lease = this.store.renewSessionLease(request.payload.lease);
+					return lease
+						? this.ok({ lease })
+						: this.fail("SESSION_MOVED", "Session lease is stale or expired");
+				}
+				case "transferSessionLease":
+					try {
+						return this.ok({
+							lease: this.store.transferSessionLease(
+								request.payload.lease,
+								request.payload.nextOwner,
+							),
+						});
+					} catch (error) {
+						return this.sessionLeaseFailure(error);
+					}
+				case "releaseSessionLease": {
+					const released = this.store.releaseSessionLease(request.payload.lease);
+					return released
+						? this.ok({ released: true })
+						: this.fail("SESSION_MOVED", "Session lease is stale or expired");
+				}
 				case "registerSession": {
 					const { created, superseded } = this.store.registerSession(
 						request.payload,
@@ -371,6 +400,17 @@ export class Router {
 			return this.fail(result.code, result.message);
 		}
 		return this.ok(result);
+	}
+
+	private sessionLeaseFailure(error: unknown): PremindResponse {
+		const message = error instanceof Error ? error.message : String(error);
+		if (message.startsWith("SESSION_BUSY:")) {
+			return this.fail("SESSION_BUSY", message);
+		}
+		if (message.startsWith("SESSION_MOVED:")) {
+			return this.fail("SESSION_MOVED", message);
+		}
+		throw error;
 	}
 
 	private ok(result: unknown): PremindResponse {
