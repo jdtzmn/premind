@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, describe, test } from "node:test";
 import { PREMIND_PROTOCOL_VERSION } from "../../shared/constants.ts";
 import { Router } from "./router.ts";
-import { StateStore } from "../persistence/store.ts";
+import { StateStore, type SessionLeaseToken } from "../persistence/store.ts";
 import { WorktreeBindingRegistry } from "../worktrees/worktree-binding-registry.ts";
 
 const tempPaths: string[] = [];
@@ -101,6 +101,9 @@ describe("Router worktree subscription operations", () => {
       payload: { sessionId: "session-1" },
     });
     assert.equal(worktreeBindings.has("session-1"), false);
+    assert.ok(store.getWorktreeBinding("session-1"));
+    assert.equal(store.getSession("session-1")?.status, "detached");
+    assert.deepEqual(store.listBranchWatchTargets(), []);
     store.close();
   });
 
@@ -684,6 +687,18 @@ describe("reminder bundle IPC", () => {
       protocolVersion: PREMIND_PROTOCOL_VERSION,
       result: { bundle: null },
     });
+    store.expireStaleHandoffs(0, Date.now() + 1);
+    const crashRetry = await router.handle({
+      type: "claimReminderBundle",
+      protocolVersion: PREMIND_PROTOCOL_VERSION,
+      payload: { sessionId: "bundle-session" },
+    } as never);
+    assert.equal(crashRetry.ok, true);
+    if (!crashRetry.ok) return;
+    const crashRetryBundle = (crashRetry.result as {
+      bundle: { handoffId: string } | null;
+    }).bundle;
+    assert.equal(crashRetryBundle?.handoffId, firstBundle.handoffId);
 
     const failed = await router.handle({
       type: "ackReminderBundle",
@@ -759,12 +774,176 @@ describe("reminder bundle IPC", () => {
       protocolVersion: PREMIND_PROTOCOL_VERSION,
       result: { acknowledged: 3 },
     });
+    const duplicateConfirmation = await router.handle({
+      type: "ackReminderBundle",
+      protocolVersion: PREMIND_PROTOCOL_VERSION,
+      payload: {
+        sessionId: "bundle-session",
+        handoffId: retriedBundle.handoffId,
+        state: "confirmed",
+      },
+    } as never);
+    assert.deepEqual(duplicateConfirmation, {
+      ok: true,
+      protocolVersion: PREMIND_PROTOCOL_VERSION,
+      result: { acknowledged: 3 },
+    });
     assert.deepEqual(
       allBatchIds.map((batchId) =>
         store.getReminderBatchRecord(batchId, "bundle-session"),
       ),
       [null, null, null],
     );
+    store.close();
+  });
+});
+
+describe("session lease IPC", () => {
+  test("claims ownership and rejects a concurrent daemon", async () => {
+    const store = createStore();
+    registerSession(store);
+    const router = new Router(store, async () => worktree);
+    const tokenless = await router.handle({
+      type: "pauseSession",
+      protocolVersion: 2,
+      payload: { sessionId: "session-1" },
+    } as never);
+    assert.equal(tokenless.ok, false);
+    if (!tokenless.ok) assert.equal(tokenless.error.code, "SESSION_MOVED");
+    const first = await router.handle({
+      type: "claimSessionLease",
+      protocolVersion: PREMIND_PROTOCOL_VERSION,
+      payload: {
+        sessionId: "session-1",
+        ownerInstanceId: "daemon-a",
+        clientIncarnationNonce: "client-a-1",
+      },
+    } as never);
+    assert.equal(first?.ok, true);
+    const lease = first?.ok
+      ? (first.result as { lease: SessionLeaseToken }).lease
+      : null;
+    assert.equal(lease?.generation, 1);
+    assert.ok(lease);
+
+    const competing = await router.handle({
+      type: "claimSessionLease",
+      protocolVersion: PREMIND_PROTOCOL_VERSION,
+      payload: {
+        sessionId: "session-1",
+        ownerInstanceId: "daemon-b",
+        clientIncarnationNonce: "client-b-1",
+      },
+    } as never);
+    assert.equal(competing?.ok, false);
+    if (competing && !competing.ok) assert.equal(competing.error.code, "SESSION_BUSY");
+
+    const transferred = await router.handle({
+      type: "transferSessionLease",
+      protocolVersion: PREMIND_PROTOCOL_VERSION,
+      payload: {
+        lease,
+        nextOwner: {
+          ownerInstanceId: "daemon-b",
+          clientIncarnationNonce: "client-b-1",
+        },
+      },
+    } as never);
+    assert.equal(transferred.ok, true);
+    const movedLease = transferred.ok
+      ? (transferred.result as { lease: SessionLeaseToken }).lease
+      : null;
+    assert.equal(movedLease?.generation, 2);
+    assert.ok(movedLease);
+
+    const staleMutation = await router.handle({
+      type: "updateSessionState",
+      protocolVersion: PREMIND_PROTOCOL_VERSION,
+      sessionLease: lease,
+      payload: { sessionId: "session-1", busyState: "busy" },
+    } as never);
+    assert.equal(staleMutation.ok, false);
+    if (!staleMutation.ok) assert.equal(staleMutation.error.code, "SESSION_MOVED");
+    assert.equal(store.getSession("session-1")?.busy_state, "idle");
+
+    const stalePause = await router.handle({
+      type: "pauseSession",
+      protocolVersion: PREMIND_PROTOCOL_VERSION,
+      sessionLease: lease,
+      payload: { sessionId: "session-1" },
+    } as never);
+    assert.equal(stalePause.ok, false);
+    if (!stalePause.ok) assert.equal(stalePause.error.code, "SESSION_MOVED");
+    assert.equal(store.getSession("session-1")?.status, "active");
+
+    const currentMutation = await router.handle({
+      type: "updateSessionState",
+      protocolVersion: PREMIND_PROTOCOL_VERSION,
+      sessionLease: movedLease,
+      payload: { sessionId: "session-1", busyState: "busy" },
+    } as never);
+    assert.equal(currentMutation.ok, true);
+    assert.equal(store.getSession("session-1")?.busy_state, "busy");
+
+    const staleRenewal = await router.handle({
+      type: "renewSessionLease",
+      protocolVersion: PREMIND_PROTOCOL_VERSION,
+      payload: { lease },
+    } as never);
+    assert.equal(staleRenewal.ok, false);
+    if (!staleRenewal.ok) assert.equal(staleRenewal.error.code, "SESSION_MOVED");
+
+    const detached = await router.handle({
+      type: "unregisterSession",
+      protocolVersion: PREMIND_PROTOCOL_VERSION,
+      sessionLease: movedLease,
+      payload: { sessionId: "session-1" },
+    } as never);
+    assert.deepEqual(detached, {
+      ok: true,
+      protocolVersion: PREMIND_PROTOCOL_VERSION,
+      result: { unregistered: true },
+    });
+    assert.equal(store.getSession("session-1")?.status, "detached");
+    assert.equal(store.validateSessionLease(movedLease), false);
+    store.close();
+  });
+
+  test("fences worktree persistence when ownership moves during resolution", async () => {
+    const store = createStore();
+    registerSession(store);
+    let signalResolutionStarted!: () => void;
+    const resolutionStarted = new Promise<void>((resolve) => { signalResolutionStarted = resolve });
+    let releaseResolution!: () => void;
+    const resolutionBarrier = new Promise<void>((resolve) => { releaseResolution = resolve });
+    const router = new Router(store, async () => {
+      signalResolutionStarted();
+      await resolutionBarrier;
+      return worktree;
+    });
+    const lease = store.claimSessionLease({
+      sessionId: "session-1",
+      ownerInstanceId: "daemon-a",
+      clientIncarnationNonce: "client-a-1",
+    });
+    const activation = router.handle({
+      type: "activateWorktree",
+      protocolVersion: PREMIND_PROTOCOL_VERSION,
+      sessionLease: lease,
+      payload: { sessionId: "session-1", path: worktree.root },
+    } as never);
+
+    await resolutionStarted;
+    store.transferSessionLease(lease, {
+      ownerInstanceId: "daemon-b",
+      clientIncarnationNonce: "client-b-1",
+    });
+    releaseResolution();
+
+    const response = await activation;
+    assert.equal(response.ok, false);
+    if (!response.ok) assert.equal(response.error.code, "SESSION_MOVED");
+    assert.equal(store.getWorktreeBinding("session-1"), null);
     store.close();
   });
 });

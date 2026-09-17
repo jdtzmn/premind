@@ -1,9 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
 	PREMIND_CLIENT_LEASE_TTL_MS,
+	PREMIND_COORDINATOR_LEASE_TTL_MS,
+	PREMIND_DAEMON_LEASE_TTL_MS,
+	PREMIND_CLOSED_SESSION_RETENTION_MS,
 	PREMIND_DB_PATH,
 	PREMIND_DATABASE_BUSY_TIMEOUT_MS,
 	PREMIND_PR_STREAM_RETENTION_MS,
@@ -47,10 +50,74 @@ type SessionRow = {
 	branch: string;
 	pr_number: number | null;
 	is_primary: number;
-	status: "active" | "paused" | "closed";
+	status: "active" | "paused" | "detached" | "closed";
 	busy_state: "busy" | "idle";
 	last_delivered_event_seq: number;
 	last_activity_at: number;
+};
+
+export type SessionLeaseToken = {
+	sessionId: string;
+	ownerInstanceId: string;
+	generation: number;
+	clientIncarnationNonce: string;
+	leaseToken: string;
+	claimedAt: number;
+	expiresAt: number;
+};
+
+export type SessionLeaseClaim = Pick<
+	SessionLeaseToken,
+	"sessionId" | "ownerInstanceId" | "clientIncarnationNonce"
+>;
+
+export type LegacyProxyLeaseMapping = {
+	clientId: string;
+	proxyIncarnationNonce: string;
+	lease: SessionLeaseToken;
+};
+
+type SessionLeaseRow = {
+	session_id: string;
+	owner_instance_id: string | null;
+	generation: number;
+	client_incarnation_nonce: string | null;
+	lease_token_hash: string | null;
+	expires_at: number | null;
+};
+
+export type DaemonInstanceLeaseToken = {
+	instanceId: string;
+	incarnationNonce: string;
+	storageEpoch: number;
+	generation: number;
+	expiresAt: number;
+};
+
+export type CoordinatorLeaseToken = {
+	resourceKey: "background-coordinator";
+	ownerInstanceId: string;
+	ownerGeneration: number;
+	storageEpoch: number;
+	generation: number;
+	expiresAt: number;
+};
+
+type DaemonInstanceLeaseRow = {
+	instance_id: string;
+	incarnation_nonce: string;
+	storage_epoch: number;
+	generation: number;
+	expires_at: number;
+};
+
+type CoordinatorLeaseRow = {
+	resource_key: "background-coordinator";
+	owner_instance_id: string | null;
+	owner_generation: number | null;
+	storage_epoch: number;
+	generation: number;
+	lease_expires_at: number | null;
 };
 
 export type SubscriptionSource = "automatic" | "manual";
@@ -132,8 +199,21 @@ export type ReminderBatchRecord = Omit<ReminderBatch, "subscriptionId"> & {
 	handoffSize: number | null;
 };
 
+export type HandoffExecutionOwner = {
+	ownerInstanceId: string;
+	sessionGeneration: number;
+};
+
+export type HandoffExecutionToken = HandoffExecutionOwner & {
+	handoffId: string;
+	sessionId: string;
+	executionGeneration: number;
+	expiresAt: number;
+};
+
 export type ReminderBundleClaim = {
 	handoffId: string;
+	executionGeneration: number;
 	batches: ReminderBatch[];
 };
 
@@ -174,8 +254,21 @@ function busyTimeoutPragma(timeoutMs: number): string {
 	}
 }
 
+const hashLeaseToken = (token: string): string =>
+	createHash("sha256").update(token).digest("hex");
+
+const sessionLeaseBindings = (token: SessionLeaseToken, now: number) => ({
+	sessionId: token.sessionId,
+	ownerInstanceId: token.ownerInstanceId,
+	generation: token.generation,
+	clientIncarnationNonce: token.clientIncarnationNonce,
+	leaseTokenHash: hashLeaseToken(token.leaseToken),
+	now,
+});
+
 export class StateStore {
 	private readonly db: DatabaseSync;
+	private expectedStorageEpoch = 1;
 	private readonly detailFiles = new DetailFileWriter();
 	private lastReapAt: number | null = null;
 	private lastReapCount = 0;
@@ -184,10 +277,16 @@ export class StateStore {
 		fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 		fs.mkdirSync(PREMIND_STATE_DIR, { recursive: true });
 		this.db = new DatabaseSync(dbPath);
+		this.db.function("premind_expected_storage_epoch", () => this.expectedStorageEpoch);
 		this.db.exec(busyTimeoutPragma(PREMIND_DATABASE_BUSY_TIMEOUT_MS));
 		this.db.exec("PRAGMA journal_mode = WAL");
 		this.db.exec("PRAGMA foreign_keys = ON");
+		const storageMetadataExists = this.db
+			.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'storage_metadata'`)
+			.get();
+		if (storageMetadataExists) this.expectedStorageEpoch = this.getStorageEpoch();
 		this.migrate();
+		this.expectedStorageEpoch = this.getStorageEpoch();
 	}
 
 	close() {
@@ -207,6 +306,463 @@ export class StateStore {
 			this.db.exec("RELEASE premind_transaction");
 			throw error;
 		}
+	}
+
+	getStorageEpoch(): number {
+		const row = this.db
+			.prepare(`SELECT storage_epoch FROM storage_metadata WHERE singleton = 1`)
+			.get() as { storage_epoch: number };
+		return row.storage_epoch;
+	}
+
+	claimDaemonInstanceLease(
+		claim: Pick<DaemonInstanceLeaseToken, "instanceId" | "incarnationNonce"> & {
+			storageEpoch?: number;
+		},
+		now = Date.now(),
+	): DaemonInstanceLeaseToken {
+		return this.transaction(() => {
+			const storageEpoch = this.getStorageEpoch();
+			if (claim.storageEpoch !== undefined && claim.storageEpoch !== storageEpoch) {
+				throw new Error(`STORAGE_EPOCH_MOVED: ${storageEpoch}`);
+			}
+			const existing = this.db
+				.prepare(`SELECT * FROM daemon_instance_leases WHERE instance_id = ?`)
+				.get(claim.instanceId) as DaemonInstanceLeaseRow | undefined;
+			const sameIncarnation =
+				existing?.incarnation_nonce === claim.incarnationNonce &&
+				existing.storage_epoch === storageEpoch &&
+				existing.expires_at > now;
+			const expiresAt = now + PREMIND_DAEMON_LEASE_TTL_MS;
+			if (sameIncarnation) {
+				this.db.prepare(`UPDATE daemon_instance_leases SET expires_at = ? WHERE instance_id = ?`)
+					.run(expiresAt, claim.instanceId);
+				return {
+					instanceId: claim.instanceId,
+					incarnationNonce: claim.incarnationNonce,
+					storageEpoch,
+					generation: existing.generation,
+					expiresAt,
+				};
+			}
+			const generationRow = this.db
+				.prepare(`UPDATE storage_metadata SET daemon_generation = daemon_generation + 1 WHERE singleton = 1 RETURNING daemon_generation`)
+				.get() as { daemon_generation: number };
+			this.db.prepare(
+				`INSERT INTO daemon_instance_leases (instance_id, incarnation_nonce, storage_epoch, generation, expires_at)
+				 VALUES (?, ?, ?, ?, ?)
+				 ON CONFLICT(instance_id) DO UPDATE SET
+				 incarnation_nonce = excluded.incarnation_nonce, storage_epoch = excluded.storage_epoch,
+				 generation = excluded.generation, expires_at = excluded.expires_at`,
+			).run(claim.instanceId, claim.incarnationNonce, storageEpoch, generationRow.daemon_generation, expiresAt);
+			return {
+				instanceId: claim.instanceId,
+				incarnationNonce: claim.incarnationNonce,
+				storageEpoch,
+				generation: generationRow.daemon_generation,
+				expiresAt,
+			};
+		});
+	}
+
+	validateDaemonInstanceLease(token: DaemonInstanceLeaseToken, now = Date.now()): boolean {
+		return this.db.prepare(
+			`SELECT 1 FROM daemon_instance_leases
+			 WHERE instance_id = :instanceId AND incarnation_nonce = :incarnationNonce
+			 AND storage_epoch = :storageEpoch AND generation = :generation AND expires_at > :now`,
+		).get({
+			instanceId: token.instanceId,
+			incarnationNonce: token.incarnationNonce,
+			storageEpoch: token.storageEpoch,
+			generation: token.generation,
+			now,
+		}) !== undefined;
+	}
+
+	renewDaemonInstanceLease(
+		token: DaemonInstanceLeaseToken,
+		now = Date.now(),
+	): DaemonInstanceLeaseToken | false {
+		const expiresAt = now + PREMIND_DAEMON_LEASE_TTL_MS;
+		const result = this.db.prepare(
+			`UPDATE daemon_instance_leases SET expires_at = :expiresAt
+			 WHERE instance_id = :instanceId AND incarnation_nonce = :incarnationNonce
+			 AND storage_epoch = :storageEpoch AND generation = :generation AND expires_at > :now`,
+		).run({ ...token, expiresAt, now });
+		return (result.changes as number) === 1 ? { ...token, expiresAt } : false;
+	}
+
+	releaseDaemonInstanceLease(token: DaemonInstanceLeaseToken, now = Date.now()): boolean {
+		const result = this.db.prepare(
+			`UPDATE daemon_instance_leases SET expires_at = :now
+			 WHERE instance_id = :instanceId AND incarnation_nonce = :incarnationNonce
+			 AND storage_epoch = :storageEpoch AND generation = :generation AND expires_at > :now`,
+		).run({
+			instanceId: token.instanceId,
+			incarnationNonce: token.incarnationNonce,
+			storageEpoch: token.storageEpoch,
+			generation: token.generation,
+			now,
+		});
+		return (result.changes as number) === 1;
+	}
+
+	claimCoordinatorLease(
+		daemon: DaemonInstanceLeaseToken,
+		now = Date.now(),
+	): CoordinatorLeaseToken {
+		return this.transaction(() => {
+			if (!this.validateDaemonInstanceLease(daemon, now)) {
+				throw new Error(`DAEMON_MOVED: ${daemon.instanceId}`);
+			}
+			const current = this.db.prepare(
+				`SELECT * FROM coordinator_leases WHERE resource_key = 'background-coordinator'`,
+			).get() as CoordinatorLeaseRow;
+			const active = current.owner_instance_id !== null && current.lease_expires_at !== null && current.lease_expires_at > now;
+			const sameOwner = active && current.owner_instance_id === daemon.instanceId && current.owner_generation === daemon.generation;
+			if (active && !sameOwner) throw new Error(`COORDINATOR_BUSY: ${current.owner_instance_id}`);
+			const generation = sameOwner ? current.generation : current.generation + 1;
+			const expiresAt = now + PREMIND_COORDINATOR_LEASE_TTL_MS;
+			this.db.prepare(
+				`UPDATE coordinator_leases SET owner_instance_id = ?, owner_generation = ?, storage_epoch = ?, generation = ?, lease_expires_at = ?
+				 WHERE resource_key = 'background-coordinator'`,
+			).run(daemon.instanceId, daemon.generation, daemon.storageEpoch, generation, expiresAt);
+			return { resourceKey: "background-coordinator", ownerInstanceId: daemon.instanceId, ownerGeneration: daemon.generation, storageEpoch: daemon.storageEpoch, generation, expiresAt };
+		});
+	}
+
+	renewCoordinatorLease(
+		token: CoordinatorLeaseToken,
+		now = Date.now(),
+	): CoordinatorLeaseToken | false {
+		const expiresAt = now + PREMIND_COORDINATOR_LEASE_TTL_MS;
+		const result = this.db.prepare(
+			`UPDATE coordinator_leases SET lease_expires_at = :expiresAt
+			 WHERE resource_key = :resourceKey AND owner_instance_id = :ownerInstanceId
+			 AND owner_generation = :ownerGeneration AND storage_epoch = :storageEpoch
+			 AND generation = :generation AND lease_expires_at > :now`,
+		).run({
+			resourceKey: token.resourceKey,
+			ownerInstanceId: token.ownerInstanceId,
+			ownerGeneration: token.ownerGeneration,
+			storageEpoch: token.storageEpoch,
+			generation: token.generation,
+			expiresAt,
+			now,
+		});
+		return (result.changes as number) === 1 ? { ...token, expiresAt } : false;
+	}
+
+	releaseCoordinatorLease(token: CoordinatorLeaseToken, now = Date.now()): boolean {
+		const result = this.db.prepare(
+			`UPDATE coordinator_leases SET owner_instance_id = NULL, owner_generation = NULL, lease_expires_at = NULL
+			 WHERE resource_key = :resourceKey AND owner_instance_id = :ownerInstanceId
+			 AND owner_generation = :ownerGeneration AND storage_epoch = :storageEpoch
+			 AND generation = :generation AND lease_expires_at > :now`,
+		).run({
+			resourceKey: token.resourceKey,
+			ownerInstanceId: token.ownerInstanceId,
+			ownerGeneration: token.ownerGeneration,
+			storageEpoch: token.storageEpoch,
+			generation: token.generation,
+			now,
+		});
+		return (result.changes as number) === 1;
+	}
+
+
+
+	transferCoordinatorLease(
+		current: CoordinatorLeaseToken,
+		nextDaemon: DaemonInstanceLeaseToken,
+		now = Date.now(),
+	): CoordinatorLeaseToken {
+		return this.transaction(() => {
+			if (!this.validateDaemonInstanceLease(nextDaemon, now)) throw new Error(`DAEMON_MOVED: ${nextDaemon.instanceId}`);
+			const generation = current.generation + 1;
+			const expiresAt = now + PREMIND_COORDINATOR_LEASE_TTL_MS;
+			const result = this.db.prepare(
+				`UPDATE coordinator_leases SET owner_instance_id = :nextOwner, owner_generation = :nextOwnerGeneration,
+				 storage_epoch = :nextStorageEpoch, generation = :nextGeneration, lease_expires_at = :expiresAt
+				 WHERE resource_key = :resourceKey AND owner_instance_id = :ownerInstanceId
+				 AND owner_generation = :ownerGeneration AND storage_epoch = :storageEpoch
+				 AND generation = :generation AND lease_expires_at > :now`,
+			).run({ ...current, nextOwner: nextDaemon.instanceId, nextOwnerGeneration: nextDaemon.generation, nextStorageEpoch: nextDaemon.storageEpoch, nextGeneration: generation, expiresAt, now });
+			if ((result.changes as number) !== 1) throw new Error("COORDINATOR_MOVED: background-coordinator");
+			return { resourceKey: "background-coordinator", ownerInstanceId: nextDaemon.instanceId, ownerGeneration: nextDaemon.generation, storageEpoch: nextDaemon.storageEpoch, generation, expiresAt };
+		});
+	}
+
+	withCoordinatorLease<T>(
+		token: CoordinatorLeaseToken,
+		operation: () => T,
+		now = Date.now(),
+	): T {
+		return this.transaction(() => {
+			const valid = this.db.prepare(
+				`SELECT 1 FROM coordinator_leases WHERE resource_key = :resourceKey
+				 AND owner_instance_id = :ownerInstanceId AND owner_generation = :ownerGeneration
+				 AND storage_epoch = :storageEpoch AND generation = :generation AND lease_expires_at > :now`,
+			).get({
+				resourceKey: token.resourceKey,
+				ownerInstanceId: token.ownerInstanceId,
+				ownerGeneration: token.ownerGeneration,
+				storageEpoch: token.storageEpoch,
+				generation: token.generation,
+				now,
+			});
+			if (!valid) throw new Error("COORDINATOR_MOVED: background-coordinator");
+			return operation();
+		});
+	}
+
+
+	saveLegacyProxyLease(mapping: LegacyProxyLeaseMapping): void {
+		this.db.prepare(
+			`INSERT INTO legacy_proxy_session_leases
+			 (session_id, client_id, proxy_incarnation_nonce, owner_instance_id, generation, lease_token, claimed_at, expires_at)
+			 VALUES (:sessionId, :clientId, :proxyIncarnationNonce, :ownerInstanceId, :generation, :leaseToken, :claimedAt, :expiresAt)
+			 ON CONFLICT(session_id) DO UPDATE SET
+			 client_id = excluded.client_id, proxy_incarnation_nonce = excluded.proxy_incarnation_nonce,
+			 owner_instance_id = excluded.owner_instance_id, generation = excluded.generation,
+			 lease_token = excluded.lease_token, claimed_at = excluded.claimed_at, expires_at = excluded.expires_at`,
+		).run({
+			clientId: mapping.clientId,
+			proxyIncarnationNonce: mapping.proxyIncarnationNonce,
+			sessionId: mapping.lease.sessionId,
+			ownerInstanceId: mapping.lease.ownerInstanceId,
+			generation: mapping.lease.generation,
+			leaseToken: mapping.lease.leaseToken,
+			claimedAt: mapping.lease.claimedAt,
+			expiresAt: mapping.lease.expiresAt,
+		});
+	}
+
+	getLegacyProxyLease(
+		sessionId: string,
+		now = Date.now(),
+	): LegacyProxyLeaseMapping | null {
+		const row = this.db.prepare(
+			`SELECT * FROM legacy_proxy_session_leases WHERE session_id = ? AND expires_at > ?`,
+		).get(sessionId, now) as {
+			session_id: string; client_id: string; proxy_incarnation_nonce: string;
+			owner_instance_id: string; generation: number; lease_token: string;
+			claimed_at: number; expires_at: number;
+		} | undefined;
+		if (!row) return null;
+		return {
+			clientId: row.client_id,
+			proxyIncarnationNonce: row.proxy_incarnation_nonce,
+			lease: {
+				sessionId: row.session_id,
+				ownerInstanceId: row.owner_instance_id,
+				generation: row.generation,
+				clientIncarnationNonce: row.proxy_incarnation_nonce,
+				leaseToken: row.lease_token,
+				claimedAt: row.claimed_at,
+				expiresAt: row.expires_at,
+			},
+		};
+	}
+
+	listLegacyProxyLeases(clientId: string, now = Date.now()): LegacyProxyLeaseMapping[] {
+		const sessionIds = this.db.prepare(
+			`SELECT session_id FROM legacy_proxy_session_leases WHERE client_id = ? AND expires_at > ?`,
+		).all(clientId, now) as Array<{ session_id: string }>;
+		return sessionIds.flatMap(({ session_id }) => {
+			const mapping = this.getLegacyProxyLease(session_id, now);
+			return mapping ? [mapping] : [];
+		});
+	}
+
+	deleteLegacyProxyLease(sessionId: string): boolean {
+		return (this.db.prepare(`DELETE FROM legacy_proxy_session_leases WHERE session_id = ?`)
+			.run(sessionId).changes as number) === 1;
+	}
+
+	pruneExpiredLegacyProxyLeases(now = Date.now()): number {
+		return this.db.prepare(`DELETE FROM legacy_proxy_session_leases WHERE expires_at <= ?`)
+			.run(now).changes as number;
+	}
+
+
+	claimSessionLease(
+		claim: SessionLeaseClaim,
+		now = Date.now(),
+	): SessionLeaseToken {
+		this.db.exec("BEGIN IMMEDIATE");
+		try {
+			const existing = this.db
+				.prepare(`SELECT * FROM session_daemon_leases WHERE session_id = ?`)
+				.get(claim.sessionId) as SessionLeaseRow | undefined;
+			const active =
+				existing !== undefined &&
+				existing.owner_instance_id !== null &&
+				existing.expires_at !== null &&
+				existing.expires_at > now;
+			const sameClaimant =
+				active &&
+				existing.owner_instance_id === claim.ownerInstanceId &&
+				existing.client_incarnation_nonce === claim.clientIncarnationNonce;
+			if (active && !sameClaimant) {
+				throw new Error(`SESSION_BUSY: ${claim.sessionId}`);
+			}
+
+			const generation = sameClaimant
+				? existing.generation
+				: (existing?.generation ?? 0) + 1;
+			const leaseToken = randomUUID();
+			const expiresAt = now + PREMIND_CLIENT_LEASE_TTL_MS;
+			this.db
+				.prepare(
+					`INSERT INTO session_daemon_leases
+					 (session_id, owner_instance_id, generation, client_incarnation_nonce, lease_token_hash, expires_at)
+					 VALUES (:sessionId, :ownerInstanceId, :generation, :clientIncarnationNonce, :leaseTokenHash, :expiresAt)
+					 ON CONFLICT(session_id) DO UPDATE SET
+					   owner_instance_id = excluded.owner_instance_id,
+					   generation = excluded.generation,
+					   client_incarnation_nonce = excluded.client_incarnation_nonce,
+					   lease_token_hash = excluded.lease_token_hash,
+					   expires_at = excluded.expires_at`,
+				)
+				.run({
+					...claim,
+					generation,
+					leaseTokenHash: hashLeaseToken(leaseToken),
+					expiresAt,
+				});
+			this.db.exec("COMMIT");
+			return { ...claim, generation, leaseToken, claimedAt: now, expiresAt };
+		} catch (error) {
+			this.db.exec("ROLLBACK");
+			throw error;
+		}
+	}
+
+	validateSessionLease(token: SessionLeaseToken, now = Date.now()): boolean {
+		return (
+			this.db
+				.prepare(
+					`SELECT 1 FROM session_daemon_leases
+					 WHERE session_id = :sessionId
+					   AND owner_instance_id = :ownerInstanceId
+					   AND generation = :generation
+					   AND client_incarnation_nonce = :clientIncarnationNonce
+					   AND lease_token_hash = :leaseTokenHash
+					   AND expires_at > :now`,
+				)
+				.get(sessionLeaseBindings(token, now)) !== undefined
+		);
+	}
+
+	withSessionLease<T>(
+		token: SessionLeaseToken,
+		operation: () => T,
+		now = Date.now(),
+	): T {
+		this.db.exec("BEGIN IMMEDIATE");
+		try {
+			if (!this.validateSessionLease(token, now)) {
+				throw new Error(`SESSION_MOVED: ${token.sessionId}`);
+			}
+			const result = operation();
+			this.db.exec("COMMIT");
+			return result;
+		} catch (error) {
+			this.db.exec("ROLLBACK");
+			throw error;
+		}
+	}
+
+
+	renewSessionLease(
+		token: SessionLeaseToken,
+		now = Date.now(),
+	): SessionLeaseToken | false {
+		const expiresAt = now + PREMIND_CLIENT_LEASE_TTL_MS;
+		const result = this.db
+			.prepare(
+				`UPDATE session_daemon_leases SET expires_at = :expiresAt
+				 WHERE session_id = :sessionId
+				   AND owner_instance_id = :ownerInstanceId
+				   AND generation = :generation
+				   AND client_incarnation_nonce = :clientIncarnationNonce
+				   AND lease_token_hash = :leaseTokenHash
+				   AND expires_at > :now`,
+			)
+			.run({ ...sessionLeaseBindings(token, now), expiresAt });
+		return (result.changes as number) === 1
+			? { ...token, expiresAt }
+			: false;
+	}
+
+	transferSessionLease(
+		current: SessionLeaseToken,
+		nextOwner: Omit<SessionLeaseClaim, "sessionId">,
+		now = Date.now(),
+	): SessionLeaseToken {
+		this.db.exec("BEGIN IMMEDIATE");
+		try {
+			const generation = current.generation + 1;
+			const leaseToken = randomUUID();
+			const expiresAt = now + PREMIND_CLIENT_LEASE_TTL_MS;
+			const result = this.db
+				.prepare(
+					`UPDATE session_daemon_leases
+					 SET owner_instance_id = :nextOwnerInstanceId,
+					     generation = :nextGeneration,
+					     client_incarnation_nonce = :nextClientIncarnationNonce,
+					     lease_token_hash = :nextLeaseTokenHash,
+					     expires_at = :expiresAt
+					 WHERE session_id = :sessionId
+					   AND owner_instance_id = :ownerInstanceId
+					   AND generation = :generation
+					   AND client_incarnation_nonce = :clientIncarnationNonce
+					   AND lease_token_hash = :leaseTokenHash
+					   AND expires_at > :now`,
+				)
+				.run({
+					...sessionLeaseBindings(current, now),
+					nextOwnerInstanceId: nextOwner.ownerInstanceId,
+					nextGeneration: generation,
+					nextClientIncarnationNonce: nextOwner.clientIncarnationNonce,
+					nextLeaseTokenHash: hashLeaseToken(leaseToken),
+					expiresAt,
+				});
+			if ((result.changes as number) !== 1) {
+				throw new Error(`SESSION_MOVED: ${current.sessionId}`);
+			}
+			this.db.exec("COMMIT");
+			return {
+				sessionId: current.sessionId,
+				...nextOwner,
+				generation,
+				leaseToken,
+				claimedAt: now,
+				expiresAt,
+			};
+		} catch (error) {
+			this.db.exec("ROLLBACK");
+			throw error;
+		}
+	}
+
+
+	releaseSessionLease(token: SessionLeaseToken, now = Date.now()): boolean {
+		const result = this.db
+			.prepare(
+				`UPDATE session_daemon_leases
+				 SET owner_instance_id = NULL, client_incarnation_nonce = NULL,
+				     lease_token_hash = NULL, expires_at = NULL
+				 WHERE session_id = :sessionId
+				   AND owner_instance_id = :ownerInstanceId
+				   AND generation = :generation
+				   AND client_incarnation_nonce = :clientIncarnationNonce
+				   AND lease_token_hash = :leaseTokenHash
+				   AND expires_at > :now`,
+			)
+			.run(sessionLeaseBindings(token, now));
+		return (result.changes as number) === 1;
 	}
 
 	registerClient(clientId: string, metadata: ClientMetadata, now = Date.now()) {
@@ -234,22 +790,16 @@ export class StateStore {
 			});
 	}
 
+	recoverFromRestartAsCoordinator(
+		coordinator: CoordinatorLeaseToken,
+		now = Date.now(),
+	) {
+		return this.withCoordinatorLease(coordinator, () => this.recoverFromRestart(now), now);
+	}
+
+
 	recoverFromRestart(now = Date.now()) {
-		// Prune all client leases — previous daemon process is dead,
-		// so all leases from it are stale regardless of expiry.
-		const deletedClients = this.db.prepare(`DELETE FROM client_leases`).run();
-
-		// A crash leaves handed-off delivery uncertain. Preserve the durable batch
-		// and its cursor, but move it through the valid failure transition so the
-		// handoff registry can explicitly retry it after reconstruction.
-		const resetBatches = this.db
-			.prepare(
-				`UPDATE reminder_batches SET state = 'failed', updated_at = :now
-				 WHERE state = 'handed_off'`,
-			)
-			.run({ now });
-
-		// Count what we're recovering.
+		// Record retained state before fencing every process-owned session.
 		const sessions = this.countActiveSessions();
 		const branchWatchers = (
 			this.db
@@ -259,6 +809,34 @@ export class StateStore {
 				.get() as { count: number }
 		).count;
 		const prWatchers = this.countActiveWatchers();
+
+		// Previous-process owners cannot survive a daemon restart. Preserve their
+		// durable state, but make it ineligible for delivery until reattachment.
+		this.db
+			.prepare(
+				`UPDATE sessions SET status = 'detached', busy_state = 'idle', updated_at = :now
+				 WHERE host IN ('opencode', 'pi') AND status IN ('active', 'paused')`,
+			)
+			.run({ now });
+		this.db
+			.prepare(
+				`UPDATE session_daemon_leases
+				 SET owner_instance_id = NULL, client_incarnation_nonce = NULL,
+				     lease_token_hash = NULL, expires_at = NULL
+				 WHERE owner_instance_id IS NOT NULL`,
+			)
+			.run();
+		const deletedClients = this.db.prepare(`DELETE FROM client_leases`).run();
+
+		// A crash leaves handed-off delivery uncertain. Preserve the durable batch
+		// and its cursor, but make it explicitly retryable after reattachment.
+		const resetBatches = this.db
+			.prepare(
+				`UPDATE reminder_batches SET state = 'failed', updated_at = :now
+				 WHERE state = 'handed_off'`,
+			)
+			.run({ now });
+		this.refreshWatcherCounts(now);
 
 		return {
 			prunedClients: deletedClients.changes as number,
@@ -344,8 +922,7 @@ export class StateStore {
 		payload: EnsureSessionControlPayload,
 		now = Date.now(),
 	): { created: boolean; superseded: number } {
-		this.db.exec("BEGIN IMMEDIATE");
-		try {
+		return this.transaction(() => {
 			const existing = this.getSession(payload.sessionId);
 			const status = payload.paused ? "paused" : "active";
 			const contextChanged =
@@ -443,19 +1020,17 @@ export class StateStore {
 			}
 
 			this.touchBranchWatcher(payload.repo, payload.branch, now);
-			this.db.exec("COMMIT");
 			// Preserve the main-compatible response shape without closing peer sessions.
 			return { created: !existing, superseded: 0 };
-		} catch (error) {
-			this.db.exec("ROLLBACK");
-			throw error;
-		}
+		});
 	}
 
 	updateSessionState(payload: UpdateSessionStatePayload, now = Date.now()) {
 		const current = this.getSession(payload.sessionId);
 		if (!current) return { updated: false, revived: false };
-		const revived = current.status === "closed" && !!payload.busyState;
+		const revived =
+			(current.status === "closed" || current.status === "detached") &&
+			!!payload.busyState;
 		const next = {
 			repo: payload.repo ?? current.repo,
 			branch: payload.branch ?? current.branch,
@@ -503,11 +1078,41 @@ export class StateStore {
 		return true;
 	}
 
-	unregisterSession(sessionId: string) {
-		this.db.prepare(`DELETE FROM sessions WHERE session_id = ?`).run(sessionId);
+	unregisterSession(sessionId: string, now = Date.now()): boolean {
+		const result = this.db
+			.prepare(
+				`UPDATE sessions
+				 SET status = 'detached', busy_state = 'idle', updated_at = :now
+				 WHERE session_id = :sessionId AND status != 'closed'
+				   AND NOT EXISTS (
+				     SELECT 1 FROM session_daemon_leases
+				     WHERE session_id = :sessionId AND expires_at > :now
+				   )`,
+			)
+			.run({ sessionId, now });
+		if ((result.changes as number) === 1) this.refreshWatcherCounts(now);
+		return (result.changes as number) === 1;
+	}
+
+	deleteSession(sessionId: string, now = Date.now()): boolean {
+		const result = this.db
+			.prepare(
+				`UPDATE sessions
+				 SET status = 'closed', busy_state = 'idle', updated_at = :now
+				 WHERE session_id = :sessionId AND status != 'closed'`,
+			)
+			.run({ sessionId, now });
+		if ((result.changes as number) === 0) return false;
 		this.db
-			.prepare(`DELETE FROM reminder_batches WHERE session_id = ?`)
+			.prepare(
+				`UPDATE session_daemon_leases
+				 SET owner_instance_id = NULL, client_incarnation_nonce = NULL,
+				     lease_token_hash = NULL, expires_at = NULL
+				 WHERE session_id = ?`,
+			)
 			.run(sessionId);
+		this.refreshWatcherCounts(now);
+		return true;
 	}
 
 	upsertWorktreeBinding(
@@ -775,7 +1380,7 @@ export class StateStore {
 				 WHERE session_subscriptions.repo = :repo
 				   AND session_subscriptions.pr_number = :prNumber
 				   AND session_subscriptions.state = 'active'
-				   AND sessions.status != 'closed'
+				   AND sessions.status IN ('active', 'paused')
 				 ORDER BY session_subscriptions.created_at ASC`,
 			)
 			.all({ repo, prNumber }) as Array<{
@@ -1021,8 +1626,8 @@ export class StateStore {
 	}
 
 	/**
-	 * Marks any non-closed session whose last_activity_at is older than the
-	 * threshold as "closed". Also refreshes watcher counts when any rows were
+	 * Detaches active or paused sessions whose last_activity_at is older than
+	 * the threshold without starting explicit-deletion retention.
 	 * reaped so the next poll tick reflects reality.
 	 *
 	 * Records lastReapAt/lastReapCount on every call (including no-op sweeps)
@@ -1035,7 +1640,8 @@ export class StateStore {
 		const cutoff = now - thresholdMs;
 		const result = this.db
 			.prepare(
-				`UPDATE sessions SET status = 'closed', updated_at = :now WHERE status != 'closed' AND last_activity_at < :cutoff`,
+				`UPDATE sessions SET status = 'detached', busy_state = 'idle', updated_at = :now
+				 WHERE status IN ('active', 'paused') AND last_activity_at < :cutoff`,
 			)
 			.run({ now, cutoff });
 
@@ -1044,7 +1650,8 @@ export class StateStore {
 
 		const oldestRow = this.db
 			.prepare(
-				`SELECT MIN(last_activity_at) AS oldest FROM sessions WHERE status != 'closed'`,
+				`SELECT MIN(last_activity_at) AS oldest FROM sessions
+				 WHERE status IN ('active', 'paused')`,
 			)
 			.get() as { oldest: number | null };
 		const oldestAgeMs = oldestRow.oldest === null ? null : now - oldestRow.oldest;
@@ -1082,22 +1689,33 @@ export class StateStore {
 		return result.changes as number;
 	}
 
-	pruneClosedOrOrphanedSessions() {
-		// Claude sessions are hook-owned rather than lease-owned. An active Claude
-		// session therefore has no client lease by design and must retain queued
-		// batches until SessionEnd or stale-session cleanup closes it.
-		const predicate = `status = 'closed' OR (host IN ('opencode', 'pi') AND NOT EXISTS (SELECT 1 FROM client_leases WHERE client_leases.client_id = sessions.client_id))`;
-		const deletedBatches = this.db
-			.prepare(
-				`DELETE FROM reminder_batches WHERE session_id IN (SELECT session_id FROM sessions WHERE ${predicate})`,
-			)
-			.run();
+	pruneClosedOrOrphanedSessions(
+		now = Date.now(),
+		retentionMs = PREMIND_CLOSED_SESSION_RETENTION_MS,
+	) {
+		// Compatibility entry point: lack of a live process lease no longer makes
+		// durable session state orphaned. Only explicit deletion starts retention.
+		const cutoff = now - retentionMs;
+		const deletedBatches = (
+			this.db
+				.prepare(
+					`SELECT COUNT(*) AS count FROM reminder_batches
+					 WHERE session_id IN (
+					   SELECT session_id FROM sessions
+					   WHERE status = 'closed' AND updated_at < :cutoff
+					 )`,
+				)
+				.get({ cutoff }) as { count: number }
+		).count;
 		const deletedSessions = this.db
-			.prepare(`DELETE FROM sessions WHERE ${predicate}`)
-			.run();
+			.prepare(
+				`DELETE FROM sessions
+				 WHERE status = 'closed' AND updated_at < :cutoff`,
+			)
+			.run({ cutoff });
 		return {
 			sessions: deletedSessions.changes as number,
-			reminderBatches: deletedBatches.changes as number,
+			reminderBatches: deletedBatches,
 		};
 	}
 
@@ -1197,7 +1815,7 @@ export class StateStore {
 			repo: string;
 			branch: string;
 			pr_number: number | null;
-			status: "active" | "paused" | "closed";
+			status: "active" | "paused" | "detached" | "closed";
 			busy_state: "busy" | "idle";
 			last_delivered_event_seq: number;
 		}>;
@@ -1317,7 +1935,9 @@ export class StateStore {
 
 	countActiveSessions() {
 		const row = this.db
-			.prepare(`SELECT COUNT(*) AS count FROM sessions WHERE status != 'closed'`)
+			.prepare(
+				`SELECT COUNT(*) AS count FROM sessions WHERE status IN ('active', 'paused')`,
+			)
 			.get() as { count: number };
 		return row.count;
 	}
@@ -1339,7 +1959,8 @@ export class StateStore {
 				`SELECT
 				   (SELECT COUNT(*) FROM session_subscriptions
 				      INNER JOIN sessions USING (session_id)
-				      WHERE session_subscriptions.state = 'active' AND sessions.status != 'closed') +
+				      WHERE session_subscriptions.state = 'active'
+				        AND sessions.status IN ('active', 'paused')) +
 				   (SELECT COUNT(*) FROM pr_watchers WHERE active_session_count > 0) +
 				   (SELECT COUNT(*) FROM branch_watchers WHERE active_session_count > 0)
 				 AS count`,
@@ -1379,7 +2000,7 @@ export class StateStore {
 				 LEFT JOIN branch_watchers
 				   ON branch_watchers.repo = worktree_bindings.repo
 				  AND branch_watchers.branch = worktree_bindings.branch
-				 WHERE sessions.status != 'closed'
+				 WHERE sessions.status IN ('active', 'paused')
 				   AND worktree_bindings.branch IS NOT NULL
 				   AND worktree_bindings.state != 'detached_head'
 				 UNION ALL
@@ -1389,7 +2010,7 @@ export class StateStore {
 				 LEFT JOIN branch_watchers
 				   ON branch_watchers.repo = sessions.repo
 				  AND branch_watchers.branch = sessions.branch
-				 WHERE sessions.status != 'closed'
+				 WHERE sessions.status IN ('active', 'paused')
 				   AND worktree_bindings.session_id IS NULL
 				 `,
 			)
@@ -1668,7 +2289,7 @@ export class StateStore {
 				   ON pr_watchers.repo = session_subscriptions.repo
 				  AND pr_watchers.pr_number = session_subscriptions.pr_number
 				 WHERE session_subscriptions.state = 'active'
-				   AND sessions.status != 'closed'
+				   AND sessions.status IN ('active', 'paused')
 				 GROUP BY session_subscriptions.repo, session_subscriptions.pr_number
 				 ORDER BY MIN(session_subscriptions.updated_at) ASC`,
 			)
@@ -1774,7 +2395,8 @@ export class StateStore {
 				`
           SELECT *
           FROM sessions
-          WHERE repo = :repo AND pr_number = :prNumber AND status != 'closed'
+          WHERE repo = :repo AND pr_number = :prNumber
+            AND status IN ('active', 'paused')
         `,
 			)
 			.all({ repo, prNumber }) as SessionRow[];
@@ -1860,16 +2482,83 @@ export class StateStore {
 	}
 
 	getPendingReminder(sessionId: string): ReminderBatch | null {
+		const session = this.getSession(sessionId);
+		if (!session || session.status !== "active") return null;
 		const record = this.getPendingReminderRecord(sessionId);
 		return record ? this.refreshPendingReminder(record) : null;
 	}
+
+	claimHandoffExecution(
+		handoffId: string,
+		sessionId: string,
+		owner: HandoffExecutionOwner,
+		now = Date.now(),
+	): HandoffExecutionToken {
+		return this.transaction(() => {
+			const existing = this.db.prepare(
+				`SELECT owner_instance_id, session_generation, execution_generation, expires_at, settled_at
+				 FROM reminder_handoff_execution_claims WHERE handoff_id = ?`,
+			).get(handoffId) as {
+				owner_instance_id: string;
+				session_generation: number;
+				execution_generation: number;
+				expires_at: number;
+				settled_at: number | null;
+			} | undefined;
+			if (existing?.settled_at !== null && existing?.settled_at !== undefined) {
+				throw new Error(`HANDOFF_SETTLED: ${handoffId}`);
+			}
+			const active = existing !== undefined && existing.expires_at > now;
+			const sameOwner = active &&
+				existing.owner_instance_id === owner.ownerInstanceId &&
+				existing.session_generation === owner.sessionGeneration;
+			if (active && !sameOwner) throw new Error(`HANDOFF_BUSY: ${handoffId}`);
+			const executionGeneration = sameOwner
+				? existing.execution_generation
+				: (existing?.execution_generation ?? 0) + 1;
+			const expiresAt = now + PREMIND_REMINDER_HANDOFF_STALE_MS;
+			this.db.prepare(
+				`INSERT INTO reminder_handoff_execution_claims
+				 (handoff_id, session_id, owner_instance_id, session_generation, execution_generation, expires_at, settled_at)
+				 VALUES (?, ?, ?, ?, ?, ?, NULL)
+				 ON CONFLICT(handoff_id) DO UPDATE SET
+				 session_id = excluded.session_id, owner_instance_id = excluded.owner_instance_id,
+				 session_generation = excluded.session_generation, execution_generation = excluded.execution_generation,
+				 expires_at = excluded.expires_at, settled_at = NULL`,
+			).run(handoffId, sessionId, owner.ownerInstanceId, owner.sessionGeneration, executionGeneration, expiresAt);
+			return { handoffId, sessionId, ...owner, executionGeneration, expiresAt };
+		});
+	}
+
+	validateHandoffExecution(token: HandoffExecutionToken, now = Date.now()): boolean {
+		return this.db.prepare(
+			`SELECT 1 FROM reminder_handoff_execution_claims
+			 WHERE handoff_id = :handoffId AND session_id = :sessionId
+			 AND owner_instance_id = :ownerInstanceId AND session_generation = :sessionGeneration
+			 AND execution_generation = :executionGeneration AND expires_at > :now AND settled_at IS NULL`,
+		).get({
+			handoffId: token.handoffId,
+			sessionId: token.sessionId,
+			ownerInstanceId: token.ownerInstanceId,
+			sessionGeneration: token.sessionGeneration,
+			executionGeneration: token.executionGeneration,
+			now,
+		}) !== undefined;
+	}
+
 
 	/** Atomically claims every currently deliverable batch for a session. */
 	claimReminderBundle(
 		sessionId: string,
 		now = Date.now(),
+		owner: HandoffExecutionOwner = {
+			ownerInstanceId: "legacy-singleton",
+			sessionGeneration: 0,
+		},
 	): ReminderBundleClaim | null {
 		return this.transaction(() => {
+			const session = this.getSession(sessionId);
+			if (!session || session.status !== "active") return null;
 			this.expireStaleHandoffs(undefined, now);
 			if (this.listInFlightReminderBatchRecords(sessionId).length > 0) return null;
 
@@ -1893,7 +2582,19 @@ export class StateStore {
 			}
 			if (batches.length === 0) return null;
 
-			const handoffId = randomUUID();
+			const reusableHandoffIds = new Set(
+				batches.flatMap((batch) => {
+					const record = this.getReminderBatchRecord(batch.batchId, sessionId);
+					if (!record?.handoffId) return [];
+					const settled = this.db.prepare(
+						`SELECT 1 FROM reminder_handoff_settlements WHERE handoff_id = ?`,
+					).get(record.handoffId);
+					return settled ? [] : [record.handoffId];
+				}),
+			);
+			const handoffId = reusableHandoffIds.size === 1
+				? [...reusableHandoffIds][0]!
+				: randomUUID();
 			const handoffSize = batches.length;
 			for (const batch of batches) {
 				const record = this.getReminderBatchRecord(batch.batchId, sessionId);
@@ -1921,7 +2622,12 @@ export class StateStore {
 				if (result.changes !== 1)
 					throw new Error(`Failed to claim reminder batch ${batch.batchId}`);
 			}
-			return { handoffId, batches };
+			const execution = this.claimHandoffExecution(handoffId, sessionId, owner, now);
+			return {
+				handoffId,
+				executionGeneration: execution.executionGeneration,
+				batches,
+			};
 		});
 	}
 
@@ -1932,7 +2638,17 @@ export class StateStore {
 				payload.sessionId,
 				payload.handoffId,
 			);
-			if (records.length === 0) return 0;
+			if (records.length === 0) {
+				const settlement = this.db.prepare(
+					`SELECT settlement_state, acknowledged_count FROM reminder_handoff_settlements
+					 WHERE handoff_id = ? AND session_id = ?`,
+				).get(payload.handoffId, payload.sessionId) as
+					| { settlement_state: "confirmed" | "failed"; acknowledged_count: number }
+					| undefined;
+				return settlement?.settlement_state === payload.state
+					? settlement.acknowledged_count
+					: 0;
+			}
 			const expectedSize = records[0].handoffSize;
 			if (
 				expectedSize !== records.length ||
@@ -1957,6 +2673,22 @@ export class StateStore {
 				if (!acknowledged)
 					throw new Error(`Failed to acknowledge reminder batch ${record.batchId}`);
 			}
+			this.db.prepare(
+				`INSERT INTO reminder_handoff_settlements
+				 (handoff_id, session_id, settlement_state, acknowledged_count, settled_at)
+				 VALUES (:handoffId, :sessionId, :state, :acknowledgedCount, :settledAt)
+				 ON CONFLICT(handoff_id) DO NOTHING`,
+			).run({
+				handoffId: payload.handoffId,
+				sessionId: payload.sessionId,
+				state: payload.state,
+				acknowledgedCount: records.length,
+				settledAt: now,
+			});
+			this.db.prepare(
+				`UPDATE reminder_handoff_execution_claims SET settled_at = :now
+				 WHERE handoff_id = :handoffId AND session_id = :sessionId AND settled_at IS NULL`,
+			).run({ handoffId: payload.handoffId, sessionId: payload.sessionId, now });
 			if (payload.state === "failed") {
 				this.db
 					.prepare(
@@ -2618,7 +3350,8 @@ export class StateStore {
 				`
           SELECT *
           FROM sessions
-          WHERE repo = :repo AND branch = :branch AND status != 'closed'
+          WHERE repo = :repo AND branch = :branch
+            AND status IN ('active', 'paused')
         `,
 			)
 			.all({ repo, branch }) as SessionRow[];
@@ -2630,8 +3363,7 @@ export class StateStore {
 		subscriptionId?: string,
 	): ReminderBatch | null {
 		const session = this.getSession(sessionId);
-		if (!session || session.status === "paused" || session.status === "closed")
-			return null;
+		if (!session || session.status !== "active") return null;
 
 		const subscription = subscriptionId
 			? this.getSubscriptionById(subscriptionId)
@@ -2772,7 +3504,7 @@ export class StateStore {
             FROM sessions
             LEFT JOIN worktree_bindings
               ON worktree_bindings.session_id = sessions.session_id
-            WHERE sessions.status != 'closed'
+            WHERE sessions.status IN ('active', 'paused')
               AND (
                 (worktree_bindings.session_id IS NOT NULL
                   AND worktree_bindings.repo = branch_watchers.repo
@@ -2799,7 +3531,7 @@ export class StateStore {
             WHERE session_subscriptions.repo = pr_watchers.repo
               AND session_subscriptions.pr_number = pr_watchers.pr_number
               AND session_subscriptions.state = 'active'
-              AND sessions.status != 'closed'
+              AND sessions.status IN ('active', 'paused')
           ),
               updated_at = CASE
                 WHEN active_session_count != (
@@ -2810,7 +3542,7 @@ export class StateStore {
                   WHERE session_subscriptions.repo = pr_watchers.repo
                     AND session_subscriptions.pr_number = pr_watchers.pr_number
                     AND session_subscriptions.state = 'active'
-                    AND sessions.status != 'closed'
+                    AND sessions.status IN ('active', 'paused')
                 ) THEN :now
                 ELSE updated_at
               END
@@ -2830,6 +3562,63 @@ export class StateStore {
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS session_daemon_leases (
+        session_id TEXT PRIMARY KEY,
+        owner_instance_id TEXT,
+        generation INTEGER NOT NULL,
+        client_incarnation_nonce TEXT,
+        lease_token_hash TEXT,
+        expires_at INTEGER
+      );
+      CREATE TABLE IF NOT EXISTS legacy_proxy_session_leases (
+        session_id TEXT PRIMARY KEY,
+        client_id TEXT NOT NULL,
+        proxy_incarnation_nonce TEXT NOT NULL,
+        owner_instance_id TEXT NOT NULL,
+        generation INTEGER NOT NULL,
+        lease_token TEXT NOT NULL,
+        claimed_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL
+      );
+
+
+      CREATE TABLE IF NOT EXISTS storage_metadata (
+        singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+        storage_epoch INTEGER NOT NULL,
+        daemon_generation INTEGER NOT NULL DEFAULT 0
+      );
+
+      INSERT INTO storage_metadata (singleton, storage_epoch, daemon_generation)
+      VALUES (1, 1, 0)
+      ON CONFLICT(singleton) DO NOTHING;
+
+      CREATE TABLE IF NOT EXISTS compatibility_marker_v1 (
+        singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+        marker_bytes BLOB NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS daemon_instance_leases (
+        instance_id TEXT PRIMARY KEY,
+        incarnation_nonce TEXT NOT NULL,
+        storage_epoch INTEGER NOT NULL,
+        generation INTEGER NOT NULL UNIQUE,
+        expires_at INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS coordinator_leases (
+        resource_key TEXT PRIMARY KEY,
+        owner_instance_id TEXT,
+        owner_generation INTEGER,
+        storage_epoch INTEGER NOT NULL,
+        generation INTEGER NOT NULL,
+        lease_expires_at INTEGER
+      );
+
+      INSERT INTO coordinator_leases
+        (resource_key, owner_instance_id, owner_generation, storage_epoch, generation, lease_expires_at)
+      VALUES ('background-coordinator', NULL, NULL, 1, 0, NULL)
+      ON CONFLICT(resource_key) DO NOTHING;
 
       CREATE TABLE IF NOT EXISTS sessions (
         session_id TEXT PRIMARY KEY,
@@ -2908,6 +3697,24 @@ export class StateStore {
         updated_at INTEGER NOT NULL,
         FOREIGN KEY(session_id) REFERENCES sessions(session_id) ON DELETE CASCADE,
         FOREIGN KEY(subscription_id) REFERENCES session_subscriptions(subscription_id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS reminder_handoff_settlements (
+        handoff_id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        settlement_state TEXT NOT NULL CHECK(settlement_state IN ('confirmed', 'failed')),
+        acknowledged_count INTEGER NOT NULL,
+        settled_at INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS reminder_handoff_execution_claims (
+        handoff_id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        owner_instance_id TEXT NOT NULL,
+        session_generation INTEGER NOT NULL,
+        execution_generation INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL,
+        settled_at INTEGER
       );
 
       CREATE TABLE IF NOT EXISTS branch_watchers (
@@ -3210,6 +4017,33 @@ export class StateStore {
 						.run(previousSequence);
 				}
 			});
+		}
+		this.installStorageEpochTriggers();
+	}
+
+	private installStorageEpochTriggers() {
+		const tables = this.db
+			.prepare(
+				`SELECT name FROM sqlite_master
+				 WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+				 AND name NOT IN ('storage_metadata', 'compatibility_marker_v1')`,
+			)
+			.all() as Array<{ name: string }>;
+		for (const { name } of tables) {
+			if (!/^[a-z_]+$/.test(name)) throw new Error(`Unsafe SQLite table name: ${name}`);
+			for (const operation of ["INSERT", "UPDATE", "DELETE"] as const) {
+				const triggerName = `premind_storage_epoch_${name}_${operation.toLowerCase()}`;
+				this.db.exec(
+					`CREATE TRIGGER IF NOT EXISTS ${triggerName} BEFORE ${operation} ON ${name}
+					 WHEN (SELECT storage_epoch FROM storage_metadata WHERE singleton = 1) > 1
+					 BEGIN
+					   SELECT CASE
+					     WHEN (SELECT storage_epoch FROM storage_metadata WHERE singleton = 1) != premind_expected_storage_epoch()
+					     THEN RAISE(ABORT, 'STORAGE_EPOCH_MOVED')
+					   END;
+					 END`,
+				);
+			}
 		}
 	}
 }

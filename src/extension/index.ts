@@ -288,7 +288,8 @@ export const createPremindPiExtension = (
 ) => {
 	return function premindPiExtension(pi: ExtensionAPI): void {
 		const createDaemonClient =
-			dependencies.createDaemonClient ?? (() => new PremindDaemonClient());
+			dependencies.createDaemonClient ??
+			(() => new PremindDaemonClient({ host: "pi" }));
 		const detectGit = dependencies.detectGit ?? detectGitContext;
 
 		let sessionClient: DaemonClientLike | undefined;

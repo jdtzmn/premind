@@ -51,16 +51,27 @@ export class WorktreeBindingRegistry {
 	): Promise<WorktreeBinding> {
 		const actor = this.getOrCreate(sessionId);
 		actor.send({ type: "ACTIVATE_WORKTREE", path: requestedPath });
-
 		let worktree: ActiveWorktree;
 		try {
 			worktree = await resolveWorktree(requestedPath);
 		} catch (error) {
-			actor.send({ type: "WORKTREE_RESOLUTION_FAILED" });
 			this.discard(sessionId);
 			throw error;
 		}
+		actor.send({ type: "WORKTREE_RESOLVED", worktree });
+		return this.persist(sessionId, () => {
+			const binding = this.bindingFromActor(sessionId, actor);
+			return this.store.activateWorktree(binding);
+		});
+	}
 
+	activateResolvedWorktree(
+		sessionId: string,
+		requestedPath: string,
+		worktree: ActiveWorktree,
+	): WorktreeBinding {
+		const actor = this.getOrCreate(sessionId);
+		actor.send({ type: "ACTIVATE_WORKTREE", path: requestedPath });
 		actor.send({ type: "WORKTREE_RESOLVED", worktree });
 		return this.persist(sessionId, () => {
 			const binding = this.bindingFromActor(sessionId, actor);
@@ -218,7 +229,8 @@ export class WorktreeBindingRegistry {
 
 	closeInactiveSessions(): void {
 		for (const sessionId of this.actors.keys()) {
-			if (this.store.getSession(sessionId)?.status === "closed") {
+			const status = this.store.getSession(sessionId)?.status;
+			if (status !== "active" && status !== "paused") {
 				this.closeSession(sessionId);
 			}
 		}

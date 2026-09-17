@@ -15,7 +15,7 @@ export const clientMetadataSchema = z
   })
   .strict();
 
-export const sessionStatusSchema = z.enum(["active", "paused", "closed"]);
+export const sessionStatusSchema = z.enum(["active", "paused", "detached", "closed"]);
 export const busyStateSchema = z.enum(["busy", "idle"]);
 export const sessionHostSchema = z.enum(["opencode", "pi", "claude"]);
 
@@ -83,6 +83,40 @@ export const updateSessionStatePayloadSchema = z
 export const unregisterSessionPayloadSchema = z
   .object({
     sessionId: z.string().min(1),
+  })
+  .strict();
+export const deleteSessionPayloadSchema = unregisterSessionPayloadSchema;
+export const sessionLeaseTokenSchema = z
+  .object({
+    sessionId: z.string().min(1),
+    ownerInstanceId: z.string().min(1),
+    generation: z.number().int().positive(),
+    clientIncarnationNonce: z.string().min(1),
+    leaseToken: z.string().uuid(),
+    claimedAt: z.number().int().nonnegative(),
+    expiresAt: z.number().int().positive(),
+  })
+  .strict();
+export const claimSessionLeasePayloadSchema = z
+  .object({
+    sessionId: z.string().min(1),
+    ownerInstanceId: z.string().min(1),
+    clientIncarnationNonce: z.string().min(1),
+  })
+  .strict();
+export const renewSessionLeasePayloadSchema = z
+  .object({ lease: sessionLeaseTokenSchema })
+  .strict();
+export const releaseSessionLeasePayloadSchema = renewSessionLeasePayloadSchema;
+export const transferSessionLeasePayloadSchema = z
+  .object({
+    lease: sessionLeaseTokenSchema,
+    nextOwner: z
+      .object({
+        ownerInstanceId: z.string().min(1),
+        clientIncarnationNonce: z.string().min(1),
+      })
+      .strict(),
   })
   .strict();
 export const ensureSessionControlPayloadSchema = z
@@ -206,7 +240,10 @@ export const debugStatusPayloadSchema = z.object({}).strict();
 
 export const daemonInfoSchema = z
   .object({
-    protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION),
+    protocolVersion: z.union([
+      z.literal(PREMIND_PROTOCOL_VERSION),
+      z.literal(2),
+    ]),
     heartbeatMs: z.literal(PREMIND_CLIENT_HEARTBEAT_MS),
     leaseTtlMs: z.literal(PREMIND_CLIENT_LEASE_TTL_MS),
     idleShutdownGraceMs: z.literal(PREMIND_IDLE_SHUTDOWN_GRACE_MS),
@@ -228,7 +265,7 @@ export const debugStatusResponseSchema = z
       z
         .object({
           sessionId: z.string().min(1),
-          host: sessionHostSchema,
+          host: sessionHostSchema.or(z.literal("unknown")),
           repo: z.string().min(1),
           branch: z.string().min(1),
           prNumber: z.number().int().nullable(),
@@ -297,6 +334,8 @@ export type UpdateSessionStatePayload = z.infer<
 export type UnregisterSessionPayload = z.infer<
   typeof unregisterSessionPayloadSchema
 >;
+export type DeleteSessionPayload = z.infer<typeof deleteSessionPayloadSchema>;
+export type SessionLeaseToken = z.infer<typeof sessionLeaseTokenSchema>;
 export type SessionControlPayload = z.infer<typeof sessionControlPayloadSchema>;
 export type ClaudeSessionPayload = z.infer<typeof claudeSessionPayloadSchema>;
 export type ActivateWorktreePayload = z.infer<

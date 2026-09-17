@@ -4,6 +4,7 @@ import type {
   ReminderBatch,
 } from "../../shared/schema.ts";
 import type {
+  HandoffExecutionOwner,
   ReminderBatchRecord,
   ReminderBundleClaim,
   StateStore,
@@ -56,8 +57,9 @@ export class ReminderHandoffRegistry {
   claimReminderBundle(
     sessionId: string,
     now = Date.now(),
+    owner?: HandoffExecutionOwner,
   ): ReminderBundleClaim | null {
-    const bundle = this.store.claimReminderBundle(sessionId, now);
+    const bundle = this.store.claimReminderBundle(sessionId, now, owner);
     for (const batch of bundle?.batches ?? []) {
       const record = this.store.getReminderBatchRecord(batch.batchId, sessionId);
       if (record) this.actorFor(record);
