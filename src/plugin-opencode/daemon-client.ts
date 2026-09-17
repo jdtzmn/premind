@@ -5,7 +5,6 @@ import {
   ackReminderBundleResponseSchema,
   claimReminderBundleResponseSchema,
   activateWorktreeResponseSchema,
-  debugStatusResponseSchema,
   getPendingReminderResponseSchema,
   globalDisabledResponseSchema,
   legacyClaimReminderBundleResponseSchema,
@@ -14,6 +13,7 @@ import {
   subscribeResponseSchema,
   unsubscribeResponseSchema,
 } from "../shared/ipc.ts"
+import { decodeV1DebugStatusResponse } from "../shared/protocol/v1.ts"
 import type {
   AckReminderPayload,
   AckReminderBundlePayload,
@@ -296,7 +296,7 @@ export class PremindDaemonClient {
       protocolVersion: PREMIND_PROTOCOL_VERSION,
       payload: {},
     })
-    return debugStatusResponseSchema.parse(response)
+    return decodeV1DebugStatusResponse(response)
   }
 
   async pruneClosedSessions() {

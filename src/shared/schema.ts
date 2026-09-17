@@ -219,7 +219,7 @@ export const debugStatusResponseSchema = z
       z
         .object({
           sessionId: z.string().min(1),
-          host: sessionHostSchema,
+          host: sessionHostSchema.or(z.literal("unknown")),
           repo: z.string().min(1),
           branch: z.string().min(1),
           prNumber: z.number().int().nullable(),

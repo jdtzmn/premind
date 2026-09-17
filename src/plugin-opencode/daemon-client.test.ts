@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { readFileSync } from "node:fs"
 import { describe, test } from "node:test"
 import { PremindDaemonClient } from "./daemon-client.ts"
 
@@ -161,5 +162,29 @@ describe("reminder bundle compatibility", () => {
       state: "confirmed",
     })
     assert.equal(requests.some(({ type }) => type === "ackReminder"), false)
+  })
+})
+
+describe("PremindDaemonClient.debugStatus", () => {
+  test("normalizes a pre-host protocol-v1 response", async () => {
+    const fixture = JSON.parse(
+      readFileSync(
+        new URL(
+          "../shared/protocol/__fixtures__/v1/a75d55f-pre-host-debug-status.json",
+          import.meta.url,
+        ),
+        "utf8",
+      ),
+    ) as unknown
+    const client = new PremindDaemonClient()
+    const testClient = client as unknown as {
+      requestWithRetry: () => Promise<unknown>
+    }
+    testClient.requestWithRetry = async () => fixture
+
+    const result = await client.debugStatus()
+
+    assert.equal(result.sessions[0]?.host, "unknown")
+    assert.equal(result.sessions[0]?.sessionId, "session-pre-host")
   })
 })
