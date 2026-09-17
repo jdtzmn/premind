@@ -1919,6 +1919,53 @@ describe("StateStore", () => {
     reopened.close()
   })
 
+  test("migrates legacy subscriptions to an observe-only policy", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "premind-store-test-"))
+    const dbPath = path.join(dir, "premind.db")
+    tempPaths.push(dir)
+    const seeded = new StateStore(dbPath)
+    seeded.registerClient("client-policy-migration", { pid: 1, projectRoot: "/repo" })
+    seeded.registerSession({
+      clientId: "client-policy-migration", sessionId: "session-policy-migration", repo: "acme/repo",
+      branch: "feature/policy", isPrimary: true, status: "active", busyState: "idle",
+    })
+    seeded.close()
+
+    const legacy = new DatabaseSync(dbPath)
+    legacy.exec(`
+      PRAGMA foreign_keys = OFF;
+      DROP TABLE session_subscriptions;
+      CREATE TABLE session_subscriptions (
+        subscription_id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        repo TEXT NOT NULL,
+        pr_number INTEGER NOT NULL,
+        source TEXT NOT NULL,
+        state TEXT NOT NULL,
+        last_delivered_event_seq INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        UNIQUE(session_id, repo, pr_number)
+      );
+    `)
+    legacy.prepare(`
+      INSERT INTO session_subscriptions (subscription_id, session_id, repo, pr_number, source, state, last_delivered_event_seq, created_at, updated_at)
+      VALUES ('legacy-subscription', 'session-policy-migration', 'acme/repo', 7, 'automatic', 'active', 0, 1, 1)
+    `).run()
+    legacy.close()
+
+    const store = new StateStore(dbPath)
+    assert.deepEqual(
+      store.getSubscription("session-policy-migration", "acme/repo", 7) && [
+        store.getSubscription("session-policy-migration", "acme/repo", 7)!.ownership,
+        store.getSubscription("session-policy-migration", "acme/repo", 7)!.policy,
+      ],
+      ["unknown", "observe-only"],
+    )
+    store.close()
+  })
+
+
   test("migration is idempotent and a no-op on a fresh database", () => {
     // First open creates the new schema directly.
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "premind-store-test-"))
