@@ -9173,6 +9173,11 @@ var activateWorktreePayloadSchema = exports_external
 		path: exports_external.string().min(1),
 	})
 	.strict();
+var subscriptionWritePolicySchema = exports_external.enum([
+	"owned-active",
+	"user-authorized",
+	"observe-only",
+]);
 var subscriptionControlPayloadSchema = exports_external
 	.object({
 		sessionId: exports_external.string().min(1),
@@ -9180,7 +9185,11 @@ var subscriptionControlPayloadSchema = exports_external
 		repo: exports_external.string().min(1).optional(),
 	})
 	.strict();
-var subscribePayloadSchema = subscriptionControlPayloadSchema;
+var subscribePayloadSchema = subscriptionControlPayloadSchema
+	.extend({
+		writePolicy: subscriptionWritePolicySchema.optional(),
+	})
+	.strict();
 var unsubscribePayloadSchema = subscriptionControlPayloadSchema;
 var reminderEventSchema = exports_external
 	.object({
@@ -9199,6 +9208,7 @@ var reminderBatchSchema = exports_external
 		prNumber: exports_external.number().int().positive().optional(),
 		subscriptionId: exports_external.string().min(1).optional(),
 		source: exports_external.enum(["automatic", "manual"]).optional(),
+		writePolicy: subscriptionWritePolicySchema.optional(),
 		reminderText: exports_external.string().min(1),
 		events: exports_external.array(reminderEventSchema),
 	})
@@ -9313,6 +9323,7 @@ var debugStatusResponseSchema = exports_external
 									repo: exports_external.string().min(1),
 									prNumber: exports_external.number().int().positive(),
 									source: exports_external.enum(["automatic", "manual"]),
+									writePolicy: subscriptionWritePolicySchema,
 									state: exports_external.enum(["active", "unsubscribed"]),
 									pendingEventCount: exports_external
 										.number()
@@ -9555,6 +9566,9 @@ var subscriptionResponseSchema = exports_external
 		repo: exports_external.string().min(1),
 		prNumber: exports_external.number().int().positive(),
 		source: exports_external.enum(["automatic", "manual"]),
+		writePolicy: exports_external
+			.enum(["owned-active", "user-authorized", "observe-only"])
+			.optional(),
 		state: exports_external.enum(["active", "unsubscribed"]),
 		lastDeliveredEventSeq: exports_external.number().int().nonnegative(),
 		updatedAt: exports_external.number().int(),
@@ -10659,6 +10673,7 @@ class Router {
 			repo,
 			prNumber: payload.prNumber,
 			source: "manual",
+			writePolicy: payload.writePolicy,
 		});
 		return this.ok({
 			subscription: {
@@ -10667,6 +10682,7 @@ class Router {
 				repo: stored.repo,
 				prNumber: stored.prNumber,
 				source: stored.source,
+				writePolicy: stored.writePolicy,
 				state: stored.state,
 				lastDeliveredEventSeq: stored.lastDeliveredEventSeq,
 				updatedAt: stored.updatedAt,
@@ -11214,26 +11230,58 @@ function renderReminder(rows, snapshot, target) {
 	const qualified = target.prNumber
 		? `${target.repo}#${target.prNumber}`
 		: target.repo;
-	const policy =
-		target.policy ??
-		(target.source === "manual" ? "observe-only" : "actionable");
-	const canModify =
-		policy === "actionable" && target.worktreeMatchesTarget !== false;
-	const observeOnlyAction =
-		"report the failing check(s)/merge conflict(s) above and wait for authorization before making changes.";
+	const writePolicy =
+		target.writePolicy ??
+		(target.policy === "observe-only"
+			? "observe-only"
+			: target.policy === "actionable"
+				? target.source === "manual"
+					? "user-authorized"
+					: "owned-active"
+				: target.source === "manual"
+					? "observe-only"
+					: "owned-active");
+	const legacyManualActionable =
+		!target.writePolicy &&
+		target.source === "manual" &&
+		target.policy === "actionable";
+	const mayAct =
+		writePolicy !== "observe-only" && target.worktreeMatchesTarget !== false;
+	const hasReviewAction = live.some((item) => item.reviewAction);
+	const hasFeedback = live.some(
+		(item) =>
+			item.event.kind === "issue_comment.created" ||
+			item.event.kind === "issue_comment.edited" ||
+			item.event.kind === "review_comment.created" ||
+			item.event.kind === "review_comment.edited",
+	);
+	const terminalKind = live.find(
+		(item) =>
+			item.event.kind === "pr.merged" || item.event.kind === "pr.closed",
+	)?.event.kind;
+	const authority =
+		legacyManualActionable || writePolicy === "owned-active"
+			? "owned"
+			: "authorized";
 	const worktreeGate =
-		"this is your PR, but its target worktree is not active. Investigate as needed, but do not make changes until you activate the matching worktree.";
+		"the target worktree is not active. Investigate as needed, but do not make changes until you activate the matching worktree.";
+	const trackingGuidance =
+		writePolicy === "observe-only"
+			? "This PR is observation-only. Do not edit, push to, rebase, merge, or comment on this PR unless the user explicitly authorizes it."
+			: legacyManualActionable
+				? "This manually subscribed PR has explicit authorization and is verified as yours. Follow the current task and repository policy; do not merge, force-push, or take unrelated external actions without authorization."
+				: writePolicy === "user-authorized"
+					? "User-authorized tracking: act only within the assigned task and repository policy; do not merge, force-push, or take unrelated external actions without authorization."
+					: "Owned-active tracking: this PR author matches the authenticated account. Follow the current task and repository policy; do not merge, force-push, or take unrelated external actions without authorization.";
+	const actionGuidance = `Action required for this ${authority} PR: investigate the current-HEAD CI failure(s)/merge conflict(s), then resolve the applicable failure(s)/conflict(s) on HEAD within the assigned task. Continue unrelated assigned work if appropriate.`;
+	const reviewGuidance = `Review action for this ${authority} PR: triage the requested changes, address actionable feedback within the assigned task, and explain anything you decline or cannot resolve. Continue unrelated assigned work if appropriate.`;
+	const feedbackGuidance =
+		"Feedback triage for this PR: assess whether the comments apply to current HEAD, address actionable items within the assigned task, and explain any deliberate non-change.";
 	const reminderText = [
 		"<system-reminder>",
 		`PR update for ${qualified}${snapshot?.core.headRefOid ? ` (HEAD: ${shortSha(snapshot.core.headRefOid)})` : ""}:`,
-		...(target.source === "manual"
-			? [
-					"",
-					policy === "actionable"
-						? "This manually subscribed PR is verified as yours."
-						: "This PR is manually subscribed but is not verified as yours. Do not make changes unless the user explicitly asks you to.",
-				]
-			: []),
+		"",
+		trackingGuidance,
 		...(condensedLive.length
 			? ["", "Changes:", ...condensedLive.map(renderEvent)]
 			: []),
@@ -11243,21 +11291,39 @@ function renderReminder(rows, snapshot, target) {
 		...(live.some((item) => item.actionable)
 			? [
 					"",
-					canModify
-						? "Action required: resolve the failing check(s)/merge conflict(s) on HEAD before continuing. If you can't, explain why."
-						: policy === "actionable"
-							? `Action required: ${worktreeGate}`
-							: `Action required: ${observeOnlyAction}`,
+					mayAct
+						? actionGuidance
+						: writePolicy === "observe-only"
+							? "Observation-only CI/conflict update: do not modify this PR. Report the current status if it affects assigned work, then continue that work."
+							: `Action required: ${worktreeGate}`,
 				]
 			: []),
-		...(live.some((item) => item.reviewAction)
+		...(hasReviewAction
 			? [
 					"",
-					canModify
-						? "Review action required: assess the requested changes, address actionable feedback, and explain anything you decline or cannot resolve."
-						: policy === "actionable"
-							? `Review action required: ${worktreeGate}`
-							: "Review action required: report the requested changes and wait for authorization before making changes.",
+					mayAct
+						? reviewGuidance
+						: writePolicy === "observe-only"
+							? "Observation-only review feedback: do not modify or reply on this PR. Report it only if it affects assigned work, then continue that work."
+							: `Review action required: ${worktreeGate}`,
+				]
+			: []),
+		...(hasFeedback && !hasReviewAction
+			? [
+					"",
+					mayAct
+						? feedbackGuidance
+						: writePolicy === "observe-only"
+							? "Observation-only feedback: do not modify or reply on this PR. Use it only if it affects assigned work, then continue that work."
+							: `Feedback triage required: ${worktreeGate}`,
+				]
+			: []),
+		...(terminalKind
+			? [
+					"",
+					terminalKind === "pr.merged"
+						? "PR merged. Stop making PR-specific changes. Update a branch/worktree only if the assigned work depends on this merge; do not invent new work."
+						: "PR closed without merging. Stop PR-specific remediation; do not reopen or recreate it unless explicitly authorized.",
 				]
 			: []),
 		...(live.some((item) => item.unverified)
@@ -11267,7 +11333,7 @@ function renderReminder(rows, snapshot, target) {
 				]
 			: []),
 		"",
-		"Incorporate only the above into your reasoning and continue.",
+		"Use only this update as context. Follow the scoped instruction above, then continue assigned work; do not invent new work.",
 		"</system-reminder>",
 	].join(`
 `);
@@ -11624,18 +11690,41 @@ class StateStore {
 			if (!this.getSession(input.sessionId)) {
 				throw new Error(`Unknown session: ${input.sessionId}`);
 			}
+			const existing = this.getSubscription(
+				input.sessionId,
+				input.repo,
+				input.prNumber,
+			);
+			const source =
+				existing?.source === "manual" || input.source === "manual"
+					? "manual"
+					: "automatic";
+			const writePolicy =
+				input.writePolicy ??
+				(existing?.source === "manual"
+					? existing.writePolicy
+					: input.source === "manual"
+						? "observe-only"
+						: (existing?.writePolicy ?? "owned-active"));
 			this.db
 				.prepare(`
-					INSERT INTO session_subscriptions (subscription_id, session_id, repo, pr_number, source, ownership, policy, state, last_delivered_event_seq, created_at, updated_at)
-					VALUES (:subscriptionId, :sessionId, :repo, :prNumber, :source, 'unknown', 'observe-only', 'active', 0, :now, :now)
+					INSERT INTO session_subscriptions (subscription_id, session_id, repo, pr_number, source, ownership, policy, write_policy, state, last_delivered_event_seq, created_at, updated_at)
+					VALUES (:subscriptionId, :sessionId, :repo, :prNumber, :source, 'unknown', 'observe-only', :writePolicy, 'active', 0, :now, :now)
 					ON CONFLICT(session_id, repo, pr_number) DO UPDATE SET
-						source = CASE WHEN session_subscriptions.source = 'manual' OR excluded.source = 'manual' THEN 'manual' ELSE 'automatic' END,
+						source = excluded.source,
 						ownership = CASE WHEN session_subscriptions.source = 'manual' OR excluded.source = 'manual' THEN 'unknown' ELSE session_subscriptions.ownership END,
 						policy = CASE WHEN session_subscriptions.source = 'manual' OR excluded.source = 'manual' THEN 'observe-only' ELSE session_subscriptions.policy END,
+						write_policy = excluded.write_policy,
 						state = 'active',
 						updated_at = excluded.updated_at
 					`)
-				.run({ ...input, subscriptionId: randomUUID(), now });
+				.run({
+					...input,
+					source,
+					writePolicy,
+					subscriptionId: randomUUID(),
+					now,
+				});
 			this.touchPrWatcher(input.repo, input.prNumber, now);
 			return this.getSubscription(input.sessionId, input.repo, input.prNumber);
 		});
@@ -11695,6 +11784,7 @@ class StateStore {
 			source: row.source,
 			ownership: row.ownership,
 			policy: row.policy,
+			writePolicy: row.write_policy,
 			state: row.state,
 			lastDeliveredEventSeq: row.last_delivered_event_seq,
 			updatedAt: row.updated_at,
@@ -11719,6 +11809,7 @@ class StateStore {
 			source: row.source,
 			ownership: row.ownership,
 			policy: row.policy,
+			writePolicy: row.write_policy,
 			state: row.state,
 			lastDeliveredEventSeq: row.last_delivered_event_seq,
 			updatedAt: row.updated_at,
@@ -11743,6 +11834,7 @@ class StateStore {
 			source: row.source,
 			ownership: row.ownership,
 			policy: row.policy,
+			writePolicy: row.write_policy,
 			state: row.state,
 			lastDeliveredEventSeq: row.last_delivered_event_seq,
 			updatedAt: row.updated_at,
@@ -11766,8 +11858,8 @@ class StateStore {
 				: (row?.max_seq ?? 0);
 			const subscriptionId = existing?.subscriptionId ?? randomUUID();
 			this.db
-				.prepare(`INSERT INTO session_subscriptions (subscription_id, session_id, repo, pr_number, source, ownership, policy, state, last_delivered_event_seq, created_at, updated_at)
-					 VALUES (:subscriptionId, :sessionId, :repo, :prNumber, 'automatic', 'self', 'actionable', 'active', :cursor, :now, :now)
+				.prepare(`INSERT INTO session_subscriptions (subscription_id, session_id, repo, pr_number, source, ownership, policy, write_policy, state, last_delivered_event_seq, created_at, updated_at)
+					 VALUES (:subscriptionId, :sessionId, :repo, :prNumber, 'automatic', 'self', 'actionable', 'owned-active', 'active', :cursor, :now, :now)
 					 ON CONFLICT(session_id, repo, pr_number) DO UPDATE SET
 					   ownership = 'self',
 					   policy = 'actionable',
@@ -12023,6 +12115,7 @@ class StateStore {
 				repo: subscription.repo,
 				prNumber: subscription.prNumber,
 				source: subscription.source,
+				writePolicy: subscription.writePolicy,
 				state: subscription.state,
 				pendingEventCount:
 					subscription.state === "active"
@@ -12743,7 +12836,7 @@ class StateStore {
 				        reminder_batches.reminder_text, reminder_batches.events_json, reminder_batches.state,
 				        reminder_batches.max_event_seq, reminder_batches.handoff_id,
 				        reminder_batches.lease_expires_at, session_subscriptions.repo,
-				        session_subscriptions.pr_number, session_subscriptions.source
+				        session_subscriptions.pr_number, session_subscriptions.source, session_subscriptions.write_policy
 				 FROM reminder_batches
 				 LEFT JOIN session_subscriptions
 				   ON session_subscriptions.subscription_id = reminder_batches.subscription_id
@@ -12793,7 +12886,7 @@ class StateStore {
 					.prepare(`SELECT reminder_batches.batch_id, reminder_batches.session_id, reminder_batches.subscription_id,
 						        reminder_batches.reminder_text, reminder_batches.events_json, reminder_batches.state, reminder_batches.max_event_seq,
 						        reminder_batches.handoff_id, reminder_batches.handoff_size, reminder_batches.lease_expires_at,
-						        session_subscriptions.repo, session_subscriptions.pr_number, session_subscriptions.source
+						        session_subscriptions.repo, session_subscriptions.pr_number, session_subscriptions.source, session_subscriptions.write_policy
 						 FROM reminder_batches LEFT JOIN session_subscriptions USING (subscription_id)
 						 WHERE batch_id = :batchId AND reminder_batches.session_id = :sessionId`)
 					.get({ batchId, sessionId })
@@ -12801,7 +12894,7 @@ class StateStore {
 					.prepare(`SELECT reminder_batches.batch_id, reminder_batches.session_id, reminder_batches.subscription_id,
 						        reminder_batches.reminder_text, reminder_batches.events_json, reminder_batches.state, reminder_batches.max_event_seq,
 						        reminder_batches.handoff_id, reminder_batches.handoff_size, reminder_batches.lease_expires_at,
-						        session_subscriptions.repo, session_subscriptions.pr_number, session_subscriptions.source
+						        session_subscriptions.repo, session_subscriptions.pr_number, session_subscriptions.source, session_subscriptions.write_policy
 						 FROM reminder_batches LEFT JOIN session_subscriptions USING (subscription_id)
 						 WHERE batch_id = :batchId`)
 					.get({ batchId });
@@ -12812,7 +12905,7 @@ class StateStore {
 			.prepare(`SELECT reminder_batches.batch_id, reminder_batches.session_id, reminder_batches.subscription_id,
 				        reminder_batches.reminder_text, reminder_batches.events_json, reminder_batches.state, reminder_batches.max_event_seq,
 				        reminder_batches.handoff_id, reminder_batches.lease_expires_at,
-				        session_subscriptions.repo, session_subscriptions.pr_number, session_subscriptions.source
+				        session_subscriptions.repo, session_subscriptions.pr_number, session_subscriptions.source, session_subscriptions.write_policy
 				 FROM reminder_batches LEFT JOIN session_subscriptions USING (subscription_id)
 				 WHERE reminder_batches.state != 'confirmed' ORDER BY reminder_batches.created_at ASC`)
 			.all();
@@ -12826,7 +12919,7 @@ class StateStore {
 			.prepare(`SELECT reminder_batches.batch_id, reminder_batches.session_id, reminder_batches.subscription_id,
 				        reminder_batches.reminder_text, reminder_batches.events_json, reminder_batches.state,
 				        reminder_batches.max_event_seq, reminder_batches.handoff_id, reminder_batches.handoff_size,
-				        session_subscriptions.repo, session_subscriptions.pr_number, session_subscriptions.source
+				        session_subscriptions.repo, session_subscriptions.pr_number, session_subscriptions.source, session_subscriptions.write_policy
 				 FROM reminder_batches LEFT JOIN session_subscriptions USING (subscription_id)
 				 WHERE reminder_batches.session_id = :sessionId
 				   AND reminder_batches.state = 'handed_off'
@@ -12845,7 +12938,7 @@ class StateStore {
 				        reminder_batches.events_json, reminder_batches.state,
 				        reminder_batches.max_event_seq, reminder_batches.handoff_id,
 				        reminder_batches.handoff_size, sessions.repo, sessions.pr_number,
-				        NULL AS source
+				        NULL AS source, NULL AS write_policy
 				 FROM reminder_batches
 				 LEFT JOIN sessions ON sessions.session_id = reminder_batches.session_id
 				 WHERE reminder_batches.session_id = :sessionId
@@ -12865,7 +12958,7 @@ class StateStore {
 				        reminder_batches.reminder_text, reminder_batches.events_json, reminder_batches.state,
 				        reminder_batches.max_event_seq, reminder_batches.handoff_id,
 				        reminder_batches.lease_expires_at, session_subscriptions.repo,
-				        session_subscriptions.pr_number, session_subscriptions.source
+				        session_subscriptions.pr_number, session_subscriptions.source, session_subscriptions.write_policy
 				 FROM reminder_batches
 				 INNER JOIN session_subscriptions
 				   ON session_subscriptions.subscription_id = reminder_batches.subscription_id
@@ -12908,22 +13001,25 @@ class StateStore {
 			session?.pr_number ??
 			undefined;
 		const policy = subscription?.policy;
+		const writePolicy = subscription?.writePolicy ?? record.writePolicy;
+		const requiresMatchingWorktree = writePolicy
+			? writePolicy !== "observe-only"
+			: policy === "actionable";
 		const snapshot = prNumber ? this.getSnapshot(repo, prNumber) : null;
-		const worktree =
-			policy === "actionable"
-				? this.getWorktreeBinding(record.sessionId)
-				: null;
-		const worktreeMatchesTarget =
-			policy === "actionable"
-				? worktree?.repo === repo &&
-					worktree.branch === snapshot?.core.headRefName
-				: undefined;
+		const worktree = requiresMatchingWorktree
+			? this.getWorktreeBinding(record.sessionId)
+			: null;
+		const worktreeMatchesTarget = requiresMatchingWorktree
+			? worktree?.repo === repo &&
+				worktree.branch === snapshot?.core.headRefName
+			: undefined;
 		return {
 			repo,
 			prNumber,
 			source: subscription?.source ?? record.source,
 			policy,
 			worktreeMatchesTarget,
+			writePolicy,
 		};
 	}
 	loadReminderSnapshot(target) {
@@ -13061,6 +13157,7 @@ class StateStore {
 				? { subscriptionId: record.subscriptionId }
 				: {}),
 			...(record.source ? { source: record.source } : {}),
+			...(record.writePolicy ? { writePolicy: record.writePolicy } : {}),
 			reminderText: record.reminderText,
 			events: record.events,
 		};
@@ -13075,6 +13172,7 @@ class StateStore {
 				repo: row.repo ?? undefined,
 				prNumber: row.pr_number ?? undefined,
 				source: row.source ?? undefined,
+				writePolicy: row.write_policy ?? undefined,
 				reminderText: row.reminder_text,
 				events: JSON.parse(row.events_json),
 				state: row.state,
@@ -13237,15 +13335,16 @@ class StateStore {
 		const targetSnapshot = targetPrNumber
 			? this.getSnapshot(targetRepo, targetPrNumber)
 			: null;
-		const worktree =
-			subscription?.policy === "actionable"
-				? this.getWorktreeBinding(sessionId)
-				: null;
-		const worktreeMatchesTarget =
-			subscription?.policy === "actionable"
-				? worktree?.repo === targetRepo &&
-					worktree.branch === targetSnapshot?.core.headRefName
-				: undefined;
+		const requiresMatchingWorktree = subscription?.writePolicy
+			? subscription.writePolicy !== "observe-only"
+			: subscription?.policy === "actionable";
+		const worktree = requiresMatchingWorktree
+			? this.getWorktreeBinding(sessionId)
+			: null;
+		const worktreeMatchesTarget = requiresMatchingWorktree
+			? worktree?.repo === targetRepo &&
+				worktree.branch === targetSnapshot?.core.headRefName
+			: undefined;
 		const { reminderText, events: condensed } = renderReminder(
 			events,
 			targetSnapshot,
@@ -13255,6 +13354,7 @@ class StateStore {
 				source: subscription?.source,
 				policy: subscription?.policy,
 				worktreeMatchesTarget,
+				writePolicy: subscription?.writePolicy,
 			},
 		);
 		const batchId = this.createOrReplaceReminder(
@@ -13274,6 +13374,7 @@ class StateStore {
 				? {
 						subscriptionId: subscription.subscriptionId,
 						source: subscription.source,
+						writePolicy: subscription.writePolicy,
 					}
 				: {}),
 			reminderText,
@@ -13417,6 +13518,7 @@ class StateStore {
         source TEXT NOT NULL CHECK(source IN ('automatic', 'manual')),
         ownership TEXT NOT NULL DEFAULT 'unknown' CHECK(ownership IN ('self', 'foreign', 'unknown')),
         policy TEXT NOT NULL DEFAULT 'observe-only' CHECK(policy IN ('actionable', 'observe-only')),
+        write_policy TEXT NOT NULL CHECK(write_policy IN ('owned-active', 'user-authorized', 'observe-only')),
         state TEXT NOT NULL CHECK(state IN ('active', 'unsubscribed')),
         last_delivered_event_seq INTEGER NOT NULL DEFAULT 0,
         created_at INTEGER NOT NULL,
@@ -13562,6 +13664,14 @@ class StateStore {
 				"ALTER TABLE session_subscriptions ADD COLUMN policy TEXT NOT NULL DEFAULT 'observe-only'",
 			);
 		}
+		if (!subscriptionColumns.some((column) => column.name === "write_policy")) {
+			this.db.exec(
+				"ALTER TABLE session_subscriptions ADD COLUMN write_policy TEXT NOT NULL DEFAULT 'observe-only'",
+			);
+			this.db.exec(
+				"UPDATE session_subscriptions SET write_policy = 'owned-active' WHERE source = 'automatic'",
+			);
+		}
 		const sessionTableSql = this.db
 			.prepare(
 				`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'sessions'`,
@@ -13618,9 +13728,9 @@ class StateStore {
 			}
 		}
 		this.db
-			.prepare(`INSERT OR IGNORE INTO session_subscriptions (subscription_id, session_id, repo, pr_number, source, state, last_delivered_event_seq, created_at, updated_at)
+			.prepare(`INSERT OR IGNORE INTO session_subscriptions (subscription_id, session_id, repo, pr_number, source, ownership, policy, write_policy, state, last_delivered_event_seq, created_at, updated_at)
 				 SELECT 'legacy:' || session_id || ':' || repo || ':' || pr_number,
-				        session_id, repo, pr_number, 'automatic', 'active', last_delivered_event_seq, created_at, updated_at
+				        session_id, repo, pr_number, 'automatic', 'unknown', 'observe-only', 'owned-active', 'active', last_delivered_event_seq, created_at, updated_at
 				 FROM sessions WHERE pr_number IS NOT NULL`)
 			.run();
 		const prWatcherColumns = this.db

@@ -4277,6 +4277,11 @@ var activateWorktreePayloadSchema = exports_external
 		path: exports_external.string().min(1),
 	})
 	.strict();
+var subscriptionWritePolicySchema = exports_external.enum([
+	"owned-active",
+	"user-authorized",
+	"observe-only",
+]);
 var subscriptionControlPayloadSchema = exports_external
 	.object({
 		sessionId: exports_external.string().min(1),
@@ -4284,7 +4289,11 @@ var subscriptionControlPayloadSchema = exports_external
 		repo: exports_external.string().min(1).optional(),
 	})
 	.strict();
-var subscribePayloadSchema = subscriptionControlPayloadSchema;
+var subscribePayloadSchema = subscriptionControlPayloadSchema
+	.extend({
+		writePolicy: subscriptionWritePolicySchema.optional(),
+	})
+	.strict();
 var unsubscribePayloadSchema = subscriptionControlPayloadSchema;
 var reminderEventSchema = exports_external
 	.object({
@@ -4303,6 +4312,7 @@ var reminderBatchSchema = exports_external
 		prNumber: exports_external.number().int().positive().optional(),
 		subscriptionId: exports_external.string().min(1).optional(),
 		source: exports_external.enum(["automatic", "manual"]).optional(),
+		writePolicy: subscriptionWritePolicySchema.optional(),
 		reminderText: exports_external.string().min(1),
 		events: exports_external.array(reminderEventSchema),
 	})
@@ -4417,6 +4427,7 @@ var debugStatusResponseSchema = exports_external
 									repo: exports_external.string().min(1),
 									prNumber: exports_external.number().int().positive(),
 									source: exports_external.enum(["automatic", "manual"]),
+									writePolicy: subscriptionWritePolicySchema,
 									state: exports_external.enum(["active", "unsubscribed"]),
 									pendingEventCount: exports_external
 										.number()
@@ -4659,6 +4670,9 @@ var subscriptionResponseSchema = exports_external
 		repo: exports_external.string().min(1),
 		prNumber: exports_external.number().int().positive(),
 		source: exports_external.enum(["automatic", "manual"]),
+		writePolicy: exports_external
+			.enum(["owned-active", "user-authorized", "observe-only"])
+			.optional(),
 		state: exports_external.enum(["active", "unsubscribed"]),
 		lastDeliveredEventSeq: exports_external.number().int().nonnegative(),
 		updatedAt: exports_external.number().int(),
