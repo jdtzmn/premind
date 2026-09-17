@@ -2544,6 +2544,34 @@ describe("daemon and coordinator fencing", () => {
       store.close()
     }
   })
+
+  test("fences every stale connection write after a storage epoch raise", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "premind-epoch-test-"))
+    tempPaths.push(dir)
+    const dbPath = path.join(dir, "premind.db")
+    const staleStore = new StateStore(dbPath)
+    const migrationConnection = new DatabaseSync(dbPath)
+    try {
+      migrationConnection.exec(
+        `UPDATE storage_metadata SET storage_epoch = 2 WHERE singleton = 1`,
+      )
+      assert.throws(
+        () => staleStore.registerClient("stale-client", { pid: 1, projectRoot: "/repo" }),
+        /STORAGE_EPOCH_MOVED/,
+      )
+    } finally {
+      migrationConnection.close()
+      staleStore.close()
+    }
+
+    const currentStore = new StateStore(dbPath)
+    try {
+      currentStore.registerClient("current-client", { pid: 2, projectRoot: "/repo" })
+      assert.equal(currentStore.hasActiveClient("current-client"), true)
+    } finally {
+      currentStore.close()
+    }
+  })
 })
 
 

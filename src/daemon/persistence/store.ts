@@ -257,6 +257,7 @@ const sessionLeaseBindings = (token: SessionLeaseToken, now: number) => ({
 
 export class StateStore {
 	private readonly db: DatabaseSync;
+	private expectedStorageEpoch = 1;
 	private readonly detailFiles = new DetailFileWriter();
 	private lastReapAt: number | null = null;
 	private lastReapCount = 0;
@@ -265,10 +266,16 @@ export class StateStore {
 		fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 		fs.mkdirSync(PREMIND_STATE_DIR, { recursive: true });
 		this.db = new DatabaseSync(dbPath);
+		this.db.function("premind_expected_storage_epoch", () => this.expectedStorageEpoch);
 		this.db.exec(busyTimeoutPragma(PREMIND_DATABASE_BUSY_TIMEOUT_MS));
 		this.db.exec("PRAGMA journal_mode = WAL");
 		this.db.exec("PRAGMA foreign_keys = ON");
+		const storageMetadataExists = this.db
+			.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'storage_metadata'`)
+			.get();
+		if (storageMetadataExists) this.expectedStorageEpoch = this.getStorageEpoch();
 		this.migrate();
+		this.expectedStorageEpoch = this.getStorageEpoch();
 	}
 
 	close() {
@@ -3878,6 +3885,32 @@ export class StateStore {
 						.run(previousSequence);
 				}
 			});
+		}
+		this.installStorageEpochTriggers();
+	}
+
+	private installStorageEpochTriggers() {
+		const tables = this.db
+			.prepare(
+				`SELECT name FROM sqlite_master
+				 WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name != 'storage_metadata'`,
+			)
+			.all() as Array<{ name: string }>;
+		for (const { name } of tables) {
+			if (!/^[a-z_]+$/.test(name)) throw new Error(`Unsafe SQLite table name: ${name}`);
+			for (const operation of ["INSERT", "UPDATE", "DELETE"] as const) {
+				const triggerName = `premind_storage_epoch_${name}_${operation.toLowerCase()}`;
+				this.db.exec(
+					`CREATE TRIGGER IF NOT EXISTS ${triggerName} BEFORE ${operation} ON ${name}
+					 WHEN (SELECT storage_epoch FROM storage_metadata WHERE singleton = 1) > 1
+					 BEGIN
+					   SELECT CASE
+					     WHEN (SELECT storage_epoch FROM storage_metadata WHERE singleton = 1) != premind_expected_storage_epoch()
+					     THEN RAISE(ABORT, 'STORAGE_EPOCH_MOVED')
+					   END;
+					 END`,
+				);
+			}
 		}
 	}
 }
