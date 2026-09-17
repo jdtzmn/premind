@@ -81,7 +81,48 @@ test("global controls are model-callable and describe their daemon-wide effect",
   ]);
 });
 
-test("session-scoped tools derive the Claude ID from the environment", async () => {
+test("subscribe forwards an explicit write policy from the Claude session", async () => {
+  const calls = [];
+  const result = await handleMcpRequest(
+    {
+      method: "tools/call",
+      params: {
+        name: "subscribe",
+        arguments: {
+          prNumber: 42,
+          repo: "acme/repo",
+          writePolicy: "user-authorized",
+        },
+      },
+    },
+    async (type, payload) => {
+      calls.push({ type, payload });
+      return {
+        subscription: {
+          repo: "acme/repo",
+          prNumber: 42,
+          writePolicy: "user-authorized",
+        },
+      };
+    },
+    { CLAUDE_CODE_SESSION_ID: "claude-1" },
+  );
+  assert.match(result.content[0].text, /acme\/repo#42/);
+  assert.match(result.content[0].text, /write policy user-authorized/);
+  assert.deepEqual(calls, [
+    {
+      type: "subscribe",
+      payload: {
+        sessionId: "claude-1",
+        prNumber: 42,
+        repo: "acme/repo",
+        writePolicy: "user-authorized",
+      },
+    },
+  ]);
+});
+
+test("subscribe omits write policy by default and accepts legacy responses", async () => {
   const calls = [];
   const result = await handleMcpRequest(
     {
@@ -97,7 +138,7 @@ test("session-scoped tools derive the Claude ID from the environment", async () 
     },
     { CLAUDE_CODE_SESSION_ID: "claude-1" },
   );
-  assert.match(result.content[0].text, /acme\/repo#42/);
+  assert.match(result.content[0].text, /write policy observe-only/);
   assert.deepEqual(calls, [
     {
       type: "subscribe",
@@ -125,6 +166,12 @@ test("lists subscribe with mandatory PR tracking guidance", async () => {
     subscribe.description,
     "Mandatory PR tracking: Immediately call this tool after creating, opening, discovering, or beginning work on a pull request. Do this before reporting the PR URL or status to the user. Applies after gh pr create, gh stack submit, gh stack link, or any equivalent GitHub operation.",
   );
+  assert.deepEqual(subscribe.inputSchema.properties.writePolicy, {
+    type: "string",
+    enum: ["owned-active", "user-authorized", "observe-only"],
+    description:
+      "Optional; omitted manual subscriptions are observe-only. Use user-authorized only for explicit user authorization.",
+  });
 });
 
 test("set_active_checkout binds the environment-derived Claude session", async () => {

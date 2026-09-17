@@ -93,8 +93,8 @@ var require_xstate_dev_development_cjs = __commonJS((exports) => {
   exports.registerService = registerService;
 });
 
-// node_modules/xstate/dist/raise-6dbf7d60.development.cjs.js
-var require_raise_6dbf7d60_development_cjs = __commonJS((exports) => {
+// node_modules/xstate/dist/raise-53e20da7.development.cjs.js
+var require_raise_53e20da7_development_cjs = __commonJS((exports) => {
   var dist_xstateDev = require_xstate_dev_development_cjs();
 
   class Mailbox {
@@ -1485,8 +1485,6 @@ Event: ${eventString}`);
       eventType: null,
       reenter: false,
       target: resolvedTarget ? [resolvedTarget] : [],
-      meta: typeof _target === "object" ? _target.meta : undefined,
-      description: typeof _target === "object" ? _target.description : undefined,
       toJSON: () => ({
         ...transition,
         source: `#${stateNode.id}`,
@@ -2429,7 +2427,7 @@ ${err.message}`);
 // node_modules/xstate/dist/xstate-actors.development.cjs.js
 var require_xstate_actors_development_cjs = __commonJS((exports) => {
   Object.defineProperty(exports, "__esModule", { value: true });
-  var dist_xstateGuards = require_raise_6dbf7d60_development_cjs();
+  var dist_xstateGuards = require_raise_53e20da7_development_cjs();
   require_xstate_dev_development_cjs();
   function fromTransition(transition, initialContext) {
     return {
@@ -2808,9 +2806,9 @@ var require_xstate_actors_development_cjs = __commonJS((exports) => {
   exports.fromTransition = fromTransition;
 });
 
-// node_modules/xstate/dist/assign-22c2f2aa.development.cjs.js
-var require_assign_22c2f2aa_development_cjs = __commonJS((exports) => {
-  var dist_xstateGuards = require_raise_6dbf7d60_development_cjs();
+// node_modules/xstate/dist/assign-f03a9bed.development.cjs.js
+var require_assign_f03a9bed_development_cjs = __commonJS((exports) => {
+  var dist_xstateGuards = require_raise_53e20da7_development_cjs();
   function createSpawner(actorScope, {
     machine,
     context
@@ -2908,10 +2906,10 @@ var require_assign_22c2f2aa_development_cjs = __commonJS((exports) => {
   exports.assign = assign;
 });
 
-// node_modules/xstate/dist/StateMachine-d4a4d688.development.cjs.js
-var require_StateMachine_d4a4d688_development_cjs = __commonJS((exports) => {
-  var dist_xstateGuards = require_raise_6dbf7d60_development_cjs();
-  var assign = require_assign_22c2f2aa_development_cjs();
+// node_modules/xstate/dist/StateMachine-3778f5e0.development.cjs.js
+var require_StateMachine_3778f5e0_development_cjs = __commonJS((exports) => {
+  var dist_xstateGuards = require_raise_53e20da7_development_cjs();
+  var assign = require_assign_f03a9bed_development_cjs();
   var cache = new WeakMap;
   function memo(object, key, fn) {
     let memoizedData = cache.get(object);
@@ -3013,19 +3011,17 @@ var require_StateMachine_d4a4d688_development_cjs = __commonJS((exports) => {
           actions: this.initial.actions.map(toSerializableAction),
           eventType: null,
           reenter: false,
-          meta: this.initial.meta,
-          description: this.initial.description,
           toJSON: () => ({
             target: this.initial.target.map((t) => `#${t.id}`),
             source: `#${this.id}`,
             actions: this.initial.actions.map(toSerializableAction),
-            eventType: null,
-            meta: this.initial.meta,
-            description: this.initial.description
+            eventType: null
           })
         } : undefined,
         history: this.history,
-        states: dist_xstateGuards.mapValues(this.states, (state) => state.definition),
+        states: dist_xstateGuards.mapValues(this.states, (state) => {
+          return state.definition;
+        }),
         on: this.on,
         transitions: [...this.transitions.values()].flat().map((t) => ({
           ...t,
@@ -3391,10 +3387,10 @@ ${err.message}`);
   exports.StateNode = StateNode;
 });
 
-// node_modules/xstate/dist/log-01babe9f.development.cjs.js
-var require_log_01babe9f_development_cjs = __commonJS((exports) => {
-  var dist_xstateGuards = require_raise_6dbf7d60_development_cjs();
-  var assign = require_assign_22c2f2aa_development_cjs();
+// node_modules/xstate/dist/log-0ed3e43f.development.cjs.js
+var require_log_0ed3e43f_development_cjs = __commonJS((exports) => {
+  var dist_xstateGuards = require_raise_53e20da7_development_cjs();
+  var assign = require_assign_f03a9bed_development_cjs();
   function resolveEmit(_, snapshot, args, actionParams, {
     event: eventOrExpr
   }) {
@@ -3634,10 +3630,10 @@ var require_log_01babe9f_development_cjs = __commonJS((exports) => {
 var require_xstate_development_cjs = __commonJS((exports) => {
   Object.defineProperty(exports, "__esModule", { value: true });
   var dist_xstateActors = require_xstate_actors_development_cjs();
-  var dist_xstateGuards = require_raise_6dbf7d60_development_cjs();
-  var StateMachine = require_StateMachine_d4a4d688_development_cjs();
-  var assign = require_assign_22c2f2aa_development_cjs();
-  var log = require_log_01babe9f_development_cjs();
+  var dist_xstateGuards = require_raise_53e20da7_development_cjs();
+  var StateMachine = require_StateMachine_3778f5e0_development_cjs();
+  var assign = require_assign_f03a9bed_development_cjs();
+  var log = require_log_0ed3e43f_development_cjs();
   require_xstate_dev_development_cjs();
   function assertEvent(event, type) {
     const types2 = dist_xstateGuards.toArray(type);
@@ -8162,12 +8158,19 @@ var activateWorktreePayloadSchema = exports_external.object({
   sessionId: exports_external.string().min(1),
   path: exports_external.string().min(1)
 }).strict();
+var subscriptionWritePolicySchema = exports_external.enum([
+  "owned-active",
+  "user-authorized",
+  "observe-only"
+]);
 var subscriptionControlPayloadSchema = exports_external.object({
   sessionId: exports_external.string().min(1),
   prNumber: exports_external.number().int().positive(),
   repo: exports_external.string().min(1).optional()
 }).strict();
-var subscribePayloadSchema = subscriptionControlPayloadSchema;
+var subscribePayloadSchema = subscriptionControlPayloadSchema.extend({
+  writePolicy: subscriptionWritePolicySchema.optional()
+}).strict();
 var unsubscribePayloadSchema = subscriptionControlPayloadSchema;
 var reminderEventSchema = exports_external.object({
   eventId: exports_external.string().min(1),
@@ -8183,6 +8186,7 @@ var reminderBatchSchema = exports_external.object({
   prNumber: exports_external.number().int().positive().optional(),
   subscriptionId: exports_external.string().min(1).optional(),
   source: exports_external.enum(["automatic", "manual"]).optional(),
+  writePolicy: subscriptionWritePolicySchema.optional(),
   reminderText: exports_external.string().min(1),
   events: exports_external.array(reminderEventSchema)
 }).strict();
@@ -8245,6 +8249,7 @@ var debugStatusResponseSchema = exports_external.object({
       repo: exports_external.string().min(1),
       prNumber: exports_external.number().int().positive(),
       source: exports_external.enum(["automatic", "manual"]),
+      writePolicy: subscriptionWritePolicySchema,
       state: exports_external.enum(["active", "unsubscribed"]),
       pendingEventCount: exports_external.number().int().nonnegative()
     }).strict()).optional()
@@ -8436,6 +8441,7 @@ var subscriptionResponseSchema = exports_external.object({
   repo: exports_external.string().min(1),
   prNumber: exports_external.number().int().positive(),
   source: exports_external.enum(["automatic", "manual"]),
+  writePolicy: exports_external.enum(["owned-active", "user-authorized", "observe-only"]).optional(),
   state: exports_external.enum(["active", "unsubscribed"]),
   lastDeliveredEventSeq: exports_external.number().int().nonnegative(),
   updatedAt: exports_external.number().int()
@@ -9270,7 +9276,8 @@ class Router {
       sessionId: payload.sessionId,
       repo,
       prNumber: payload.prNumber,
-      source: "manual"
+      source: "manual",
+      writePolicy: payload.writePolicy
     });
     return this.ok({
       subscription: {
@@ -9279,6 +9286,7 @@ class Router {
         repo: stored.repo,
         prNumber: stored.prNumber,
         source: stored.source,
+        writePolicy: stored.writePolicy,
         state: stored.state,
         lastDeliveredEventSeq: stored.lastDeliveredEventSeq,
         updatedAt: stored.updatedAt
@@ -9682,19 +9690,18 @@ function renderReminder(rows, snapshot, target) {
   const qualified = target.prNumber ? `${target.repo}#${target.prNumber}` : target.repo;
   const policy = target.policy ?? (target.source === "manual" ? "observe-only" : "actionable");
   const canModify = policy === "actionable" && target.worktreeMatchesTarget !== false;
-  const observeOnlyAction = "report the failing check(s)/merge conflict(s) above and wait for authorization before making changes.";
   const worktreeGate = "this is your PR, but its target worktree is not active. Investigate as needed, but do not make changes until you activate the matching worktree.";
   const reminderText = [
     "<system-reminder>",
     `PR update for ${qualified}${snapshot?.core.headRefOid ? ` (HEAD: ${shortSha(snapshot.core.headRefOid)})` : ""}:`,
-    ...target.source === "manual" ? ["", policy === "actionable" ? "This manually subscribed PR is verified as yours." : "This PR is manually subscribed but is not verified as yours. Do not make changes unless the user explicitly asks you to."] : [],
+    ...target.source === "manual" ? ["", policy === "actionable" ? "This manually subscribed PR has explicit authorization and is verified as yours. Follow the current task and repository policy; do not merge, force-push, or take unrelated external actions without authorization." : "This PR is observation-only. Do not edit, push to, rebase, merge, or comment on this PR unless the user explicitly authorizes it."] : ["", "Automatic tracking: this PR author matches the authenticated account. Follow the current task and repository policy; do not merge, force-push, or take unrelated external actions without authorization."],
     ...condensedLive.length ? ["", "Changes:", ...condensedLive.map(renderEvent)] : [],
     ...supersededSummaries.length ? ["", "Superseded:", ...supersededSummaries.map(renderEvent)] : [],
-    ...live.some((item) => item.actionable) ? ["", canModify ? "Action required: resolve the failing check(s)/merge conflict(s) on HEAD before continuing. If you can't, explain why." : policy === "actionable" ? `Action required: ${worktreeGate}` : `Action required: ${observeOnlyAction}`] : [],
-    ...live.some((item) => item.reviewAction) ? ["", canModify ? "Review action required: assess the requested changes, address actionable feedback, and explain anything you decline or cannot resolve." : policy === "actionable" ? `Review action required: ${worktreeGate}` : "Review action required: report the requested changes and wait for authorization before making changes."] : [],
+    ...live.some((item) => item.actionable) ? ["", canModify ? "Action required for this owned PR: investigate the current-HEAD CI failure(s)/merge conflict(s), then resolve the applicable failure(s)/conflict(s) on HEAD within the assigned task. Continue unrelated assigned work if appropriate." : policy === "actionable" ? `Action required: ${worktreeGate}` : "Observation-only CI/conflict update: do not modify this PR. Report the current status if it affects assigned work, then continue that work."] : [],
+    ...live.some((item) => item.reviewAction) ? ["", canModify ? "Review action for this owned PR: triage the requested changes, address actionable feedback within the assigned task, and explain anything you decline or cannot resolve. Continue unrelated assigned work if appropriate." : policy === "actionable" ? `Review action required: ${worktreeGate}` : "Observation-only review feedback: do not modify or reply on this PR. Report it only if it affects assigned work, then continue that work."] : [],
     ...live.some((item) => item.unverified) ? ["", "Verify current status before acting on UNVERIFIED history; it is not a confirmed current blocker."] : [],
     "",
-    "Incorporate only the above into your reasoning and continue.",
+    "Use only this update as context. Follow the scoped instruction above, then continue assigned work; do not invent new work.",
     "</system-reminder>"
   ].join(`
 `);
@@ -9986,16 +9993,20 @@ class StateStore {
       if (!this.getSession(input.sessionId)) {
         throw new Error(`Unknown session: ${input.sessionId}`);
       }
+      const existing = this.getSubscription(input.sessionId, input.repo, input.prNumber);
+      const source = existing?.source === "manual" || input.source === "manual" ? "manual" : "automatic";
+      const writePolicy = input.writePolicy ?? (existing?.source === "manual" ? existing.writePolicy : input.source === "manual" ? "observe-only" : existing?.writePolicy ?? "owned-active");
       this.db.prepare(`
-					INSERT INTO session_subscriptions (subscription_id, session_id, repo, pr_number, source, ownership, policy, state, last_delivered_event_seq, created_at, updated_at)
-					VALUES (:subscriptionId, :sessionId, :repo, :prNumber, :source, 'unknown', 'observe-only', 'active', 0, :now, :now)
+					INSERT INTO session_subscriptions (subscription_id, session_id, repo, pr_number, source, ownership, policy, write_policy, state, last_delivered_event_seq, created_at, updated_at)
+					VALUES (:subscriptionId, :sessionId, :repo, :prNumber, :source, 'unknown', 'observe-only', :writePolicy, 'active', 0, :now, :now)
 					ON CONFLICT(session_id, repo, pr_number) DO UPDATE SET
-						source = CASE WHEN session_subscriptions.source = 'manual' OR excluded.source = 'manual' THEN 'manual' ELSE 'automatic' END,
+						source = excluded.source,
 						ownership = CASE WHEN session_subscriptions.source = 'manual' OR excluded.source = 'manual' THEN 'unknown' ELSE session_subscriptions.ownership END,
 						policy = CASE WHEN session_subscriptions.source = 'manual' OR excluded.source = 'manual' THEN 'observe-only' ELSE session_subscriptions.policy END,
+						write_policy = excluded.write_policy,
 						state = 'active',
 						updated_at = excluded.updated_at
-					`).run({ ...input, subscriptionId: randomUUID(), now });
+					`).run({ ...input, source, writePolicy, subscriptionId: randomUUID(), now });
       this.touchPrWatcher(input.repo, input.prNumber, now);
       return this.getSubscription(input.sessionId, input.repo, input.prNumber);
     });
@@ -10039,6 +10050,7 @@ class StateStore {
       source: row.source,
       ownership: row.ownership,
       policy: row.policy,
+      writePolicy: row.write_policy,
       state: row.state,
       lastDeliveredEventSeq: row.last_delivered_event_seq,
       updatedAt: row.updated_at
@@ -10055,6 +10067,7 @@ class StateStore {
       source: row.source,
       ownership: row.ownership,
       policy: row.policy,
+      writePolicy: row.write_policy,
       state: row.state,
       lastDeliveredEventSeq: row.last_delivered_event_seq,
       updatedAt: row.updated_at
@@ -10077,6 +10090,7 @@ class StateStore {
       source: row.source,
       ownership: row.ownership,
       policy: row.policy,
+      writePolicy: row.write_policy,
       state: row.state,
       lastDeliveredEventSeq: row.last_delivered_event_seq,
       updatedAt: row.updated_at
@@ -10090,8 +10104,8 @@ class StateStore {
       const row = this.db.prepare(`SELECT MAX(seq) AS max_seq FROM pr_events WHERE repo = :repo AND pr_number = :prNumber`).get({ repo: input.repo, prNumber: input.prNumber });
       const cursor = existing ? existing.lastDeliveredEventSeq : row?.max_seq ?? 0;
       const subscriptionId = existing?.subscriptionId ?? randomUUID();
-      this.db.prepare(`INSERT INTO session_subscriptions (subscription_id, session_id, repo, pr_number, source, ownership, policy, state, last_delivered_event_seq, created_at, updated_at)
-					 VALUES (:subscriptionId, :sessionId, :repo, :prNumber, 'automatic', 'self', 'actionable', 'active', :cursor, :now, :now)
+      this.db.prepare(`INSERT INTO session_subscriptions (subscription_id, session_id, repo, pr_number, source, ownership, policy, write_policy, state, last_delivered_event_seq, created_at, updated_at)
+					 VALUES (:subscriptionId, :sessionId, :repo, :prNumber, 'automatic', 'self', 'actionable', 'owned-active', 'active', :cursor, :now, :now)
 					 ON CONFLICT(session_id, repo, pr_number) DO UPDATE SET
 					   ownership = 'self',
 					   policy = 'actionable',
@@ -10259,6 +10273,7 @@ class StateStore {
         repo: subscription.repo,
         prNumber: subscription.prNumber,
         source: subscription.source,
+        writePolicy: subscription.writePolicy,
         state: subscription.state,
         pendingEventCount: subscription.state === "active" ? this.countPendingEvents(subscription.repo, subscription.prNumber, subscription.lastDeliveredEventSeq) : 0
       }));
@@ -10732,7 +10747,7 @@ class StateStore {
     const row = this.db.prepare(`SELECT reminder_batches.batch_id, reminder_batches.session_id, reminder_batches.subscription_id,
 				        reminder_batches.reminder_text, reminder_batches.events_json, reminder_batches.state,
 				        reminder_batches.max_event_seq, session_subscriptions.repo,
-				        session_subscriptions.pr_number, session_subscriptions.source
+				        session_subscriptions.pr_number, session_subscriptions.source, session_subscriptions.write_policy
 				 FROM reminder_batches
 				 LEFT JOIN session_subscriptions
 				   ON session_subscriptions.subscription_id = reminder_batches.subscription_id
@@ -10761,11 +10776,11 @@ class StateStore {
   getReminderBatchRecord(batchId, sessionId) {
     const row = sessionId ? this.db.prepare(`SELECT reminder_batches.batch_id, reminder_batches.session_id, reminder_batches.subscription_id,
 						        reminder_batches.reminder_text, reminder_batches.events_json, reminder_batches.state, reminder_batches.max_event_seq, reminder_batches.handoff_id, reminder_batches.handoff_size,
-						        session_subscriptions.repo, session_subscriptions.pr_number, session_subscriptions.source
+						        session_subscriptions.repo, session_subscriptions.pr_number, session_subscriptions.source, session_subscriptions.write_policy
 						 FROM reminder_batches LEFT JOIN session_subscriptions USING (subscription_id)
 						 WHERE batch_id = :batchId AND reminder_batches.session_id = :sessionId`).get({ batchId, sessionId }) : this.db.prepare(`SELECT reminder_batches.batch_id, reminder_batches.session_id, reminder_batches.subscription_id,
 						        reminder_batches.reminder_text, reminder_batches.events_json, reminder_batches.state, reminder_batches.max_event_seq, reminder_batches.handoff_id, reminder_batches.handoff_size,
-						        session_subscriptions.repo, session_subscriptions.pr_number, session_subscriptions.source
+						        session_subscriptions.repo, session_subscriptions.pr_number, session_subscriptions.source, session_subscriptions.write_policy
 						 FROM reminder_batches LEFT JOIN session_subscriptions USING (subscription_id)
 						 WHERE batch_id = :batchId`).get({ batchId });
     return this.toReminderBatchRecord(row);
@@ -10773,7 +10788,7 @@ class StateStore {
   listPendingReminderBatchRecords() {
     const rows = this.db.prepare(`SELECT reminder_batches.batch_id, reminder_batches.session_id, reminder_batches.subscription_id,
 				        reminder_batches.reminder_text, reminder_batches.events_json, reminder_batches.state, reminder_batches.max_event_seq,
-				        session_subscriptions.repo, session_subscriptions.pr_number, session_subscriptions.source
+				        session_subscriptions.repo, session_subscriptions.pr_number, session_subscriptions.source, session_subscriptions.write_policy
 				 FROM reminder_batches LEFT JOIN session_subscriptions USING (subscription_id)
 				 WHERE reminder_batches.state != 'confirmed' ORDER BY reminder_batches.created_at ASC`).all();
     return rows.flatMap((row) => {
@@ -10785,7 +10800,7 @@ class StateStore {
     const rows = this.db.prepare(`SELECT reminder_batches.batch_id, reminder_batches.session_id, reminder_batches.subscription_id,
 				        reminder_batches.reminder_text, reminder_batches.events_json, reminder_batches.state,
 				        reminder_batches.max_event_seq, reminder_batches.handoff_id, reminder_batches.handoff_size,
-				        session_subscriptions.repo, session_subscriptions.pr_number, session_subscriptions.source
+				        session_subscriptions.repo, session_subscriptions.pr_number, session_subscriptions.source, session_subscriptions.write_policy
 				 FROM reminder_batches LEFT JOIN session_subscriptions USING (subscription_id)
 				 WHERE reminder_batches.session_id = :sessionId
 				   AND reminder_batches.state = 'handed_off'
@@ -10802,7 +10817,7 @@ class StateStore {
 				        reminder_batches.events_json, reminder_batches.state,
 				        reminder_batches.max_event_seq, reminder_batches.handoff_id,
 				        reminder_batches.handoff_size, sessions.repo, sessions.pr_number,
-				        NULL AS source
+				        NULL AS source, NULL AS write_policy
 				 FROM reminder_batches
 				 LEFT JOIN sessions ON sessions.session_id = reminder_batches.session_id
 				 WHERE reminder_batches.session_id = :sessionId
@@ -10819,7 +10834,7 @@ class StateStore {
     const row = this.db.prepare(`SELECT reminder_batches.batch_id, reminder_batches.session_id, reminder_batches.subscription_id,
 				        reminder_batches.reminder_text, reminder_batches.events_json, reminder_batches.state,
 				        reminder_batches.max_event_seq, session_subscriptions.repo,
-				        session_subscriptions.pr_number, session_subscriptions.source
+				        session_subscriptions.pr_number, session_subscriptions.source, session_subscriptions.write_policy
 				 FROM reminder_batches
 				 INNER JOIN session_subscriptions
 				   ON session_subscriptions.subscription_id = reminder_batches.subscription_id
@@ -10863,7 +10878,8 @@ class StateStore {
       prNumber,
       source: subscription?.source ?? record.source,
       policy,
-      worktreeMatchesTarget
+      worktreeMatchesTarget,
+      writePolicy: subscription?.writePolicy ?? record.writePolicy
     };
   }
   loadReminderSnapshot(target) {
@@ -10993,6 +11009,7 @@ class StateStore {
       ...record.prNumber ? { prNumber: record.prNumber } : {},
       ...record.subscriptionId ? { subscriptionId: record.subscriptionId } : {},
       ...record.source ? { source: record.source } : {},
+      ...record.writePolicy ? { writePolicy: record.writePolicy } : {},
       reminderText: record.reminderText,
       events: record.events
     };
@@ -11008,6 +11025,7 @@ class StateStore {
         repo: row.repo ?? undefined,
         prNumber: row.pr_number ?? undefined,
         source: row.source ?? undefined,
+        writePolicy: row.write_policy ?? undefined,
         reminderText: row.reminder_text,
         events: JSON.parse(row.events_json),
         state: row.state,
@@ -11107,7 +11125,8 @@ class StateStore {
       prNumber: targetPrNumber ?? undefined,
       source: subscription?.source,
       policy: subscription?.policy,
-      worktreeMatchesTarget
+      worktreeMatchesTarget,
+      writePolicy: subscription?.writePolicy
     });
     const batchId = this.createOrReplaceReminder(sessionId, subscription?.subscriptionId ?? null, reminderText, condensed, maxEventSeq, now);
     return {
@@ -11117,7 +11136,8 @@ class StateStore {
       ...targetPrNumber ? { prNumber: targetPrNumber } : {},
       ...subscription ? {
         subscriptionId: subscription.subscriptionId,
-        source: subscription.source
+        source: subscription.source,
+        writePolicy: subscription.writePolicy
       } : {},
       reminderText,
       events: condensed
@@ -11249,6 +11269,7 @@ class StateStore {
         source TEXT NOT NULL CHECK(source IN ('automatic', 'manual')),
         ownership TEXT NOT NULL DEFAULT 'unknown' CHECK(ownership IN ('self', 'foreign', 'unknown')),
         policy TEXT NOT NULL DEFAULT 'observe-only' CHECK(policy IN ('actionable', 'observe-only')),
+        write_policy TEXT NOT NULL CHECK(write_policy IN ('owned-active', 'user-authorized', 'observe-only')),
         state TEXT NOT NULL CHECK(state IN ('active', 'unsubscribed')),
         last_delivered_event_seq INTEGER NOT NULL DEFAULT 0,
         created_at INTEGER NOT NULL,
@@ -11379,9 +11400,13 @@ class StateStore {
     if (!subscriptionColumns.some((column) => column.name === "policy")) {
       this.db.exec("ALTER TABLE session_subscriptions ADD COLUMN policy TEXT NOT NULL DEFAULT 'observe-only'");
     }
-    this.db.prepare(`INSERT OR IGNORE INTO session_subscriptions (subscription_id, session_id, repo, pr_number, source, state, last_delivered_event_seq, created_at, updated_at)
+    if (!subscriptionColumns.some((column) => column.name === "write_policy")) {
+      this.db.exec("ALTER TABLE session_subscriptions ADD COLUMN write_policy TEXT NOT NULL DEFAULT 'observe-only'");
+      this.db.exec("UPDATE session_subscriptions SET write_policy = 'owned-active' WHERE source = 'automatic'");
+    }
+    this.db.prepare(`INSERT OR IGNORE INTO session_subscriptions (subscription_id, session_id, repo, pr_number, source, ownership, policy, write_policy, state, last_delivered_event_seq, created_at, updated_at)
 				 SELECT 'legacy:' || session_id || ':' || repo || ':' || pr_number,
-				        session_id, repo, pr_number, 'automatic', 'active', last_delivered_event_seq, created_at, updated_at
+				        session_id, repo, pr_number, 'automatic', 'unknown', 'observe-only', 'owned-active', 'active', last_delivered_event_seq, created_at, updated_at
 				 FROM sessions WHERE pr_number IS NOT NULL`).run();
     const prWatcherColumns = this.db.prepare(`PRAGMA table_info(pr_watchers)`).all();
     const hasPrWatcherColumn = (name) => prWatcherColumns.some((column) => column.name === name);

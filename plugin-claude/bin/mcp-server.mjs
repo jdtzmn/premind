@@ -86,6 +86,12 @@ const tools = [
       properties: {
         prNumber: { type: "integer", minimum: 1 },
         repo: { type: "string" },
+        writePolicy: {
+          type: "string",
+          enum: ["owned-active", "user-authorized", "observe-only"],
+          description:
+            "Optional; omitted manual subscriptions are observe-only. Use user-authorized only for explicit user authorization.",
+        },
       },
       required: ["prNumber"],
       additionalProperties: false,
@@ -205,11 +211,14 @@ export const handleMcpRequest = async (
         sessionId,
         prNumber: args.prNumber,
         ...(typeof args.repo === "string" ? { repo: args.repo } : {}),
+        ...(name === "subscribe" && typeof args.writePolicy === "string"
+          ? { writePolicy: args.writePolicy }
+          : {}),
       },
     );
     return text(
       name === "subscribe"
-        ? `Premind subscribed this Claude session to ${result.subscription.repo}#${result.subscription.prNumber}.`
+        ? `Premind subscribed this Claude session to ${result.subscription.repo}#${result.subscription.prNumber} with write policy ${result.subscription.writePolicy ?? "observe-only"}.`
         : `Premind unsubscribed this Claude session: ${result.unsubscribed ? "done" : "no active subscription"}.`,
     );
   }
