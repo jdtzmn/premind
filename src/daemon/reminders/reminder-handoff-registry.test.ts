@@ -83,6 +83,16 @@ describe("ReminderHandoffRegistry", () => {
 
     store.recoverFromRestart(1_000)
     assert.equal(store.getReminderBatchRecord(batch.batchId)?.state, "failed")
+    store.registerClient("client-restarted", { pid: 2, projectRoot: "/repo" }, 1_001)
+    store.ensureSessionControl({
+      clientId: "client-restarted",
+      sessionId: "session",
+      repo: "acme/repo",
+      branch: "feature/x",
+      isPrimary: true,
+      busyState: "idle",
+      paused: false,
+    }, 1_001)
     registry = new ReminderHandoffRegistry(store)
     assert.equal(registry.getPendingReminder("session")?.batchId, batch.batchId)
     assert.equal(store.getReminderBatchRecord(batch.batchId)?.state, "built")

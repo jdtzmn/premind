@@ -156,6 +156,7 @@ export class Router {
 				}
 				case "unregisterSession":
 					this.store.unregisterSession(request.payload.sessionId);
+					this.worktreeBindings.closeSession(request.payload.sessionId);
 					return this.ok({ unregistered: true });
 				case "deleteSession": {
 					const deleted = this.store.deleteSession(request.payload.sessionId);

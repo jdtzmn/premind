@@ -641,7 +641,9 @@ export class StateStore {
 	updateSessionState(payload: UpdateSessionStatePayload, now = Date.now()) {
 		const current = this.getSession(payload.sessionId);
 		if (!current) return { updated: false, revived: false };
-		const revived = current.status === "closed" && !!payload.busyState;
+		const revived =
+			(current.status === "closed" || current.status === "detached") &&
+			!!payload.busyState;
 		const next = {
 			repo: payload.repo ?? current.repo,
 			branch: payload.branch ?? current.branch,

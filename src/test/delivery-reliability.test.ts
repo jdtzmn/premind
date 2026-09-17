@@ -295,7 +295,7 @@ describe("delivery reliability", () => {
 
     const reapedAt = t0 + PREMIND_SESSION_STALE_MS + 1_000
     assert.equal(store.reapStaleSessions(PREMIND_SESSION_STALE_MS, reapedAt).reaped, 1)
-    assert.equal(store.getSession("session-reap")?.status, "closed")
+    assert.equal(store.getSession("session-reap")?.status, "detached")
     assert.equal(
       store.listPrWatchTargets(reapedAt).length,
       0,

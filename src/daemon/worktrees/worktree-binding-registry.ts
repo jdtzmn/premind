@@ -218,7 +218,8 @@ export class WorktreeBindingRegistry {
 
 	closeInactiveSessions(): void {
 		for (const sessionId of this.actors.keys()) {
-			if (this.store.getSession(sessionId)?.status === "closed") {
+			const status = this.store.getSession(sessionId)?.status;
+			if (status !== "active" && status !== "paused") {
 				this.closeSession(sessionId);
 			}
 		}
