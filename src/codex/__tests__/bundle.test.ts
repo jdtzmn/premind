@@ -87,7 +87,24 @@ test("relocated hook starts its adjacent daemon and registers a session", async 
 	const pluginData = path.join(directory, "plugin-data");
 	const pidPath = path.join(directory, "daemon.pid");
 	const socketPath = path.join(directory, "premind.sock");
+	const commandDirectory = path.join(directory, "bin");
+	const commandPath =
+		process.platform === "win32"
+			? process.env.PATH
+			: `${commandDirectory}${path.delimiter}${process.env.PATH ?? ""}`;
 	try {
+		if (process.platform !== "win32") {
+			fs.mkdirSync(commandDirectory);
+			for (const command of ["git", "gh"]) {
+				const script =
+					command === "git"
+						? `#!/bin/sh\nPATH=${JSON.stringify(process.env.PATH ?? "")}\nexport PATH\nexec git "$@"\n`
+						: "#!/bin/sh\nexit 0\n";
+				fs.writeFileSync(path.join(commandDirectory, command), script, {
+					mode: 0o755,
+				});
+			}
+		}
 		fs.copyFileSync(HOOK_BUNDLE, hookPath);
 		fs.copyFileSync(DAEMON_BUNDLE, actualDaemonPath);
 		fs.writeFileSync(
@@ -113,6 +130,7 @@ test("relocated hook starts its adjacent daemon and registers a session", async 
 			env: {
 				...process.env,
 				NODE_PATH: "",
+				PATH: commandPath,
 				PLUGIN_DATA: pluginData,
 				PREMIND_SOCKET_PATH: socketPath,
 				PREMIND_STATE_DIR: stateDirectory,
