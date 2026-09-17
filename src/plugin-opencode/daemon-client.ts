@@ -11,6 +11,8 @@ import {
   subscribeResponseSchema,
   unsubscribeResponseSchema,
 } from "../shared/ipc.ts"
+import { bootstrapResponseSchema } from "../shared/protocol/bootstrap.ts"
+import { PROTOCOL_V2, protocolV2ResponseSchema } from "../shared/protocol/v2.ts"
 import {
   decodeV1ClaimReminderBundleResponse,
   decodeV1DebugStatusResponse,
@@ -22,17 +24,37 @@ import type {
   ActivateWorktreePayload,
   EnsureSessionControlPayload,
   RegisterSessionPayload,
+  SessionHost,
   SubscribePayload,
   UnsubscribePayload,
   UpdateSessionStatePayload,
 } from "../shared/schema.ts"
+import { PREMIND_COMMIT, PREMIND_VERSION } from "../shared/version.ts"
 import { ensureDaemonRunning } from "./daemon-launcher.ts"
 
 const MAX_RETRIES = 3
 const RETRY_DELAY_MS = 500
 
+type PremindDaemonClientOptions = {
+  host?: SessionHost
+  socketPath?: string
+}
+
 export class PremindDaemonClient {
   readonly clientId = randomUUID()
+  private readonly host: SessionHost
+  private readonly socketPath: string
+  private protocolVersion: 1 | typeof PROTOCOL_V2 = PREMIND_PROTOCOL_VERSION
+  private initialized = false
+
+  constructor(options: PremindDaemonClientOptions = {}) {
+    this.host = options.host ?? "opencode"
+    this.socketPath = options.socketPath ?? PREMIND_SOCKET_PATH
+  }
+
+  get selectedProtocolVersion() {
+    return this.protocolVersion
+  }
   private registered = false
   private projectRoot?: string
   private sessionSource?: string
@@ -46,6 +68,7 @@ export class PremindDaemonClient {
     }
   >()
   async registerClient(projectRoot: string, sessionSource?: string) {
+    await this.initializeProtocol()
     this.projectRoot = projectRoot
     this.sessionSource = sessionSource
     const response = await this.requestWithRetry({
@@ -302,9 +325,63 @@ export class PremindDaemonClient {
     })
   }
 
+  private async initializeProtocol() {
+    if (this.initialized) return
+    const response = await this.requestRaw({
+      type: "initialize",
+      bootstrapVersion: 1,
+      payload: {
+        client: {
+          host: this.host,
+          version: PREMIND_VERSION,
+          commit: PREMIND_COMMIT,
+          incarnationNonce: this.clientId,
+        },
+        protocols: { min: PREMIND_PROTOCOL_VERSION, max: PROTOCOL_V2 },
+      },
+    })
+    const bootstrap = bootstrapResponseSchema.safeParse(response)
+    if (bootstrap.success) {
+      if (!bootstrap.data.ok) {
+        throw new Error(
+          `${bootstrap.data.error.code}: ${bootstrap.data.error.message}`,
+        )
+      }
+      const selected = bootstrap.data.result.protocols.selected
+      if (selected !== PREMIND_PROTOCOL_VERSION && selected !== PROTOCOL_V2) {
+        throw new Error(`PROTOCOL_UNSUPPORTED: Unexpected protocol ${selected}`)
+      }
+      this.protocolVersion = selected
+      this.initialized = true
+      return
+    }
+
+    const legacy = responseSchema.safeParse(response)
+    if (
+      legacy.success &&
+      !legacy.data.ok &&
+      legacy.data.error.code === "BAD_REQUEST"
+    ) {
+      this.protocolVersion = PREMIND_PROTOCOL_VERSION
+      this.initialized = true
+      return
+    }
+
+    throw bootstrap.error
+  }
+
+  private withNegotiatedProtocol(message: unknown): unknown {
+    if (typeof message !== "object" || message === null) return message
+    if (!("protocolVersion" in message)) return message
+    return {
+      ...(message as Record<string, unknown>),
+      protocolVersion: this.protocolVersion,
+    }
+  }
+
   private async requestWithRetry(message: unknown, attempt = 0): Promise<unknown> {
     try {
-      return await this.request(message)
+      return await this.request(this.withNegotiatedProtocol(message))
     } catch (error) {
       if (attempt >= MAX_RETRIES) throw error
 
@@ -317,6 +394,8 @@ export class PremindDaemonClient {
       // Daemon may have restarted or crashed. Try to bring it back.
       try {
         await ensureDaemonRunning()
+        this.initialized = false
+        await this.initializeProtocol()
       } catch {
         // If we can't start it, fall through to retry anyway.
       }
@@ -326,7 +405,7 @@ export class PremindDaemonClient {
         try {
           await this.request({
             type: "registerClient",
-            protocolVersion: PREMIND_PROTOCOL_VERSION,
+            protocolVersion: this.protocolVersion,
             payload: {
               clientId: this.clientId,
               metadata: {
@@ -347,8 +426,24 @@ export class PremindDaemonClient {
   }
 
   private async request(message: unknown) {
+    const response = await this.requestRaw(message)
+    const protocolVersion =
+      typeof message === "object" &&
+      message !== null &&
+      "protocolVersion" in message
+        ? (message as { protocolVersion?: unknown }).protocolVersion
+        : PREMIND_PROTOCOL_VERSION
+    const parsed =
+      protocolVersion === PROTOCOL_V2
+        ? protocolV2ResponseSchema.parse(response)
+        : responseSchema.parse(response)
+    if (!parsed.ok) throw new Error(`${parsed.error.code}: ${parsed.error.message}`)
+    return parsed.result
+  }
+
+  private async requestRaw(message: unknown): Promise<unknown> {
     const line = await new Promise<string>((resolve, reject) => {
-      const socket = net.createConnection(PREMIND_SOCKET_PATH)
+      const socket = net.createConnection(this.socketPath)
       let buffer = ""
 
       socket.setEncoding("utf8")
@@ -367,8 +462,6 @@ export class PremindDaemonClient {
       })
     })
 
-    const parsed = responseSchema.parse(JSON.parse(line))
-    if (!parsed.ok) throw new Error(`${parsed.error.code}: ${parsed.error.message}`)
-    return parsed.result
+    return JSON.parse(line)
   }
 }

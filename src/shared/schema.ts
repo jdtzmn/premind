@@ -197,7 +197,10 @@ export const debugStatusPayloadSchema = z.object({}).strict();
 
 export const daemonInfoSchema = z
   .object({
-    protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION),
+    protocolVersion: z.union([
+      z.literal(PREMIND_PROTOCOL_VERSION),
+      z.literal(2),
+    ]),
     heartbeatMs: z.literal(PREMIND_CLIENT_HEARTBEAT_MS),
     leaseTtlMs: z.literal(PREMIND_CLIENT_LEASE_TTL_MS),
     idleShutdownGraceMs: z.literal(PREMIND_IDLE_SHUTDOWN_GRACE_MS),
