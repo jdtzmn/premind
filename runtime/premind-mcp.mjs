@@ -4348,6 +4348,14 @@ var ackReminderPayloadSchema = exports_external
 		error: exports_external.string().min(1).optional(),
 	})
 	.strict();
+var ackReminderBundlePayloadSchema = exports_external
+	.object({
+		sessionId: exports_external.string().min(1),
+		handoffId: exports_external.string().uuid(),
+		state: exports_external.enum(["confirmed", "failed"]),
+		error: exports_external.string().min(1).optional(),
+	})
+	.strict();
 var confirmClaudeHandoffPayloadSchema = sessionControlPayloadSchema;
 var setGlobalDisabledPayloadSchema = exports_external
 	.object({
@@ -4536,6 +4544,16 @@ var requestSchema = exports_external.discriminatedUnion("type", [
 		payload: unsubscribePayloadSchema,
 	}),
 	exports_external.object({
+		type: exports_external.literal("claimReminderBundle"),
+		protocolVersion: exports_external.literal(PREMIND_PROTOCOL_VERSION),
+		payload: sessionControlPayloadSchema,
+	}),
+	exports_external.object({
+		type: exports_external.literal("ackReminderBundle"),
+		protocolVersion: exports_external.literal(PREMIND_PROTOCOL_VERSION),
+		payload: ackReminderBundlePayloadSchema,
+	}),
+	exports_external.object({
 		type: exports_external.literal("getPendingReminder"),
 		protocolVersion: exports_external.literal(PREMIND_PROTOCOL_VERSION),
 		payload: getPendingReminderPayloadSchema,
@@ -4590,6 +4608,21 @@ var registerClientResponseSchema = exports_external.object({
 });
 var getPendingReminderResponseSchema = exports_external.object({
 	batch: reminderBatchSchema.nullable(),
+});
+var claimReminderBundleResponseSchema = exports_external.object({
+	bundle: exports_external
+		.object({
+			handoffId: exports_external.string().uuid(),
+			batches: exports_external.array(reminderBatchSchema).min(1),
+		})
+		.strict()
+		.nullable(),
+});
+var legacyClaimReminderBundleResponseSchema = exports_external
+	.object({ batches: exports_external.array(reminderBatchSchema) })
+	.strict();
+var ackReminderBundleResponseSchema = exports_external.object({
+	acknowledged: exports_external.number().int().nonnegative(),
 });
 var claimReminderResponseSchema = exports_external.object({
 	claim: reminderClaimSchema.nullable(),
@@ -4666,6 +4699,8 @@ var CLAUDE_REQUIRED_DAEMON_OPERATIONS = [
 	"touchClaudeSession",
 	"claimClaudeReminder",
 	"confirmClaudeHandoff",
+	"claimReminderBundle",
+	"ackReminderBundle",
 	"suspendClaudeSession",
 ];
 var CODEX_REQUIRED_DAEMON_OPERATIONS = [
@@ -5151,6 +5186,8 @@ var ensureDaemonRunning = createDaemonLauncher();
 // src/client/daemon-client.ts
 var MAX_RETRIES = 3;
 var RETRY_DELAY_MS = 500;
+var isUnsupportedOperation = (error) =>
+	error instanceof Error && error.message.startsWith("BAD_REQUEST:");
 var REQUEST_TIMEOUT_MS = 2000;
 
 class PremindDaemonClient {
@@ -5180,6 +5217,7 @@ class PremindDaemonClient {
 	registered = false;
 	projectRoot;
 	sessionSource;
+	legacyBundleClaims = new Map();
 	async registerClient(projectRoot, sessionSource) {
 		this.projectRoot = projectRoot;
 		this.sessionSource = sessionSource;
@@ -5324,6 +5362,85 @@ class PremindDaemonClient {
 			payload,
 		});
 		return unsubscribeResponseSchema.parse(response);
+	}
+	async claimReminderBundle(sessionId) {
+		try {
+			const response = await this.requestWithRetry({
+				type: "claimReminderBundle",
+				protocolVersion: PREMIND_PROTOCOL_VERSION,
+				payload: { sessionId },
+			});
+			const current = claimReminderBundleResponseSchema.safeParse(response);
+			if (current.success) return current.data;
+			const legacy =
+				legacyClaimReminderBundleResponseSchema.safeParse(response);
+			if (!legacy.success)
+				return claimReminderBundleResponseSchema.parse(response);
+			if (legacy.data.batches.length === 0) return { bundle: null };
+			const handoffId = randomUUID2();
+			this.legacyBundleClaims.set(sessionId, {
+				handoffId,
+				batchIds: legacy.data.batches.map(({ batchId }) => batchId),
+				mode: "legacy-bundle",
+			});
+			return { bundle: { handoffId, batches: legacy.data.batches } };
+		} catch (error) {
+			if (!isUnsupportedOperation(error)) throw error;
+			const pending = await this.getPendingReminder(sessionId);
+			if (!pending.batch) return { bundle: null };
+			await this.ackReminder({
+				batchId: pending.batch.batchId,
+				sessionId,
+				state: "handed_off",
+			});
+			const handoffId = randomUUID2();
+			this.legacyBundleClaims.set(sessionId, {
+				handoffId,
+				batchIds: [pending.batch.batchId],
+				mode: "single",
+			});
+			return { bundle: { handoffId, batches: [pending.batch] } };
+		}
+	}
+	async ackReminderBundle(payload) {
+		try {
+			const response = await this.requestWithRetry({
+				type: "ackReminderBundle",
+				protocolVersion: PREMIND_PROTOCOL_VERSION,
+				payload,
+			});
+			return ackReminderBundleResponseSchema.parse(response);
+		} catch (error) {
+			if (!isUnsupportedOperation(error)) throw error;
+			const claim = this.legacyBundleClaims.get(payload.sessionId);
+			if (!claim || claim.handoffId !== payload.handoffId) {
+				return { acknowledged: 0 };
+			}
+			if (claim.mode === "legacy-bundle") {
+				const response = await this.requestWithRetry({
+					type: "ackReminderBundle",
+					protocolVersion: PREMIND_PROTOCOL_VERSION,
+					payload: {
+						sessionId: payload.sessionId,
+						state: payload.state,
+						...(payload.error ? { error: payload.error } : {}),
+					},
+				});
+				const acknowledged = ackReminderBundleResponseSchema.parse(response);
+				this.legacyBundleClaims.delete(payload.sessionId);
+				return acknowledged;
+			}
+			for (const batchId of claim.batchIds) {
+				await this.ackReminder({
+					batchId,
+					sessionId: payload.sessionId,
+					state: payload.state,
+					...(payload.error ? { error: payload.error } : {}),
+				});
+			}
+			this.legacyBundleClaims.delete(payload.sessionId);
+			return { acknowledged: claim.batchIds.length };
+		}
 	}
 	async getPendingReminder(sessionId) {
 		const response = await this.requestWithRetry({
