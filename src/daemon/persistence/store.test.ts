@@ -2572,6 +2572,38 @@ describe("daemon and coordinator fencing", () => {
       currentStore.close()
     }
   })
+
+  test("reloads only unexpired durable legacy proxy mappings", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "premind-proxy-map-test-"))
+    tempPaths.push(dir)
+    const dbPath = path.join(dir, "premind.db")
+    const store = new StateStore(dbPath)
+    const lease = store.claimSessionLease({
+      sessionId: "legacy-session",
+      ownerInstanceId: "daemon-a",
+      clientIncarnationNonce: "proxy-1",
+    }, 1_000)
+    store.saveLegacyProxyLease({
+      clientId: "legacy-client",
+      proxyIncarnationNonce: "proxy-1",
+      lease,
+    })
+    store.close()
+
+    const reopened = new StateStore(dbPath)
+    try {
+      assert.deepEqual(reopened.getLegacyProxyLease("legacy-session", 1_001), {
+        clientId: "legacy-client",
+        proxyIncarnationNonce: "proxy-1",
+        lease,
+      })
+      assert.equal(reopened.listLegacyProxyLeases("legacy-client", 1_001).length, 1)
+      assert.equal(reopened.getLegacyProxyLease("legacy-session", lease.expiresAt), null)
+      assert.equal(reopened.pruneExpiredLegacyProxyLeases(lease.expiresAt), 1)
+    } finally {
+      reopened.close()
+    }
+  })
 })
 
 

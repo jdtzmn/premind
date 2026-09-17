@@ -70,6 +70,12 @@ export type SessionLeaseClaim = Pick<
 	"sessionId" | "ownerInstanceId" | "clientIncarnationNonce"
 >;
 
+export type LegacyProxyLeaseMapping = {
+	clientId: string;
+	proxyIncarnationNonce: string;
+	lease: SessionLeaseToken;
+};
+
 type SessionLeaseRow = {
 	session_id: string;
 	owner_instance_id: string | null;
@@ -503,6 +509,75 @@ export class StateStore {
 			if (!valid) throw new Error("COORDINATOR_MOVED: background-coordinator");
 			return operation();
 		});
+	}
+
+
+	saveLegacyProxyLease(mapping: LegacyProxyLeaseMapping): void {
+		this.db.prepare(
+			`INSERT INTO legacy_proxy_session_leases
+			 (session_id, client_id, proxy_incarnation_nonce, owner_instance_id, generation, lease_token, claimed_at, expires_at)
+			 VALUES (:sessionId, :clientId, :proxyIncarnationNonce, :ownerInstanceId, :generation, :leaseToken, :claimedAt, :expiresAt)
+			 ON CONFLICT(session_id) DO UPDATE SET
+			 client_id = excluded.client_id, proxy_incarnation_nonce = excluded.proxy_incarnation_nonce,
+			 owner_instance_id = excluded.owner_instance_id, generation = excluded.generation,
+			 lease_token = excluded.lease_token, claimed_at = excluded.claimed_at, expires_at = excluded.expires_at`,
+		).run({
+			clientId: mapping.clientId,
+			proxyIncarnationNonce: mapping.proxyIncarnationNonce,
+			sessionId: mapping.lease.sessionId,
+			ownerInstanceId: mapping.lease.ownerInstanceId,
+			generation: mapping.lease.generation,
+			leaseToken: mapping.lease.leaseToken,
+			claimedAt: mapping.lease.claimedAt,
+			expiresAt: mapping.lease.expiresAt,
+		});
+	}
+
+	getLegacyProxyLease(
+		sessionId: string,
+		now = Date.now(),
+	): LegacyProxyLeaseMapping | null {
+		const row = this.db.prepare(
+			`SELECT * FROM legacy_proxy_session_leases WHERE session_id = ? AND expires_at > ?`,
+		).get(sessionId, now) as {
+			session_id: string; client_id: string; proxy_incarnation_nonce: string;
+			owner_instance_id: string; generation: number; lease_token: string;
+			claimed_at: number; expires_at: number;
+		} | undefined;
+		if (!row) return null;
+		return {
+			clientId: row.client_id,
+			proxyIncarnationNonce: row.proxy_incarnation_nonce,
+			lease: {
+				sessionId: row.session_id,
+				ownerInstanceId: row.owner_instance_id,
+				generation: row.generation,
+				clientIncarnationNonce: row.proxy_incarnation_nonce,
+				leaseToken: row.lease_token,
+				claimedAt: row.claimed_at,
+				expiresAt: row.expires_at,
+			},
+		};
+	}
+
+	listLegacyProxyLeases(clientId: string, now = Date.now()): LegacyProxyLeaseMapping[] {
+		const sessionIds = this.db.prepare(
+			`SELECT session_id FROM legacy_proxy_session_leases WHERE client_id = ? AND expires_at > ?`,
+		).all(clientId, now) as Array<{ session_id: string }>;
+		return sessionIds.flatMap(({ session_id }) => {
+			const mapping = this.getLegacyProxyLease(session_id, now);
+			return mapping ? [mapping] : [];
+		});
+	}
+
+	deleteLegacyProxyLease(sessionId: string): boolean {
+		return (this.db.prepare(`DELETE FROM legacy_proxy_session_leases WHERE session_id = ?`)
+			.run(sessionId).changes as number) === 1;
+	}
+
+	pruneExpiredLegacyProxyLeases(now = Date.now()): number {
+		return this.db.prepare(`DELETE FROM legacy_proxy_session_leases WHERE expires_at <= ?`)
+			.run(now).changes as number;
 	}
 
 
@@ -3463,6 +3538,17 @@ export class StateStore {
         lease_token_hash TEXT,
         expires_at INTEGER
       );
+      CREATE TABLE IF NOT EXISTS legacy_proxy_session_leases (
+        session_id TEXT PRIMARY KEY,
+        client_id TEXT NOT NULL,
+        proxy_incarnation_nonce TEXT NOT NULL,
+        owner_instance_id TEXT NOT NULL,
+        generation INTEGER NOT NULL,
+        lease_token TEXT NOT NULL,
+        claimed_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL
+      );
+
 
       CREATE TABLE IF NOT EXISTS storage_metadata (
         singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
