@@ -94,6 +94,33 @@ describe("Codex hook runner", () => {
 		assert.match(diagnostics.value, /Install Git/);
 	});
 
+	test("skips delivery prerequisites for cleanup boundaries", async () => {
+		let prerequisiteChecked = false;
+		const output = new CapturingWritable();
+		await runHookMain({
+			eventName: "SessionEnd",
+			input: Readable.from([
+				JSON.stringify({
+					session_id: "cleanup-session",
+					transcript_path: null,
+					cwd: process.cwd(),
+					model: "test",
+					hook_event_name: "SessionEnd",
+					reason: "other",
+				}) + "\n",
+			]),
+			output,
+			environment: {},
+			ensurePrerequisites: async () => {
+				prerequisiteChecked = true;
+				throw new PremindPrerequisiteError("must not run for cleanup");
+			},
+		});
+		await new Promise<void>((resolve) => output.end(resolve));
+		assert.equal(prerequisiteChecked, false);
+		assert.equal(output.value, "");
+	});
+
 	test("emits no protocol output for unknown events or SessionEnd parse failure", async () => {
 		const unknownOutput = new CapturingWritable();
 		const diagnostics = new CapturingWritable();

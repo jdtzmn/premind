@@ -106,7 +106,9 @@ export const runHookMain = async (
 
 	try {
 		const rawInput = await readHookInput(input);
-		await ensurePrerequisites();
+		if (eventName !== "Interrupt" && eventName !== "SessionEnd") {
+			await ensurePrerequisites();
+		}
 		const launchDaemon = createDaemonLauncher({
 			daemonEntry: DAEMON_ENTRY,
 			requiredOperations: CODEX_REQUIRED_DAEMON_OPERATIONS,

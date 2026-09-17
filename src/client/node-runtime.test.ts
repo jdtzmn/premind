@@ -9,6 +9,7 @@ import {
   resolveNodeRuntime,
 } from "./node-runtime.ts";
 
+import { PremindPrerequisiteError } from "./prerequisites.ts";
 const tempPaths: string[] = [];
 
 afterEach(() => {
@@ -41,8 +42,12 @@ test("reports missing and unsupported Node runtimes actionably", () => {
   tempPaths.push(dir);
   const executable = path.join(dir, "node");
   fs.writeFileSync(executable, "#!/bin/sh\necho v22.12.0\n", { mode: 0o755 });
-  assert.throws(
-    () => resolveNodeRuntime({ executable }),
-    /stable node:sqlite support; found v22\.12\.0/,
-  );
+  let error: unknown;
+  try {
+    resolveNodeRuntime({ executable });
+  } catch (caught) {
+    error = caught;
+  }
+  assert.ok(error instanceof PremindPrerequisiteError);
+  assert.match(error.message, /stable node:sqlite support; found v22\.12\.0/);
 });

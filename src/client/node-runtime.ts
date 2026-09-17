@@ -6,6 +6,7 @@ import {
   MINIMUM_NODE_VERSION,
 } from "../shared/node-version.ts";
 
+import { PremindPrerequisiteError } from "./prerequisites.ts";
 export { assertSupportedNodeVersion, MINIMUM_NODE_VERSION };
 
 export type NodeRuntime = {
@@ -34,7 +35,7 @@ export const resolveNodeRuntime = (
   const executable =
     options.executable ?? findOnPath("node", options.environmentPath);
   if (!executable) {
-    throw new Error(
+    throw new PremindPrerequisiteError(
       `Cannot start Premind: Node.js ${MINIMUM_NODE_VERSION} or newer is not available on PATH`,
     );
   }
@@ -43,19 +44,22 @@ export const resolveNodeRuntime = (
     timeout: 5_000,
   });
   if (result.error) {
-    throw new Error(
+    throw new PremindPrerequisiteError(
       `Cannot run Node.js at ${executable}: ${result.error.message}`,
-      {
-        cause: result.error,
-      },
     );
   }
   if (result.status !== 0) {
-    throw new Error(
+    throw new PremindPrerequisiteError(
       `Cannot determine Node.js version at ${executable}: exit ${result.status ?? "unknown"}`,
     );
   }
   const version = result.stdout.trim();
-  assertSupportedNodeVersion(version);
+  try {
+    assertSupportedNodeVersion(version);
+  } catch (error) {
+    throw new PremindPrerequisiteError(
+      error instanceof Error ? error.message : "Unsupported Node.js runtime",
+    );
+  }
   return { executable, version };
 };
