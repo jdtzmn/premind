@@ -71,14 +71,7 @@ export const commandCapabilities = {
 		scope: "daemon",
 		description: "Enable GitHub polling globally.",
 		harnesses: {
-			pi: {
-				commands: [],
-				tools: [],
-				exceptions: {
-					commands: "Planned parity work in issue 45.",
-					tools: "Planned parity work in issue 45.",
-				},
-			},
+			pi: { commands: ["premind:enable"], tools: ["premind_enable"] },
 			claude: { commands: ["premind:enable"], tools: ["enable"] },
 			opencode: { commands: ["premind-enable"], tools: ["premind_enable"] },
 		},
@@ -88,14 +81,7 @@ export const commandCapabilities = {
 		scope: "daemon",
 		description: "Disable GitHub polling globally.",
 		harnesses: {
-			pi: {
-				commands: [],
-				tools: [],
-				exceptions: {
-					commands: "Planned parity work in issue 45.",
-					tools: "Planned parity work in issue 45.",
-				},
-			},
+			pi: { commands: ["premind:disable"], tools: ["premind_disable"] },
 			claude: { commands: ["premind:disable"], tools: ["disable"] },
 			opencode: { commands: ["premind-disable"], tools: ["premind_disable"] },
 		},

@@ -50,6 +50,7 @@ type DaemonClientLike = {
 	activateWorktree: (payload: ActivateWorktreePayload) => Promise<unknown>;
 	subscribe: (payload: SubscribePayload) => Promise<unknown>;
 	unsubscribe: (payload: UnsubscribePayload) => Promise<unknown>;
+	setGlobalDisabled: (disabled: boolean) => Promise<{ disabled: boolean }>;
 	updateSessionState: (payload: {
 		sessionId: string;
 		busyState: "busy" | "idle";
@@ -342,6 +343,11 @@ export const createPremindPiExtension = (
 		const pruneClosedSessions = async () => {
 			const result = await createDaemonClient().pruneClosedSessions();
 			return result as PruneClosedSessionsResult;
+		};
+
+		const setGlobalPolling = async (disabled: boolean) => {
+			const result = await createDaemonClient().setGlobalDisabled(disabled);
+			return `premind polling is ${result.disabled ? "disabled" : "enabled"} globally.`;
 		};
 
 		const setStatus = (
@@ -677,6 +683,20 @@ export const createPremindPiExtension = (
 			},
 		});
 
+		pi.registerCommand("premind:enable", {
+			description: "Enable premind GitHub polling globally",
+			handler: async (_args, ctx) => {
+				ctx.ui.notify(await setGlobalPolling(false), "info");
+			},
+		});
+
+		pi.registerCommand("premind:disable", {
+			description: "Disable premind GitHub polling globally",
+			handler: async (_args, ctx) => {
+				ctx.ui.notify(await setGlobalPolling(true), "info");
+			},
+		});
+
 		pi.registerCommand("premind:prune", {
 			description:
 				"Remove closed premind sessions and their pending reminder batches from daemon state",
@@ -878,6 +898,32 @@ export const createPremindPiExtension = (
 					: "premind has no pending reminders for this session.";
 				return {
 					content: [{ type: "text" as const, text }],
+					details: {},
+				};
+			},
+		});
+
+		pi.registerTool({
+			name: "premind_enable",
+			label: "Premind Enable",
+			description: "Enable premind GitHub polling globally.",
+			parameters: Type.Object({}),
+			async execute() {
+				return {
+					content: [{ type: "text" as const, text: await setGlobalPolling(false) }],
+					details: {},
+				};
+			},
+		});
+
+		pi.registerTool({
+			name: "premind_disable",
+			label: "Premind Disable",
+			description: "Disable premind GitHub polling globally.",
+			parameters: Type.Object({}),
+			async execute() {
+				return {
+					content: [{ type: "text" as const, text: await setGlobalPolling(true) }],
 					details: {},
 				};
 			},
