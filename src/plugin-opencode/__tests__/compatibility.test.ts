@@ -169,6 +169,22 @@ describe("premind plugin compatibility harness", () => {
     assert.ok(doctorPrompt, "should have injected doctor response")
     assert.match(doctorPrompt.text, /host: opencode/)
 
+
+    // 5. Canonical delivery command routes through chat.message.
+    const deliverMarker = commands["premind:deliver"].template
+    try {
+      await runtime["chat.message"](
+        { sessionID: "session-1" },
+        { message: { parts: [{ type: "text", text: deliverMarker }] }, parts: [{ type: "text", text: deliverMarker }] },
+      )
+      assert.fail("expected throw for handled command")
+    } catch (error) {
+      assert.match((error as Error).message, /PREMIND_HANDLED/)
+    }
+    assert.equal(asyncPrompts.length, 2, "canonical delivery command should inject the pending reminder")
+    const deliveryPrompt = syncPrompts.find((prompt) => prompt.text.includes("delivering PR updates now"))
+    assert.ok(deliveryPrompt, "canonical delivery command should inject a no-reply response")
+    assert.equal(deliveryPrompt.noReply, true)
     // 7a. Slash command via chat.message: premind-disable.
     const disableMarker = commands["premind-disable"].template
     try {

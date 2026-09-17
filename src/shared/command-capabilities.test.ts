@@ -9,7 +9,7 @@ import {
 } from "./command-capabilities.ts";
 
 describe("command capability contract", () => {
-	test("common capabilities explain every omitted surface", () => {
+	test("common capabilities explain omitted or noncanonical surfaces", () => {
 		for (const [capabilityId, capability] of Object.entries(
 			commandCapabilities,
 		)) {
@@ -17,14 +17,19 @@ describe("command capability contract", () => {
 			for (const harness of premindHarnesses) {
 				const surface = capability.harnesses[harness];
 				for (const kind of ["commands", "tools"] as const) {
-					if (surface[kind].length > 0) continue;
+					const canonicalNames: readonly string[] = capability.canonical[kind];
+					const surfaceNames: readonly string[] = surface[kind];
+					const differsFromCanonical =
+						canonicalNames.some((name) => !surfaceNames.includes(name)) ||
+						surfaceNames.some((name) => !canonicalNames.includes(name));
+					if (!differsFromCanonical) continue;
 					const exceptions =
 						"exceptions" in surface
 							? (surface.exceptions as Partial<Record<typeof kind, string>>)
 							: undefined;
 					assert.ok(
 						exceptions?.[kind],
-						`${capabilityId}.${harness}.${kind} requires an explicit exception`,
+						`${capabilityId}.${harness}.${kind} differs from the canonical surface and requires an explicit exception`,
 					);
 				}
 			}
