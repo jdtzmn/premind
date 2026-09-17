@@ -106,6 +106,10 @@ export class IpcServer {
 		);
 	}
 
+  get daemonInstanceId() {
+    return this.instanceId;
+  }
+
 	async listen(socketPath = PREMIND_SOCKET_PATH) {
 		this.socketPath = socketPath;
 		this.lifecycleState = "starting";

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto"
 import { PREMIND_CLOSED_SESSION_RETENTION_MS, PREMIND_DAEMON_LOG_PATH, PREMIND_IDLE_SHUTDOWN_GRACE_MS, PREMIND_REMINDER_HANDOFF_STALE_MS, PREMIND_SESSION_STALE_MS } from "../shared/constants.ts"
 import { isSocketReachable } from "../shared/daemon-startup.ts"
 import { createLogger } from "./logging/logger.ts"
@@ -22,10 +23,15 @@ async function main() {
     return
   }
   const server = new IpcServer()
+  let daemonLease = server.store.claimDaemonInstanceLease({
+    instanceId: server.daemonInstanceId,
+    incarnationNonce: randomUUID(),
+  })
+  let coordinatorLease = server.store.claimCoordinatorLease(daemonLease)
   const github = new GitHubClient()
   const discoveryWatcher = new BranchDiscoveryWatcher(server.store, github, server.worktreeBindings)
 
-  const recovery = server.store.recoverFromRestart()
+  const recovery = server.store.recoverFromRestartAsCoordinator(coordinatorLease)
   logger.info("startup recovery", {
     prunedClients: recovery.prunedClients,
     resetBatches: recovery.resetBatches,
@@ -36,7 +42,10 @@ async function main() {
   })
 
 
-  const suspendedAutomaticSubscriptions = server.store.suspendAutomaticSubscriptions()
+  const suspendedAutomaticSubscriptions = server.store.withCoordinatorLease(
+    coordinatorLease,
+    () => server.store.suspendAutomaticSubscriptions(),
+  )
   if (suspendedAutomaticSubscriptions > 0) {
     logger.info("suspended automatic subscriptions pending author verification", {
       suspendedAutomaticSubscriptions,
@@ -50,7 +59,10 @@ async function main() {
   // Reap sessions whose last_activity_at is older than the staleness threshold.
   // Runs once at startup to clean up any backlog carried across daemon restarts,
   // and periodically while the daemon is up.
-  const startupReap = server.store.reapStaleSessions(PREMIND_SESSION_STALE_MS)
+  const startupReap = server.store.withCoordinatorLease(
+    coordinatorLease,
+    () => server.store.reapStaleSessions(PREMIND_SESSION_STALE_MS),
+  )
   server.worktreeBindings.closeInactiveSessions()
   if (startupReap.reaped > 0 || startupReap.oldestAgeMs !== null) {
     logger.info("startup reap", {
@@ -62,8 +74,13 @@ async function main() {
 
   // Prune closed session rows and orphaned PR events at startup so any backlog
   // accumulated while the daemon was down is cleaned up immediately.
-  const startupPrunedSessions = server.store.pruneClosedSessions(PREMIND_CLOSED_SESSION_RETENTION_MS)
-  const startupPrunedEvents = server.store.pruneOrphanedPrEvents()
+  const [startupPrunedSessions, startupPrunedEvents] = server.store.withCoordinatorLease(
+    coordinatorLease,
+    () => [
+      server.store.pruneClosedSessions(PREMIND_CLOSED_SESSION_RETENTION_MS),
+      server.store.pruneOrphanedPrEvents(),
+    ] as const,
+  )
   if (startupPrunedSessions > 0 || startupPrunedEvents > 0) {
     logger.info("startup prune", {
       prunedClosedSessions: startupPrunedSessions,
@@ -73,7 +90,10 @@ async function main() {
 
   // Run cache cleanup on startup.
   const detailFiles = new DetailFileWriter()
-  const cleanedFiles = detailFiles.cleanup()
+  const cleanedFiles = server.store.withCoordinatorLease(
+    coordinatorLease,
+    () => detailFiles.cleanup(),
+  )
   if (cleanedFiles > 0) {
     logger.info("detail file cleanup", { removed: cleanedFiles })
   }
@@ -82,13 +102,19 @@ async function main() {
 
   const discoveryScheduler = new PollScheduler(
     "branch-discovery",
-    createDisableGatedTick("branch-discovery", server.store, () => discoveryWatcher.tick(), logger),
+    createDisableGatedTick("branch-discovery", server.store, async () => {
+      server.store.withCoordinatorLease(coordinatorLease, () => true)
+      await discoveryWatcher.tick()
+    }, logger),
     { baseIntervalMs: 60_000, maxIntervalMs: 180_000, jitterFactor: 0.25 },
   )
 
   const prScheduler = new PollScheduler(
     "pr-watcher",
-    createDisableGatedTick("pr-watcher", server.store, () => pullRequestWatcher.tick(), logger),
+    createDisableGatedTick("pr-watcher", server.store, async () => {
+      server.store.withCoordinatorLease(coordinatorLease, () => true)
+      await pullRequestWatcher.tick()
+    }, logger),
     { baseIntervalMs: 20_000, maxIntervalMs: 120_000, jitterFactor: 0.2 },
   )
 
@@ -119,12 +145,14 @@ async function main() {
 
 
   if (!server.store.isGloballyDisabled()) {
+    server.store.withCoordinatorLease(coordinatorLease, () => true)
     await discoveryWatcher.tick()
   }
   discoveryScheduler.start()
   prScheduler.start()
 
   const reapInterval = setInterval(() => {
+    server.store.withCoordinatorLease(coordinatorLease, () => {
     const result = server.store.reapStaleSessions(PREMIND_SESSION_STALE_MS)
     server.worktreeBindings.closeInactiveSessions()
     const reclaimedHandoffs = server.store.expireStaleHandoffs()
@@ -149,17 +177,47 @@ async function main() {
         prunedOrphanedEvents: prunedEvents,
       })
     }
+    })
   }, STALENESS_SWEEP_INTERVAL_MS)
   if (typeof reapInterval.unref === "function") reapInterval.unref()
+
+  let authorityStopping = false
+  const authorityInterval = setInterval(() => {
+    const renewedDaemon = server.store.renewDaemonInstanceLease(daemonLease)
+    if (!renewedDaemon) {
+      authorityStopping = true
+      logger.error("daemon instance lease lost; self-demoting")
+    } else {
+      daemonLease = renewedDaemon
+      const renewedCoordinator = server.store.renewCoordinatorLease(coordinatorLease)
+      if (!renewedCoordinator) {
+        authorityStopping = true
+        logger.error("coordinator lease lost; self-demoting")
+      } else {
+        coordinatorLease = renewedCoordinator
+      }
+    }
+    if (!authorityStopping) return
+    clearInterval(authorityInterval)
+    clearInterval(reapInterval)
+    discoveryScheduler.stop()
+    prScheduler.stop()
+    pullRequestWatcher.close()
+    void server.close().finally(() => process.exit(1))
+  }, 10_000)
+  if (typeof authorityInterval.unref === "function") authorityInterval.unref()
 
   const lifecycle = new DaemonLifecycleRuntime({
     hasDemand: () => server.hasDemand(),
     graceMs: PREMIND_IDLE_SHUTDOWN_GRACE_MS,
     onStopping: async (reason) => {
       clearInterval(reapInterval)
+      clearInterval(authorityInterval)
       discoveryScheduler.stop()
       prScheduler.stop()
       pullRequestWatcher.close()
+      server.store.releaseCoordinatorLease(coordinatorLease)
+      server.store.releaseDaemonInstanceLease(daemonLease)
       logger.info("graceful shutdown", { reason })
       await server.close()
     },

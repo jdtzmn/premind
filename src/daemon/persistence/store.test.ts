@@ -2461,6 +2461,58 @@ describe("session daemon leases", () => {
   })
 })
 
+describe("daemon and coordinator fencing", () => {
+  test("fences stale incarnations and coordinator generations", () => {
+    const store = createStore()
+    try {
+      const daemonA = store.claimDaemonInstanceLease({
+        instanceId: "daemon-a",
+        incarnationNonce: "daemon-a-1",
+        storageEpoch: 1,
+      }, 1_000)
+      assert.equal(daemonA.generation, 1)
+      assert.equal(store.getStorageEpoch(), 1)
+      const coordinatorA = store.claimCoordinatorLease(daemonA, 1_001)
+      assert.equal(coordinatorA.generation, 1)
+
+      const daemonB = store.claimDaemonInstanceLease({
+        instanceId: "daemon-b",
+        incarnationNonce: "daemon-b-1",
+      }, 1_002)
+      assert.equal(daemonB.generation, 2)
+      assert.throws(() => store.claimCoordinatorLease(daemonB, 1_003), /COORDINATOR_BUSY/)
+      const coordinatorB = store.transferCoordinatorLease(coordinatorA, daemonB, 1_004)
+      assert.equal(coordinatorB.generation, 2)
+
+      let staleCommitRan = false
+      assert.throws(
+        () => store.withCoordinatorLease(coordinatorA, () => { staleCommitRan = true }, 1_005),
+        /COORDINATOR_MOVED/,
+      )
+      assert.equal(staleCommitRan, false)
+      assert.equal(store.withCoordinatorLease(coordinatorB, () => 42, 1_005), 42)
+
+      const reincarnatedA = store.claimDaemonInstanceLease({
+        instanceId: "daemon-a",
+        incarnationNonce: "daemon-a-2",
+      }, 1_006)
+      assert.equal(reincarnatedA.generation, 3)
+      assert.equal(store.validateDaemonInstanceLease(daemonA, 1_006), false)
+      assert.throws(
+        () => store.claimDaemonInstanceLease({
+          instanceId: "daemon-c",
+          incarnationNonce: "daemon-c-1",
+          storageEpoch: 2,
+        }, 1_007),
+        /STORAGE_EPOCH_MOVED/,
+      )
+    } finally {
+      store.close()
+    }
+  })
+})
+
+
 describe("session detach and deletion", () => {
   test("detach preserves state while explicit deletion starts retention", () => {
     const store = createStore()

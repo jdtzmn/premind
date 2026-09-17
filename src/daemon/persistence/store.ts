@@ -4,6 +4,8 @@ import { DatabaseSync } from "node:sqlite";
 import { createHash, randomUUID } from "node:crypto";
 import {
 	PREMIND_CLIENT_LEASE_TTL_MS,
+	PREMIND_COORDINATOR_LEASE_TTL_MS,
+	PREMIND_DAEMON_LEASE_TTL_MS,
 	PREMIND_CLOSED_SESSION_RETENTION_MS,
 	PREMIND_DB_PATH,
 	PREMIND_DATABASE_BUSY_TIMEOUT_MS,
@@ -75,6 +77,40 @@ type SessionLeaseRow = {
 	client_incarnation_nonce: string | null;
 	lease_token_hash: string | null;
 	expires_at: number | null;
+};
+
+export type DaemonInstanceLeaseToken = {
+	instanceId: string;
+	incarnationNonce: string;
+	storageEpoch: number;
+	generation: number;
+	expiresAt: number;
+};
+
+export type CoordinatorLeaseToken = {
+	resourceKey: "background-coordinator";
+	ownerInstanceId: string;
+	ownerGeneration: number;
+	storageEpoch: number;
+	generation: number;
+	expiresAt: number;
+};
+
+type DaemonInstanceLeaseRow = {
+	instance_id: string;
+	incarnation_nonce: string;
+	storage_epoch: number;
+	generation: number;
+	expires_at: number;
+};
+
+type CoordinatorLeaseRow = {
+	resource_key: "background-coordinator";
+	owner_instance_id: string | null;
+	owner_generation: number | null;
+	storage_epoch: number;
+	generation: number;
+	lease_expires_at: number | null;
 };
 
 export type SubscriptionSource = "automatic" | "manual";
@@ -240,6 +276,215 @@ export class StateStore {
 			throw error;
 		}
 	}
+
+	getStorageEpoch(): number {
+		const row = this.db
+			.prepare(`SELECT storage_epoch FROM storage_metadata WHERE singleton = 1`)
+			.get() as { storage_epoch: number };
+		return row.storage_epoch;
+	}
+
+	claimDaemonInstanceLease(
+		claim: Pick<DaemonInstanceLeaseToken, "instanceId" | "incarnationNonce"> & {
+			storageEpoch?: number;
+		},
+		now = Date.now(),
+	): DaemonInstanceLeaseToken {
+		return this.transaction(() => {
+			const storageEpoch = this.getStorageEpoch();
+			if (claim.storageEpoch !== undefined && claim.storageEpoch !== storageEpoch) {
+				throw new Error(`STORAGE_EPOCH_MOVED: ${storageEpoch}`);
+			}
+			const existing = this.db
+				.prepare(`SELECT * FROM daemon_instance_leases WHERE instance_id = ?`)
+				.get(claim.instanceId) as DaemonInstanceLeaseRow | undefined;
+			const sameIncarnation =
+				existing?.incarnation_nonce === claim.incarnationNonce &&
+				existing.storage_epoch === storageEpoch &&
+				existing.expires_at > now;
+			const expiresAt = now + PREMIND_DAEMON_LEASE_TTL_MS;
+			if (sameIncarnation) {
+				this.db.prepare(`UPDATE daemon_instance_leases SET expires_at = ? WHERE instance_id = ?`)
+					.run(expiresAt, claim.instanceId);
+				return {
+					instanceId: claim.instanceId,
+					incarnationNonce: claim.incarnationNonce,
+					storageEpoch,
+					generation: existing.generation,
+					expiresAt,
+				};
+			}
+			const generationRow = this.db
+				.prepare(`UPDATE storage_metadata SET daemon_generation = daemon_generation + 1 WHERE singleton = 1 RETURNING daemon_generation`)
+				.get() as { daemon_generation: number };
+			this.db.prepare(
+				`INSERT INTO daemon_instance_leases (instance_id, incarnation_nonce, storage_epoch, generation, expires_at)
+				 VALUES (?, ?, ?, ?, ?)
+				 ON CONFLICT(instance_id) DO UPDATE SET
+				 incarnation_nonce = excluded.incarnation_nonce, storage_epoch = excluded.storage_epoch,
+				 generation = excluded.generation, expires_at = excluded.expires_at`,
+			).run(claim.instanceId, claim.incarnationNonce, storageEpoch, generationRow.daemon_generation, expiresAt);
+			return {
+				instanceId: claim.instanceId,
+				incarnationNonce: claim.incarnationNonce,
+				storageEpoch,
+				generation: generationRow.daemon_generation,
+				expiresAt,
+			};
+		});
+	}
+
+	validateDaemonInstanceLease(token: DaemonInstanceLeaseToken, now = Date.now()): boolean {
+		return this.db.prepare(
+			`SELECT 1 FROM daemon_instance_leases
+			 WHERE instance_id = :instanceId AND incarnation_nonce = :incarnationNonce
+			 AND storage_epoch = :storageEpoch AND generation = :generation AND expires_at > :now`,
+		).get({
+			instanceId: token.instanceId,
+			incarnationNonce: token.incarnationNonce,
+			storageEpoch: token.storageEpoch,
+			generation: token.generation,
+			now,
+		}) !== undefined;
+	}
+
+	renewDaemonInstanceLease(
+		token: DaemonInstanceLeaseToken,
+		now = Date.now(),
+	): DaemonInstanceLeaseToken | false {
+		const expiresAt = now + PREMIND_DAEMON_LEASE_TTL_MS;
+		const result = this.db.prepare(
+			`UPDATE daemon_instance_leases SET expires_at = :expiresAt
+			 WHERE instance_id = :instanceId AND incarnation_nonce = :incarnationNonce
+			 AND storage_epoch = :storageEpoch AND generation = :generation AND expires_at > :now`,
+		).run({ ...token, expiresAt, now });
+		return (result.changes as number) === 1 ? { ...token, expiresAt } : false;
+	}
+
+	releaseDaemonInstanceLease(token: DaemonInstanceLeaseToken, now = Date.now()): boolean {
+		const result = this.db.prepare(
+			`UPDATE daemon_instance_leases SET expires_at = :now
+			 WHERE instance_id = :instanceId AND incarnation_nonce = :incarnationNonce
+			 AND storage_epoch = :storageEpoch AND generation = :generation AND expires_at > :now`,
+		).run({
+			instanceId: token.instanceId,
+			incarnationNonce: token.incarnationNonce,
+			storageEpoch: token.storageEpoch,
+			generation: token.generation,
+			now,
+		});
+		return (result.changes as number) === 1;
+	}
+
+	claimCoordinatorLease(
+		daemon: DaemonInstanceLeaseToken,
+		now = Date.now(),
+	): CoordinatorLeaseToken {
+		return this.transaction(() => {
+			if (!this.validateDaemonInstanceLease(daemon, now)) {
+				throw new Error(`DAEMON_MOVED: ${daemon.instanceId}`);
+			}
+			const current = this.db.prepare(
+				`SELECT * FROM coordinator_leases WHERE resource_key = 'background-coordinator'`,
+			).get() as CoordinatorLeaseRow;
+			const active = current.owner_instance_id !== null && current.lease_expires_at !== null && current.lease_expires_at > now;
+			const sameOwner = active && current.owner_instance_id === daemon.instanceId && current.owner_generation === daemon.generation;
+			if (active && !sameOwner) throw new Error(`COORDINATOR_BUSY: ${current.owner_instance_id}`);
+			const generation = sameOwner ? current.generation : current.generation + 1;
+			const expiresAt = now + PREMIND_COORDINATOR_LEASE_TTL_MS;
+			this.db.prepare(
+				`UPDATE coordinator_leases SET owner_instance_id = ?, owner_generation = ?, storage_epoch = ?, generation = ?, lease_expires_at = ?
+				 WHERE resource_key = 'background-coordinator'`,
+			).run(daemon.instanceId, daemon.generation, daemon.storageEpoch, generation, expiresAt);
+			return { resourceKey: "background-coordinator", ownerInstanceId: daemon.instanceId, ownerGeneration: daemon.generation, storageEpoch: daemon.storageEpoch, generation, expiresAt };
+		});
+	}
+
+	renewCoordinatorLease(
+		token: CoordinatorLeaseToken,
+		now = Date.now(),
+	): CoordinatorLeaseToken | false {
+		const expiresAt = now + PREMIND_COORDINATOR_LEASE_TTL_MS;
+		const result = this.db.prepare(
+			`UPDATE coordinator_leases SET lease_expires_at = :expiresAt
+			 WHERE resource_key = :resourceKey AND owner_instance_id = :ownerInstanceId
+			 AND owner_generation = :ownerGeneration AND storage_epoch = :storageEpoch
+			 AND generation = :generation AND lease_expires_at > :now`,
+		).run({
+			resourceKey: token.resourceKey,
+			ownerInstanceId: token.ownerInstanceId,
+			ownerGeneration: token.ownerGeneration,
+			storageEpoch: token.storageEpoch,
+			generation: token.generation,
+			expiresAt,
+			now,
+		});
+		return (result.changes as number) === 1 ? { ...token, expiresAt } : false;
+	}
+
+	releaseCoordinatorLease(token: CoordinatorLeaseToken, now = Date.now()): boolean {
+		const result = this.db.prepare(
+			`UPDATE coordinator_leases SET owner_instance_id = NULL, owner_generation = NULL, lease_expires_at = NULL
+			 WHERE resource_key = :resourceKey AND owner_instance_id = :ownerInstanceId
+			 AND owner_generation = :ownerGeneration AND storage_epoch = :storageEpoch
+			 AND generation = :generation AND lease_expires_at > :now`,
+		).run({
+			resourceKey: token.resourceKey,
+			ownerInstanceId: token.ownerInstanceId,
+			ownerGeneration: token.ownerGeneration,
+			storageEpoch: token.storageEpoch,
+			generation: token.generation,
+			now,
+		});
+		return (result.changes as number) === 1;
+	}
+
+
+
+	transferCoordinatorLease(
+		current: CoordinatorLeaseToken,
+		nextDaemon: DaemonInstanceLeaseToken,
+		now = Date.now(),
+	): CoordinatorLeaseToken {
+		return this.transaction(() => {
+			if (!this.validateDaemonInstanceLease(nextDaemon, now)) throw new Error(`DAEMON_MOVED: ${nextDaemon.instanceId}`);
+			const generation = current.generation + 1;
+			const expiresAt = now + PREMIND_COORDINATOR_LEASE_TTL_MS;
+			const result = this.db.prepare(
+				`UPDATE coordinator_leases SET owner_instance_id = :nextOwner, owner_generation = :nextOwnerGeneration,
+				 storage_epoch = :nextStorageEpoch, generation = :nextGeneration, lease_expires_at = :expiresAt
+				 WHERE resource_key = :resourceKey AND owner_instance_id = :ownerInstanceId
+				 AND owner_generation = :ownerGeneration AND storage_epoch = :storageEpoch
+				 AND generation = :generation AND lease_expires_at > :now`,
+			).run({ ...current, nextOwner: nextDaemon.instanceId, nextOwnerGeneration: nextDaemon.generation, nextStorageEpoch: nextDaemon.storageEpoch, nextGeneration: generation, expiresAt, now });
+			if ((result.changes as number) !== 1) throw new Error("COORDINATOR_MOVED: background-coordinator");
+			return { resourceKey: "background-coordinator", ownerInstanceId: nextDaemon.instanceId, ownerGeneration: nextDaemon.generation, storageEpoch: nextDaemon.storageEpoch, generation, expiresAt };
+		});
+	}
+
+	withCoordinatorLease<T>(
+		token: CoordinatorLeaseToken,
+		operation: () => T,
+		now = Date.now(),
+	): T {
+		return this.transaction(() => {
+			const valid = this.db.prepare(
+				`SELECT 1 FROM coordinator_leases WHERE resource_key = :resourceKey
+				 AND owner_instance_id = :ownerInstanceId AND owner_generation = :ownerGeneration
+				 AND storage_epoch = :storageEpoch AND generation = :generation AND lease_expires_at > :now`,
+			).get({
+				resourceKey: token.resourceKey,
+				ownerInstanceId: token.ownerInstanceId,
+				ownerGeneration: token.ownerGeneration,
+				storageEpoch: token.storageEpoch,
+				generation: token.generation,
+				now,
+			});
+			if (!valid) throw new Error("COORDINATOR_MOVED: background-coordinator");
+			return operation();
+		});
+	}
+
 
 	claimSessionLease(
 		claim: SessionLeaseClaim,
@@ -444,6 +689,14 @@ export class StateStore {
 				now,
 			});
 	}
+
+	recoverFromRestartAsCoordinator(
+		coordinator: CoordinatorLeaseToken,
+		now = Date.now(),
+	) {
+		return this.withCoordinatorLease(coordinator, () => this.recoverFromRestart(now), now);
+	}
+
 
 	recoverFromRestart(now = Date.now()) {
 		// Record retained state before fencing every process-owned session.
@@ -3084,6 +3337,38 @@ export class StateStore {
         lease_token_hash TEXT,
         expires_at INTEGER
       );
+
+      CREATE TABLE IF NOT EXISTS storage_metadata (
+        singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+        storage_epoch INTEGER NOT NULL,
+        daemon_generation INTEGER NOT NULL DEFAULT 0
+      );
+
+      INSERT INTO storage_metadata (singleton, storage_epoch, daemon_generation)
+      VALUES (1, 1, 0)
+      ON CONFLICT(singleton) DO NOTHING;
+
+      CREATE TABLE IF NOT EXISTS daemon_instance_leases (
+        instance_id TEXT PRIMARY KEY,
+        incarnation_nonce TEXT NOT NULL,
+        storage_epoch INTEGER NOT NULL,
+        generation INTEGER NOT NULL UNIQUE,
+        expires_at INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS coordinator_leases (
+        resource_key TEXT PRIMARY KEY,
+        owner_instance_id TEXT,
+        owner_generation INTEGER,
+        storage_epoch INTEGER NOT NULL,
+        generation INTEGER NOT NULL,
+        lease_expires_at INTEGER
+      );
+
+      INSERT INTO coordinator_leases
+        (resource_key, owner_instance_id, owner_generation, storage_epoch, generation, lease_expires_at)
+      VALUES ('background-coordinator', NULL, NULL, 1, 0, NULL)
+      ON CONFLICT(resource_key) DO NOTHING;
 
       CREATE TABLE IF NOT EXISTS sessions (
         session_id TEXT PRIMARY KEY,
