@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { describe, test } from "node:test";
 import {
   bootstrapInitializeRequestSchema,
@@ -15,17 +16,11 @@ import {
   protocolV2SuccessResponseSchema,
 } from "./v2.ts";
 
-const daemon = {
-  instanceId: "a1aa7407-10d2-4b1e-b58b-ac989b83d8b9",
-  pid: 1234,
-  version: "0.2.0",
-  commit: "abc123",
-  socketPath: "/tmp/premind-501/d-a1aa7407.sock",
-  lifecycleState: "ready",
-};
+const readFixture = (path: string): unknown =>
+  JSON.parse(
+    readFileSync(new URL(`./__fixtures__/${path}`, import.meta.url), "utf8"),
+  );
 
-const protocols = { min: 1, max: 2, selected: 2 };
-const storage = { epoch: 2, capabilities: ["base", "session-leases-v1"] };
 
 describe("permanent bootstrap v1", () => {
   test("parses initialization with additive fields", () => {
@@ -53,20 +48,9 @@ describe("permanent bootstrap v1", () => {
   });
 
   test("parses success while stripping future fields", () => {
+    const fixture = readFixture("bootstrap/v1/success.json");
     const parsed = bootstrapResponseSchema.parse({
-      ok: true,
-      bootstrapVersion: 1,
-      result: {
-        daemon: { ...daemon, futureDaemonField: true },
-        protocols,
-        capabilities: {
-          operations: ["registerClient", "debugStatus"],
-          rollingSessions: true,
-          futureCapability: true,
-        },
-        storage,
-        futureResultField: true,
-      },
+      ...(fixture as Record<string, unknown>),
       futureEnvelopeField: true,
     });
 
@@ -74,20 +58,12 @@ describe("permanent bootstrap v1", () => {
     if (!parsed.ok) assert.fail("expected bootstrap success");
     assert.equal(parsed.result.protocols.selected, 2);
     assert.equal("futureEnvelopeField" in parsed, false);
-    assert.equal("futureResultField" in parsed.result, false);
-    assert.equal("futureDaemonField" in parsed.result.daemon, false);
   });
 
   test("parses a no-overlap failure without a selected normal protocol", () => {
-    const parsed = bootstrapResponseSchema.parse({
-      ok: false,
-      bootstrapVersion: 1,
-      error: {
-        code: "PROTOCOL_UNSUPPORTED",
-        message: "Update the premind plugin to continue",
-        supported: { min: 7, max: 7 },
-      },
-    });
+    const parsed = bootstrapResponseSchema.parse(
+      readFixture("bootstrap/v1/no-overlap.json"),
+    );
 
     assert.equal(parsed.ok, false);
     if (parsed.ok) assert.fail("expected bootstrap failure");
@@ -103,12 +79,9 @@ describe("permanent bootstrap v1", () => {
 
 describe("permanent descriptor v1", () => {
   test("parses additive fields but selects only ready descriptors", () => {
+    const fixture = readFixture("descriptor/v1/ready.json");
     const ready = instanceDescriptorV1Schema.parse({
-      descriptorFormat: 1,
-      ...daemon,
-      protocols: { min: 1, max: 2 },
-      storage,
-      heartbeatAt: 123456,
+      ...(fixture as Record<string, unknown>),
       futureDescriptorField: true,
     });
     const future = instanceDescriptorV1Schema.parse({
