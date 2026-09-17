@@ -190,11 +190,7 @@ describe("StateStore", () => {
     assert.equal(batch.events.length, 2)
     assert.match(
       batch.reminderText,
-<<<<<<< HEAD
       /target worktree is not active/,
-=======
-      /Action required for this owned PR: investigate the current-HEAD CI failure\(s\)\/merge conflict\(s\)/,
->>>>>>> 30c4fe5 (Clarify scoped reminder actions)
     )
 
     const pending = store.getPendingReminder("session-1")
@@ -295,11 +291,7 @@ describe("StateStore", () => {
     assert.ok(batch.events.some((event) => event.kind === "check.superseded" && event.summary.includes("lint") === false))
     assert.match(batch.reminderText, /Changes:\n1\. check\.failed - Check failed: build/)
     assert.match(batch.reminderText, /Superseded:\n1\. check\.superseded - 1 failed on sha-old \(superseded by sha-new\)/)
-<<<<<<< HEAD
     assert.match(batch.reminderText, /target worktree is not active/)
-=======
-    assert.match(batch.reminderText, /Action required for this owned PR: investigate the current-HEAD CI failure\(s\)\/merge conflict\(s\)/)
->>>>>>> 30c4fe5 (Clarify scoped reminder actions)
 
     store.close()
   })

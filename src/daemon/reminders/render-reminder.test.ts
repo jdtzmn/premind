@@ -71,9 +71,9 @@ test("verified self-owned manual subscriptions can act only from the target work
   current.checks = [{ name: "lint", state: "FAILURE" }]
   const failed = row("check.failed", { name: "lint", headSha: "head" })
   const ready = render([failed], current, "manual", "actionable", true)
-  assert.match(ready, /verified as yours/)
-  assert.match(ready, /resolve the failing check/)
-  assert.doesNotMatch(ready, /wait for authorization/)
+  assert.match(ready, /explicit authorization/)
+  assert.match(ready, /Action required for this owned PR/)
+  assert.doesNotMatch(ready, /Observation-only CI\/conflict update/)
   const wrongWorktree = render([failed], current, "manual", "actionable", false)
   assert.match(wrongWorktree, /do not make changes until you activate the matching worktree/)
   assert.doesNotMatch(wrongWorktree, /resolve the failing check/)
@@ -119,10 +119,10 @@ for (const source of ["automatic", "manual"] as const) {
       assert.ok(batch)
       assert.match(
         batch.reminderText,
-        source === "automatic" ? /Review action for this owned PR:/ : /Observation-only review feedback:/,
+        /Observation-only review feedback:/,
       )
       assert.equal(
-        batch.reminderText.match(source === "automatic" ? /Review action for this owned PR:/g : /Observation-only review feedback:/g)?.length,
+        batch.reminderText.match(/Observation-only review feedback:/g)?.length,
         1,
       )
       const max = store.getReminderBatchRecord(batch.batchId)!.maxEventSeq
@@ -133,7 +133,7 @@ for (const source of ["automatic", "manual"] as const) {
       assert.equal(store.getReminderBatchRecord(batch.batchId)!.maxEventSeq, max)
       assert.doesNotMatch(
         refreshed.reminderText,
-        source === "automatic" ? /Review action for this owned PR:/ : /Observation-only review feedback:/,
+        /Observation-only review feedback:/,
       )
     } finally {
       registry.close()
