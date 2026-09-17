@@ -2397,6 +2397,13 @@ describe("session daemon leases", () => {
       assert.equal(store.validateSessionLease(first), false)
       assert.equal(store.validateSessionLease(second), false)
       assert.equal(store.validateSessionLease(third), true)
+      let staleWriteRan = false
+      assert.throws(
+        () => store.withSessionLease(first, () => { staleWriteRan = true }),
+        /SESSION_MOVED/,
+      )
+      assert.equal(staleWriteRan, false)
+      assert.equal(store.withSessionLease(third, () => 42), 42)
     } finally {
       store.close()
     }

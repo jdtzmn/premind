@@ -831,6 +831,16 @@ describe("session lease IPC", () => {
     if (!staleMutation.ok) assert.equal(staleMutation.error.code, "SESSION_MOVED");
     assert.equal(store.getSession("session-1")?.busy_state, "idle");
 
+    const stalePause = await router.handle({
+      type: "pauseSession",
+      protocolVersion: PREMIND_PROTOCOL_VERSION,
+      sessionLease: lease,
+      payload: { sessionId: "session-1" },
+    } as never);
+    assert.equal(stalePause.ok, false);
+    if (!stalePause.ok) assert.equal(stalePause.error.code, "SESSION_MOVED");
+    assert.equal(store.getSession("session-1")?.status, "active");
+
     const currentMutation = await router.handle({
       type: "updateSessionState",
       protocolVersion: PREMIND_PROTOCOL_VERSION,
@@ -848,16 +858,19 @@ describe("session lease IPC", () => {
     assert.equal(staleRenewal.ok, false);
     if (!staleRenewal.ok) assert.equal(staleRenewal.error.code, "SESSION_MOVED");
 
-    const released = await router.handle({
-      type: "releaseSessionLease",
+    const detached = await router.handle({
+      type: "unregisterSession",
       protocolVersion: PREMIND_PROTOCOL_VERSION,
-      payload: { lease: movedLease },
+      sessionLease: movedLease,
+      payload: { sessionId: "session-1" },
     } as never);
-    assert.deepEqual(released, {
+    assert.deepEqual(detached, {
       ok: true,
       protocolVersion: PREMIND_PROTOCOL_VERSION,
-      result: { released: true },
+      result: { unregistered: true },
     });
+    assert.equal(store.getSession("session-1")?.status, "detached");
+    assert.equal(store.validateSessionLease(movedLease), false);
     store.close();
   });
 });

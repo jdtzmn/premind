@@ -310,6 +310,26 @@ export class StateStore {
 		);
 	}
 
+	withSessionLease<T>(
+		token: SessionLeaseToken,
+		operation: () => T,
+		now = Date.now(),
+	): T {
+		this.db.exec("BEGIN IMMEDIATE");
+		try {
+			if (!this.validateSessionLease(token, now)) {
+				throw new Error(`SESSION_MOVED: ${token.sessionId}`);
+			}
+			const result = operation();
+			this.db.exec("COMMIT");
+			return result;
+		} catch (error) {
+			this.db.exec("ROLLBACK");
+			throw error;
+		}
+	}
+
+
 	renewSessionLease(
 		token: SessionLeaseToken,
 		now = Date.now(),
@@ -549,8 +569,7 @@ export class StateStore {
 		payload: EnsureSessionControlPayload,
 		now = Date.now(),
 	): { created: boolean; superseded: number } {
-		this.db.exec("BEGIN IMMEDIATE");
-		try {
+		return this.transaction(() => {
 			const existing = this.getSession(payload.sessionId);
 			const status = payload.paused ? "paused" : "active";
 			const contextChanged =
@@ -648,13 +667,9 @@ export class StateStore {
 			}
 
 			this.touchBranchWatcher(payload.repo, payload.branch, now);
-			this.db.exec("COMMIT");
 			// Preserve the main-compatible response shape without closing peer sessions.
 			return { created: !existing, superseded: 0 };
-		} catch (error) {
-			this.db.exec("ROLLBACK");
-			throw error;
-		}
+		});
 	}
 
 	updateSessionState(payload: UpdateSessionStatePayload, now = Date.now()) {

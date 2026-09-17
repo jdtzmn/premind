@@ -36,6 +36,8 @@ export class Router {
 	) {}
 
 	async handle(request: RoutedPremindRequest): Promise<PremindResponse> {
+		const leaseFailure = this.attachedSessionLeaseFailure(request);
+		if (leaseFailure) return leaseFailure;
 		try {
 			switch (request.type) {
 				case "registerClient":
@@ -82,9 +84,15 @@ export class Router {
 						: this.fail("SESSION_MOVED", "Session lease is stale or expired");
 				}
 				case "registerSession": {
-					const { created, superseded } = this.store.registerSession(
-						request.payload,
-					);
+					let registered;
+					try {
+						registered = this.withAttachedSessionLease(request, () =>
+							this.store.registerSession(request.payload),
+						);
+					} catch (error) {
+						return this.sessionLeaseFailure(error);
+					}
+					const { created, superseded } = registered;
 					this.logger.info(
 						created ? "session registered" : "session re-registered",
 						{
@@ -104,9 +112,15 @@ export class Router {
 							`Unknown client: ${request.payload.clientId}`,
 						);
 					}
-					const { created, superseded } = this.store.ensureSessionControl(
-						request.payload,
-					);
+					let controlled;
+					try {
+						controlled = this.withAttachedSessionLease(request, () =>
+							this.store.ensureSessionControl(request.payload),
+						);
+					} catch (error) {
+						return this.sessionLeaseFailure(error);
+					}
+					const { created, superseded } = controlled;
 					this.logger.info(
 						created ? "session control attached" : "session control refreshed",
 						{
@@ -164,9 +178,14 @@ export class Router {
 					return this.ok({ suspended: true });
 				}
 				case "updateSessionState": {
-					const leaseFailure = this.validateAttachedSessionLease(request);
-					if (leaseFailure) return leaseFailure;
-					const result = this.store.updateSessionState(request.payload);
+					let result;
+					try {
+						result = this.withAttachedSessionLease(request, () =>
+							this.store.updateSessionState(request.payload),
+						);
+					} catch (error) {
+						return this.sessionLeaseFailure(error);
+					}
 					if (!result.updated)
 						return this.fail(
 							"SESSION_NOT_FOUND",
@@ -186,11 +205,27 @@ export class Router {
 					return this.ok({ updated: true, revived: result.revived });
 				}
 				case "unregisterSession":
-					this.store.unregisterSession(request.payload.sessionId);
+					try {
+						this.withAttachedSessionLease(request, () => {
+							if (request.sessionLease) {
+								this.store.releaseSessionLease(request.sessionLease);
+							}
+							this.store.unregisterSession(request.payload.sessionId);
+						});
+					} catch (error) {
+						return this.sessionLeaseFailure(error);
+					}
 					this.worktreeBindings.closeSession(request.payload.sessionId);
 					return this.ok({ unregistered: true });
 				case "deleteSession": {
-					const deleted = this.store.deleteSession(request.payload.sessionId);
+					let deleted;
+					try {
+						deleted = this.withAttachedSessionLease(request, () =>
+							this.store.deleteSession(request.payload.sessionId),
+						);
+					} catch (error) {
+						return this.sessionLeaseFailure(error);
+					}
 					if (!deleted)
 						return this.fail(
 							"SESSION_NOT_FOUND",
@@ -200,10 +235,14 @@ export class Router {
 					return this.ok({ deleted: true });
 				}
 				case "pauseSession": {
-					const paused = this.store.setSessionPaused(
-						request.payload.sessionId,
-						true,
-					);
+					let paused;
+					try {
+						paused = this.withAttachedSessionLease(request, () =>
+							this.store.setSessionPaused(request.payload.sessionId, true),
+						);
+					} catch (error) {
+						return this.sessionLeaseFailure(error);
+					}
 					if (!paused)
 						return this.fail(
 							"SESSION_NOT_FOUND",
@@ -212,10 +251,14 @@ export class Router {
 					return this.ok({ paused: true });
 				}
 				case "resumeSession": {
-					const resumed = this.store.setSessionPaused(
-						request.payload.sessionId,
-						false,
-					);
+					let resumed;
+					try {
+						resumed = this.withAttachedSessionLease(request, () =>
+							this.store.setSessionPaused(request.payload.sessionId, false),
+						);
+					} catch (error) {
+						return this.sessionLeaseFailure(error);
+					}
 					if (!resumed)
 						return this.fail(
 							"SESSION_NOT_FOUND",
@@ -414,7 +457,7 @@ export class Router {
 		return this.ok(result);
 	}
 
-	private validateAttachedSessionLease(
+	private attachedSessionLeaseFailure(
 		request: RoutedPremindRequest,
 	): PremindResponse | null {
 		if (!request.sessionLease) return null;
@@ -427,6 +470,22 @@ export class Router {
 			return this.fail("SESSION_MOVED", "Session lease is stale or belongs elsewhere");
 		}
 		return null;
+	}
+
+
+	private withAttachedSessionLease<T>(
+		request: RoutedPremindRequest,
+		operation: () => T,
+	): T {
+		if (!request.sessionLease) return operation();
+		const sessionId = (request.payload as { sessionId?: unknown }).sessionId;
+		if (
+			typeof sessionId !== "string" ||
+			request.sessionLease.sessionId !== sessionId
+		) {
+			throw new Error("SESSION_MOVED: session lease belongs elsewhere");
+		}
+		return this.store.withSessionLease(request.sessionLease, operation);
 	}
 
 

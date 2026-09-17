@@ -162,12 +162,12 @@ export class PremindDaemonClient {
   }
 
   async unregisterSession(sessionId: string) {
-    await this.releaseSessionLease(sessionId)
     await this.requestWithRetry({
       type: "unregisterSession",
       protocolVersion: PREMIND_PROTOCOL_VERSION,
       payload: { sessionId },
     })
+    this.sessionLeases.delete(sessionId)
   }
 
   async deleteSession(sessionId: string) {

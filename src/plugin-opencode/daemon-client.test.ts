@@ -131,7 +131,7 @@ describe("PremindDaemonClient session leases", () => {
     })
     assert.deepEqual(fenced.sessionLease, lease)
     await client.heartbeat()
-    await client.unregisterSession("session-1")
+    await client.release()
 
     assert.deepEqual(
       requests.map(({ type }) => type),
@@ -141,7 +141,7 @@ describe("PremindDaemonClient session leases", () => {
         "heartbeatClient",
         "renewSessionLease",
         "releaseSessionLease",
-        "unregisterSession",
+        "releaseClient",
       ],
     )
     const releaseRequest = requests.find(({ type }) => type === "releaseSessionLease")
