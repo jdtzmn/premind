@@ -131,6 +131,7 @@ Keep `{ ok, protocolVersion, error: { code, message } }` parseable for legacy re
 - `SESSION_MOVED` — the request used a stale instance/generation and must rediscover;
 - `SESSION_BUSY` — a non-replayable request or handoff is preventing cutover;
 - `SCHEMA_UNSUPPORTED` — the daemon cannot safely use the current database schema.
+- `DAEMON_DOWNGRADE_BLOCKED` — the packaged daemon is older than the active or persisted state floor and must not start.
 
 The envelope echoes the request protocol version so an old client can parse a clear rejection.
 
@@ -141,6 +142,7 @@ The envelope echoes the request protocol version so an old client can parse a cl
 Each daemon binds a short, unique Unix socket such as `/tmp/premind-<uid>/d-<id>.sock`. Socket directories use owner-only permissions and stay short enough for platform Unix-socket limits.
 
 After readiness, the daemon atomically writes an instance descriptor under `PREMIND_STATE_DIR/instances/` containing its instance ID, socket path, package version, commit, supported protocol range, schema capabilities, lifecycle state, and last heartbeat. A descriptor is only a discovery hint: clients probe the socket and verify the initialization response before trusting it.
+Instance-descriptor format v1 is a permanent additive discovery surface, like bootstrap v1: bridge-aware old clients must be able to locate and probe a much newer daemon even after their normal protocol version leaves support.
 
 Clients select in this order:
 
@@ -152,7 +154,7 @@ Clients select in this order:
 A draining, quiescent (except for its explicitly authorized rollback session), stale, unreachable, protocol-incompatible, or schema-incompatible instance is never selected for a new claim. An older client never launches its older daemon merely because a newer compatible daemon is already running. `semver` compares released versions; an exact version+commit match resolves local/development ties without attempting to order commit hashes.
 
 `proper-lockfile` uses a lock keyed by version+commit to prevent two hosts from launching duplicate instances of the same build. Different builds are intentionally allowed to coexist.
-A client launches its packaged daemon only when that build is newer than every compatible ready instance, or when no compatible ready instance exists. It never launches a lower version to match a downgraded client.
+A client launches its packaged daemon only when that build is newer than every compatible ready instance, or when no live instance exists and the packaged build satisfies the state's persisted minimum-daemon floor. It never launches an older build beside a newer live instance or against state last advanced by an incompatible newer daemon.
 
 ### Rapid releases
 
@@ -161,6 +163,26 @@ Five breaking contracts in one week may produce protocol versions v3 through v7.
 - if the session reaches a safe boundary after each release, it rolls to each exact packaged daemon;
 - if releases accumulate while the session is busy, intermediate ready daemons receive no session leases and drain, while the client moves directly to v7;
 - sessions whose clients did not update remain on their old daemons until they move, end, or their leases expire.
+
+### Illustrative package scenarios
+
+#### Two active v2 sessions, then a new v3 session
+
+Assume two Pi processes or two existing OpenCode processes loaded package v2 and send activity every five seconds. A third process starts with package v3. The v3 client negotiates v2 with the old daemon while launching daemon v3 on a unique socket, then registers the new session on v3 once it is ready. The two old sessions continue on daemon v2 and keep its session leases live; they do not fail and daemon v2 does not drain. One fenced coordinator—normally transferred to the newest ready daemon—performs polling for sessions on both daemons through the shared database. If an old process later reloads v3, its session moves between completed operations; five-second message frequency is not itself a blocker.
+
+For OpenCode, package version is scoped to an OpenCode/plugin process, not each logical session. The mixed-version example therefore means old sessions remain in an existing process while the new session starts in another or newly reloaded process. Pi commonly has one process per session, so the split occurs naturally.
+
+#### Dormant v2 session revived after v7 owns the state
+
+Assume session S1 last ran with a bridge-aware v2 plugin. Its lease expired, daemon v2 drained, and a year later daemon v7 is serving S2. When the unchanged v2 plugin revives S1:
+
+- it discovers/probes v7 before considering its packaged v2 daemon;
+- if v7 still supports protocol v2, S1 attaches to v7 using that retained codec and never starts daemon v2;
+- if v7 no longer supports protocol v2, S1's coding session still starts but premind reports that the plugin must be updated;
+- it does **not** start daemon v2 beside v7, even if the old package still contains that binary;
+- if no v7 process is currently live, the persisted minimum-daemon floor still prevents v2 from opening or mutating state that v7 advanced.
+
+Session ownership expiry is separate from data retention. If S1's durable premind rows still exist, a compatible v7 daemon reclaims them with a higher generation. If normal retention pruned them during the year, v7 treats S1 as a fresh premind attachment; pruning is never a reason to resurrect daemon v2.
 
 ## Session ownership and rolling cutover
 
@@ -220,6 +242,8 @@ SQLite already runs in WAL mode, which supports concurrent readers and a seriali
 
 Track named schema capabilities/migrations rather than treating one latest `PRAGMA user_version` as permission for destructive change. Apply migrations once under a database migration lease/transaction. A daemon checks required and unsupported capabilities before claiming sessions or coordinator leadership. An older binary encountering an incompatible contracted schema returns `SCHEMA_UNSUPPORTED` before mutation; it never attempts an automatic downgrade.
 
+Maintain a bootstrap-stable compatibility marker in `PREMIND_STATE_DIR` with at least `formatVersion`, `highestDaemonVersionSeen`, `minimumDaemonVersion`, and the storage epoch. It is monotonic and written atomically. Before a contract migration raises the reader floor, write and durably sync the higher `minimumDaemonVersion` first; a crash may conservatively block an old daemon, but can never let it mutate contracted state. Every bridge-aware daemon checks this marker before opening SQLite read-write or running recovery. An unknown marker format fails closed with `DAEMON_DOWNGRADE_BLOCKED`. The database migration table remains authoritative for detailed capabilities after that preflight.
+
 ## Legacy bridge exception
 
 A pre-bridge singleton daemon uses the well-known socket and does not participate in session fencing or coordinator leases. It cannot safely share SQLite with a bridge-aware active daemon. The first upgrade therefore remains a one-time exception:
@@ -241,7 +265,9 @@ Never kill an unidentified PID or unlink a reachable legacy socket.
 | Current client | Future compatible daemon | Use it without launching an older daemon |
 | Old client | Its old daemon | Continue while its live session lease is renewed |
 | Old client | New compatible daemon | Negotiate a retained protocol or receive a parseable upgrade error for ambiguous v1 operations |
-| No protocol overlap | Any bridge-aware fleet | Start/select a compatible packaged instance only if the database schema overlaps; otherwise return an actionable error |
+| Newer client with no overlap | Older bridge-aware fleet/state floor | Start the newer packaged instance only if storage capabilities overlap; otherwise return an actionable error |
+| Dormant old client | Newer live daemon | Use the newer daemon if its retained protocol overlaps; otherwise require a plugin update and never launch the old packaged daemon |
+| Dormant old client | No live daemon but newer persisted floor | Return `DAEMON_DOWNGRADE_BLOCKED` before opening SQLite read-write |
 | Downgraded package | Newer compatible daemon | Use the newer daemon; never replace it with an older build |
 | Downgraded package | Contracted newer schema | Reject before any database mutation |
 
@@ -293,6 +319,7 @@ Pi and OpenCode background refreshes surface compact health state without crashi
 - Add the fenced singleton background-coordinator lease and leadership transfer.
 - Start schedulers only while holding the live generation; reconstruct them from SQLite after transfer.
 - Introduce named schema capabilities and an expand/contract migration policy.
+- Add the monotonic compatibility marker and enforce its minimum-daemon floor before any read-write database open, recovery, or migration.
 - Gate session claims and coordinator leadership on schema compatibility.
 - Reject downgrade before mutation.
 
@@ -330,7 +357,7 @@ The suite should cover behavioral boundaries, not every client-version × daemon
 5. **Delivery conservation:** a reminder is confirmed once or remains retryable across cutover/crash.
 6. **Single coordinator:** at most one live generation runs background polling/maintenance.
 7. **Ready-before-move:** a client never leaves a healthy old daemon for an unready candidate.
-8. **No downgrade mutation:** incompatible older code performs no database writes.
+8. **No zombie downgrade:** a dormant old plugin never starts an older daemon beside a newer live instance or below the persisted minimum-daemon floor, and incompatible old code performs no database writes.
 9. **Bounded fleet:** instances with no live ownership/coordinator work eventually disappear.
 10. **Host parity:** Pi, OpenCode, and Claude use the same negotiation and ownership rules despite different lifecycles.
 
@@ -360,6 +387,8 @@ One table-driven test supplies descriptors for exact, newer, older, starting, qu
 - ignores quiescent instances for new claims but permits a matching fenced rollback authorization;
 - remains on its healthy old instance while an exact candidate starts;
 - never launches an older daemon when a newer compatible daemon exists;
+- revives a dormant v2 client on live v7 when protocol v2 is retained, without launching v2;
+- returns an actionable plugin-upgrade result, still without launching v2, when live v7 has no protocol overlap;
 - launches at most one copy of the same build under concurrent clients.
 
 **Covers:** deterministic selection, readiness, downgrade prevention, launch deduplication.
@@ -439,9 +468,9 @@ Start A and B concurrently against one temporary WAL database. Assert exactly on
 
 #### T10 — Expand/contract and downgrade safety
 
-Apply an additive migration with A still live, start B, and prove both versions can execute their supported operations. Attempt the contract migration while A is registered and assert it is refused. After A drains and the support gate allows contraction, apply it once. Then start an older binary and assert `SCHEMA_UNSUPPORTED` occurs before any write, recovery, or scheduler startup.
+Apply an additive migration with A still live, start B, and prove both versions can execute their supported operations. Attempt the contract migration while A is registered and assert it is refused. After A drains and the support gate allows contraction, atomically raise and sync the minimum-daemon marker, then apply the contract migration once. With no daemon process left alive, run a v2 launcher against the v7 floor and assert `DAEMON_DOWNGRADE_BLOCKED` occurs before a read-write database open, recovery, migration, or scheduler startup. Also simulate a crash after the floor is raised but before contraction and assert the conservative block remains safe and recoverable by v7.
 
-**Covers:** rolling database compatibility, migration serialization, and downgrade safety.
+**Covers:** rolling database compatibility, migration serialization, persisted downgrade fencing, and safe revival after long dormancy.
 
 #### T11 — Host lifecycle contract
 
@@ -485,8 +514,9 @@ Ship a bridge release before any further incompatible payload change:
 3. Every later release starts side by side and moves sessions individually.
 4. Retain a protocol generation and adapters for at least two published minor releases and at least 90 days, whichever is longer. Rapid releases therefore accumulate supported codecs; they do not force active users through manual restarts.
 5. A live old session may remain on its daemon throughout that window. Dead leases expire normally. End-of-support behavior must be announced and return an actionable upgrade error before an old daemon stops renewing an otherwise live session.
-6. Historical fixtures remain permanently even after an adapter is removed.
-7. Publish daemon, Pi, OpenCode, and generated Claude artifacts from the same tag and embedded version/commit.
+6. Keep bootstrap v1 and compatibility-marker format v1 as permanent narrow compatibility surfaces even after normal protocol adapters expire, so dormant old plugins can receive a parseable update requirement and cannot resurrect an old daemon.
+7. Historical fixtures remain permanently even after an adapter is removed.
+8. Publish daemon, Pi, OpenCode, and generated Claude artifacts from the same tag and embedded version/commit.
 
 ## Acceptance criteria
 
@@ -505,6 +535,8 @@ Issue #40 is complete when deterministic tests and documentation demonstrate tha
 - five rapid breaking releases preserve one continuous session and coalesce when appropriate;
 - failed candidates leave the old daemon usable or recover through a newer fenced claim;
 - expand/contract migrations permit supported coexistence and refuse downgrade before mutation;
+- a year-dormant old plugin uses a newer daemon when compatible and otherwise reports an update requirement without resurrecting its packaged old daemon;
+- the persisted minimum-daemon floor blocks old-daemon revival even when no newer daemon process is live;
 - Pi, OpenCode, and Claude share the same negotiation/ownership implementation;
 - old daemons drain after their last live lease/work item rather than after their last durable session row;
 - generated Claude runtime files come from the same protocol sources and release tag;
