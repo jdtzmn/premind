@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
 	PREMIND_CLIENT_LEASE_TTL_MS,
 	PREMIND_DB_PATH,
@@ -50,6 +50,30 @@ type SessionRow = {
 	busy_state: "busy" | "idle";
 	last_delivered_event_seq: number;
 	last_activity_at: number;
+};
+
+export type SessionLeaseToken = {
+	sessionId: string;
+	ownerInstanceId: string;
+	generation: number;
+	clientIncarnationNonce: string;
+	leaseToken: string;
+	claimedAt: number;
+	expiresAt: number;
+};
+
+export type SessionLeaseClaim = Pick<
+	SessionLeaseToken,
+	"sessionId" | "ownerInstanceId" | "clientIncarnationNonce"
+>;
+
+type SessionLeaseRow = {
+	session_id: string;
+	owner_instance_id: string | null;
+	generation: number;
+	client_incarnation_nonce: string | null;
+	lease_token_hash: string | null;
+	expires_at: number | null;
 };
 
 export type SubscriptionSource = "automatic" | "manual";
@@ -158,6 +182,18 @@ function busyTimeoutPragma(timeoutMs: number): string {
 	}
 }
 
+const hashLeaseToken = (token: string): string =>
+	createHash("sha256").update(token).digest("hex");
+
+const sessionLeaseBindings = (token: SessionLeaseToken, now: number) => ({
+	sessionId: token.sessionId,
+	ownerInstanceId: token.ownerInstanceId,
+	generation: token.generation,
+	clientIncarnationNonce: token.clientIncarnationNonce,
+	leaseTokenHash: hashLeaseToken(token.leaseToken),
+	now,
+});
+
 export class StateStore {
 	private readonly db: DatabaseSync;
 	private readonly detailFiles = new DetailFileWriter();
@@ -191,6 +227,165 @@ export class StateStore {
 			this.db.exec("RELEASE premind_transaction");
 			throw error;
 		}
+	}
+
+	claimSessionLease(
+		claim: SessionLeaseClaim,
+		now = Date.now(),
+	): SessionLeaseToken {
+		this.db.exec("BEGIN IMMEDIATE");
+		try {
+			const existing = this.db
+				.prepare(`SELECT * FROM session_daemon_leases WHERE session_id = ?`)
+				.get(claim.sessionId) as SessionLeaseRow | undefined;
+			const active =
+				existing !== undefined &&
+				existing.owner_instance_id !== null &&
+				existing.expires_at !== null &&
+				existing.expires_at > now;
+			const sameClaimant =
+				active &&
+				existing.owner_instance_id === claim.ownerInstanceId &&
+				existing.client_incarnation_nonce === claim.clientIncarnationNonce;
+			if (active && !sameClaimant) {
+				throw new Error(`SESSION_BUSY: ${claim.sessionId}`);
+			}
+
+			const generation = sameClaimant
+				? existing.generation
+				: (existing?.generation ?? 0) + 1;
+			const leaseToken = randomUUID();
+			const expiresAt = now + PREMIND_CLIENT_LEASE_TTL_MS;
+			this.db
+				.prepare(
+					`INSERT INTO session_daemon_leases
+					 (session_id, owner_instance_id, generation, client_incarnation_nonce, lease_token_hash, expires_at)
+					 VALUES (:sessionId, :ownerInstanceId, :generation, :clientIncarnationNonce, :leaseTokenHash, :expiresAt)
+					 ON CONFLICT(session_id) DO UPDATE SET
+					   owner_instance_id = excluded.owner_instance_id,
+					   generation = excluded.generation,
+					   client_incarnation_nonce = excluded.client_incarnation_nonce,
+					   lease_token_hash = excluded.lease_token_hash,
+					   expires_at = excluded.expires_at`,
+				)
+				.run({
+					...claim,
+					generation,
+					leaseTokenHash: hashLeaseToken(leaseToken),
+					expiresAt,
+				});
+			this.db.exec("COMMIT");
+			return { ...claim, generation, leaseToken, claimedAt: now, expiresAt };
+		} catch (error) {
+			this.db.exec("ROLLBACK");
+			throw error;
+		}
+	}
+
+	validateSessionLease(token: SessionLeaseToken, now = Date.now()): boolean {
+		return (
+			this.db
+				.prepare(
+					`SELECT 1 FROM session_daemon_leases
+					 WHERE session_id = :sessionId
+					   AND owner_instance_id = :ownerInstanceId
+					   AND generation = :generation
+					   AND client_incarnation_nonce = :clientIncarnationNonce
+					   AND lease_token_hash = :leaseTokenHash
+					   AND expires_at > :now`,
+				)
+				.get(sessionLeaseBindings(token, now)) !== undefined
+		);
+	}
+
+	renewSessionLease(
+		token: SessionLeaseToken,
+		now = Date.now(),
+	): SessionLeaseToken | false {
+		const expiresAt = now + PREMIND_CLIENT_LEASE_TTL_MS;
+		const result = this.db
+			.prepare(
+				`UPDATE session_daemon_leases SET expires_at = :expiresAt
+				 WHERE session_id = :sessionId
+				   AND owner_instance_id = :ownerInstanceId
+				   AND generation = :generation
+				   AND client_incarnation_nonce = :clientIncarnationNonce
+				   AND lease_token_hash = :leaseTokenHash
+				   AND expires_at > :now`,
+			)
+			.run({ ...sessionLeaseBindings(token, now), expiresAt });
+		return (result.changes as number) === 1
+			? { ...token, expiresAt }
+			: false;
+	}
+
+	transferSessionLease(
+		current: SessionLeaseToken,
+		nextOwner: Omit<SessionLeaseClaim, "sessionId">,
+		now = Date.now(),
+	): SessionLeaseToken {
+		this.db.exec("BEGIN IMMEDIATE");
+		try {
+			const generation = current.generation + 1;
+			const leaseToken = randomUUID();
+			const expiresAt = now + PREMIND_CLIENT_LEASE_TTL_MS;
+			const result = this.db
+				.prepare(
+					`UPDATE session_daemon_leases
+					 SET owner_instance_id = :nextOwnerInstanceId,
+					     generation = :nextGeneration,
+					     client_incarnation_nonce = :nextClientIncarnationNonce,
+					     lease_token_hash = :nextLeaseTokenHash,
+					     expires_at = :expiresAt
+					 WHERE session_id = :sessionId
+					   AND owner_instance_id = :ownerInstanceId
+					   AND generation = :generation
+					   AND client_incarnation_nonce = :clientIncarnationNonce
+					   AND lease_token_hash = :leaseTokenHash
+					   AND expires_at > :now`,
+				)
+				.run({
+					...sessionLeaseBindings(current, now),
+					nextOwnerInstanceId: nextOwner.ownerInstanceId,
+					nextGeneration: generation,
+					nextClientIncarnationNonce: nextOwner.clientIncarnationNonce,
+					nextLeaseTokenHash: hashLeaseToken(leaseToken),
+					expiresAt,
+				});
+			if ((result.changes as number) !== 1) {
+				throw new Error(`SESSION_MOVED: ${current.sessionId}`);
+			}
+			this.db.exec("COMMIT");
+			return {
+				sessionId: current.sessionId,
+				...nextOwner,
+				generation,
+				leaseToken,
+				claimedAt: now,
+				expiresAt,
+			};
+		} catch (error) {
+			this.db.exec("ROLLBACK");
+			throw error;
+		}
+	}
+
+
+	releaseSessionLease(token: SessionLeaseToken, now = Date.now()): boolean {
+		const result = this.db
+			.prepare(
+				`UPDATE session_daemon_leases
+				 SET owner_instance_id = NULL, client_incarnation_nonce = NULL,
+				     lease_token_hash = NULL, expires_at = NULL
+				 WHERE session_id = :sessionId
+				   AND owner_instance_id = :ownerInstanceId
+				   AND generation = :generation
+				   AND client_incarnation_nonce = :clientIncarnationNonce
+				   AND lease_token_hash = :leaseTokenHash
+				   AND expires_at > :now`,
+			)
+			.run(sessionLeaseBindings(token, now));
+		return (result.changes as number) === 1;
 	}
 
 	registerClient(clientId: string, metadata: ClientMetadata, now = Date.now()) {
@@ -2711,6 +2906,15 @@ export class StateStore {
         expires_at INTEGER NOT NULL,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS session_daemon_leases (
+        session_id TEXT PRIMARY KEY,
+        owner_instance_id TEXT,
+        generation INTEGER NOT NULL,
+        client_incarnation_nonce TEXT,
+        lease_token_hash TEXT,
+        expires_at INTEGER
       );
 
       CREATE TABLE IF NOT EXISTS sessions (

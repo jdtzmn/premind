@@ -6,7 +6,10 @@ import os from "node:os"
 import path from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { afterEach, describe, test } from "node:test"
-import { PREMIND_PR_STREAM_RETENTION_MS } from "../../shared/constants.ts"
+import {
+  PREMIND_CLIENT_LEASE_TTL_MS,
+  PREMIND_PR_STREAM_RETENTION_MS,
+} from "../../shared/constants.ts"
 import { StateStore } from "./store.ts"
 import type { PullRequestSnapshot } from "../github/types.ts"
 import { diffSnapshot } from "../github/diff.ts"
@@ -2237,5 +2240,120 @@ describe("migrate: session hosts", () => {
     assert.equal(store.getSession("legacy-claude")?.status, "active")
     assert.equal(store.getReminderBatchRecord(batchId, "legacy-claude")?.reminderText, "keep me")
     store.close()
+  })
+})
+
+describe("session daemon leases", () => {
+  test("expires tokens immediately and preserves monotonic generations", () => {
+    const store = createStore()
+    const now = 1_000
+    try {
+      const first = store.claimSessionLease(
+        {
+          sessionId: "session-1",
+          ownerInstanceId: "daemon-a",
+          clientIncarnationNonce: "client-a-1",
+        },
+        now,
+      )
+      assert.equal(first.generation, 1)
+      assert.equal(
+        store.validateSessionLease(
+          first,
+          now + PREMIND_CLIENT_LEASE_TTL_MS - 1,
+        ),
+        true,
+      )
+      assert.equal(
+        store.renewSessionLease(
+          first,
+          now + PREMIND_CLIENT_LEASE_TTL_MS,
+        ),
+        false,
+        "an expired token cannot renew in place",
+      )
+
+      const second = store.claimSessionLease(
+        {
+          sessionId: "session-1",
+          ownerInstanceId: "daemon-b",
+          clientIncarnationNonce: "client-b-1",
+        },
+        now + PREMIND_CLIENT_LEASE_TTL_MS,
+      )
+      assert.equal(second.generation, 2)
+      assert.equal(store.validateSessionLease(first, second.claimedAt), false)
+      assert.equal(store.releaseSessionLease(second, second.claimedAt + 1), true)
+
+      const third = store.claimSessionLease(
+        {
+          sessionId: "session-1",
+          ownerInstanceId: "daemon-a",
+          clientIncarnationNonce: "client-a-2",
+        },
+        second.claimedAt + 2,
+      )
+      assert.equal(third.generation, 3)
+      assert.equal(store.validateSessionLease(first, third.claimedAt), false)
+    } finally {
+      store.close()
+    }
+  })
+
+  test("fences an ABA owner after two explicit transfers", () => {
+    const store = createStore()
+    try {
+      const first = store.claimSessionLease({
+        sessionId: "session-1",
+        ownerInstanceId: "daemon-a",
+        clientIncarnationNonce: "client-a-1",
+      })
+      const second = store.transferSessionLease(first, {
+        ownerInstanceId: "daemon-b",
+        clientIncarnationNonce: "client-b-1",
+      })
+      const third = store.transferSessionLease(second, {
+        ownerInstanceId: "daemon-a",
+        clientIncarnationNonce: "client-a-2",
+      })
+
+      assert.deepEqual(
+        [first.generation, second.generation, third.generation],
+        [1, 2, 3],
+      )
+      assert.equal(store.validateSessionLease(first), false)
+      assert.equal(store.validateSessionLease(second), false)
+      assert.equal(store.validateSessionLease(third), true)
+    } finally {
+      store.close()
+    }
+  })
+
+  test("allows only one concurrent claimant", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "premind-lease-race-"))
+    const dbPath = path.join(dir, "premind.db")
+    tempPaths.push(dir)
+    const firstStore = new StateStore(dbPath)
+    const secondStore = new StateStore(dbPath)
+    try {
+      const winner = firstStore.claimSessionLease({
+        sessionId: "session-1",
+        ownerInstanceId: "daemon-a",
+        clientIncarnationNonce: "client-a-1",
+      })
+      assert.throws(
+        () =>
+          secondStore.claimSessionLease({
+            sessionId: "session-1",
+            ownerInstanceId: "daemon-b",
+            clientIncarnationNonce: "client-b-1",
+          }),
+        /SESSION_BUSY/,
+      )
+      assert.equal(secondStore.validateSessionLease(winner), true)
+    } finally {
+      secondStore.close()
+      firstStore.close()
+    }
   })
 })
