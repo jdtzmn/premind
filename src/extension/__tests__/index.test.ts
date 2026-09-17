@@ -81,6 +81,9 @@ type ToolResult = { content: Array<{ type: "text"; text: string }> };
 
 type ToolDefinition = {
 	name: string;
+	description?: string;
+	promptSnippet?: string;
+	promptGuidelines?: string[];
 	execute: (
 		toolCallId: string,
 		params: Record<string, unknown>,
@@ -325,7 +328,8 @@ describe("premind Pi extension", () => {
 		assert.ok(mock.renderers.has("premind-reminder"));
 		assert.ok(mock.commands.has("premind:status"));
 		assert.ok(mock.commands.has("premind:prune"));
-		assert.ok(mock.commands.has("premind:activate-worktree"));
+		assert.ok(mock.commands.has("premind:set-active-checkout"));
+		assert.equal(mock.commands.has("premind:activate-worktree"), false);
 		assert.ok(mock.commands.has("premind:subscribe"));
 		assert.ok(mock.commands.has("premind:unsubscribe"));
 		assert.equal(mock.commands.has("premind:pause"), false);
@@ -333,10 +337,20 @@ describe("premind Pi extension", () => {
 		assert.ok(mock.commands.has("premind:flush"));
 		assert.equal(mock.tools.has("premind_pause"), false);
 		assert.equal(mock.tools.has("premind_resume"), false);
-		assert.ok(mock.tools.has("premind_activate_worktree"));
+		assert.ok(mock.tools.has("premind_set_active_checkout"));
+		assert.equal(mock.tools.has("premind_activate_worktree"), false);
 		assert.ok(mock.tools.has("premind_subscribe"));
 		assert.ok(mock.tools.has("premind_unsubscribe"));
 		assert.ok(mock.tools.has("premind_status"));
+		const activeCheckoutTool = mock.tools.get("premind_set_active_checkout");
+		assert.ok(activeCheckoutTool);
+		assert.equal(
+			activeCheckoutTool.description,
+			"Set the active Git checkout for the current premind session.",
+		);
+		assert.deepEqual(activeCheckoutTool.promptGuidelines, [
+			"Call premind_set_active_checkout at the start of any PR work, including when already in the startup checkout, and again after switching branches before creating or following a PR.",
+		]);
 	});
 
 	test("renders reminder messages as concise PR change bullets", () => {
@@ -897,7 +911,7 @@ describe("premind Pi extension", () => {
 		);
 	});
 
-	test("worktree and subscription commands and tools target the current session", async () => {
+	test("active checkout and subscription commands and tools target the current session", async () => {
 		const mock = createMockPi();
 		const client = createClient();
 		const notifications: Array<{ message: string; level: string }> = [];
@@ -906,24 +920,24 @@ describe("premind Pi extension", () => {
 			config: { statusPollIntervalMs: 0 },
 		})(mock.pi as never);
 
-		const activate = mock.commands.get("premind:activate-worktree");
+		const setActiveCheckout = mock.commands.get("premind:set-active-checkout");
 		const subscribe = mock.commands.get("premind:subscribe");
 		const unsubscribe = mock.commands.get("premind:unsubscribe");
-		const activateTool = mock.tools.get("premind_activate_worktree");
+		const setActiveCheckoutTool = mock.tools.get("premind_set_active_checkout");
 		const subscribeTool = mock.tools.get("premind_subscribe");
 		const unsubscribeTool = mock.tools.get("premind_unsubscribe");
-		assert.ok(activate);
+		assert.ok(setActiveCheckout);
 		assert.ok(subscribe);
 		assert.ok(unsubscribe);
-		assert.ok(activateTool);
+		assert.ok(setActiveCheckoutTool);
 		assert.ok(subscribeTool);
 		assert.ok(unsubscribeTool);
 
 		const ctx = createCommandContext(notifications);
-		await activate.handler("/tmp/other-worktree", ctx);
+		await setActiveCheckout.handler("/tmp/other-worktree", ctx);
 		await subscribe.handler("42 owner/repo", ctx);
 		await unsubscribe.handler("42 owner/repo", ctx);
-		await activateTool.execute(
+		await setActiveCheckoutTool.execute(
 			"tool-call-1",
 			{ path: "/tmp/tool-worktree" },
 			undefined,
@@ -956,7 +970,7 @@ describe("premind Pi extension", () => {
 		assert.deepEqual(
 			notifications.map((notification) => notification.message),
 			[
-				"premind activated worktree /tmp/other-worktree.",
+				"premind set active checkout /tmp/other-worktree.",
 				"premind subscribed to owner/repo#42.",
 				"premind unsubscribed from owner/repo#42.",
 			],

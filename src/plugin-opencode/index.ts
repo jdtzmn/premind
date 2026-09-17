@@ -836,20 +836,20 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
           return renderPremindStatus(status)
         },
       }),
-      premind_activate_worktree: tool({
-        description: "Activate the Git worktree currently used by this session. Call this whenever work moves away from the startup directory into a linked or nested worktree, even before its branch has a pull request.",
+      premind_set_active_checkout: tool({
+        description: "Set the active Git checkout for this session. Call premind_set_active_checkout at the start of any PR work, including when already in the startup checkout, and again after switching branches before creating or following a PR.",
         args: {
-          path: tool.schema.string().min(1).describe("Absolute or project-relative path to the Git worktree"),
+          path: tool.schema.string().min(1).describe("Absolute or project-relative path to the Git checkout"),
         },
         async execute(args, ctx) {
           const sessionId = ctx.sessionID ?? lastPrimarySessionId
-          if (!sessionId) return "premind worktree activation failed: no active session"
+          if (!sessionId) return "premind active checkout update failed: no active session"
           ownedSessions.add(sessionId)
           const activated = await withReattach(sessionId, () =>
             daemon.activateWorktree({ sessionId, path: args.path }),
           )
-          if (!activated) return `premind worktree activation failed for session ${sessionId}`
-          return `premind activated worktree ${args.path}.`
+          if (!activated) return `premind active checkout update failed for session ${sessionId}`
+          return `premind set active checkout ${args.path}.`
         },
       }),
       premind_subscribe: tool({

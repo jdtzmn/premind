@@ -182,7 +182,8 @@ describe("premind plugin compatibility harness", () => {
     assert.ok(runtime.tool.premind_status, "premind_status tool should exist")
     assert.equal(runtime.tool.premind_pause, undefined)
     assert.equal(runtime.tool.premind_resume, undefined)
-    assert.ok(runtime.tool.premind_activate_worktree, "premind_activate_worktree tool should exist")
+    assert.ok(runtime.tool.premind_set_active_checkout, "premind_set_active_checkout tool should exist")
+    assert.equal(runtime.tool.premind_activate_worktree, undefined)
     assert.ok(runtime.tool.premind_subscribe, "premind_subscribe tool should exist")
     assert.ok(runtime.tool.premind_unsubscribe, "premind_unsubscribe tool should exist")
     assert.ok(runtime.tool.premind_disable, "premind_disable tool should exist")
@@ -192,12 +193,11 @@ describe("premind plugin compatibility harness", () => {
     const toolStatusResult = await runtime.tool.premind_status.execute({}, { sessionID: "session-1" })
     assert.match(toolStatusResult, /premind status/)
 
-
-    const toolActivateResult = await runtime.tool.premind_activate_worktree.execute(
+    const toolSetActiveCheckoutResult = await runtime.tool.premind_set_active_checkout.execute(
       { path: "/tmp/other-worktree" },
       { sessionID: "session-1" },
     )
-    assert.match(toolActivateResult, /activated worktree \/tmp\/other-worktree/)
+    assert.match(toolSetActiveCheckoutResult, /set active checkout \/tmp\/other-worktree/)
 
     const toolSubscribeResult = await runtime.tool.premind_subscribe.execute(
       { prNumber: 13, repo: "acme/repo" },

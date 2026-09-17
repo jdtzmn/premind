@@ -91,7 +91,7 @@ export type PremindPiExtensionDependencies = {
 const STATUS_ERROR_PREFIX = "premind status failed";
 const PRUNE_ERROR_PREFIX = "premind prune failed";
 const FLUSH_ERROR_PREFIX = "premind flush failed";
-const WORKTREE_ERROR_PREFIX = "premind worktree activation failed";
+const CHECKOUT_ERROR_PREFIX = "premind active checkout update failed";
 const SUBSCRIPTION_ERROR_PREFIX = "premind subscription update failed";
 const SESSION_SOURCE = "pi-extension";
 const DEFAULT_HEARTBEAT_MS = 10_000;
@@ -662,12 +662,12 @@ export const createPremindPiExtension = (
 			},
 		});
 
-		pi.registerCommand("premind:activate-worktree", {
-			description: "Activate a Git worktree for the current premind session",
+		pi.registerCommand("premind:set-active-checkout", {
+			description: "Set the active Git checkout for the current premind session",
 			handler: async (args, ctx) => {
 				const path = args.trim();
 				if (!path) {
-					ctx.ui.notify(`${WORKTREE_ERROR_PREFIX}: expected: <path>`, "error");
+					ctx.ui.notify(`${CHECKOUT_ERROR_PREFIX}: expected: <path>`, "error");
 					return;
 				}
 				try {
@@ -675,10 +675,10 @@ export const createPremindPiExtension = (
 						sessionId: currentSessionId ?? getPiSessionId(ctx),
 						path,
 					});
-					ctx.ui.notify(`premind activated worktree ${path}.`, "info");
+					ctx.ui.notify(`premind set active checkout ${path}.`, "info");
 				} catch (error) {
 					ctx.ui.notify(
-						`${WORKTREE_ERROR_PREFIX}: ${error instanceof Error ? error.message : String(error)}`,
+						`${CHECKOUT_ERROR_PREFIX}: ${error instanceof Error ? error.message : String(error)}`,
 						"error",
 					);
 				}
@@ -758,13 +758,12 @@ export const createPremindPiExtension = (
 		});
 
 		pi.registerTool({
-			name: "premind_activate_worktree",
-			label: "Premind Activate Worktree",
-			description: "Activate a Git worktree for the current premind session.",
-			promptSnippet:
-				"Tell premind which Git worktree this session is actively using.",
+			name: "premind_set_active_checkout",
+			label: "Premind Set Active Checkout",
+			description: "Set the active Git checkout for the current premind session.",
+			promptSnippet: "Tell premind which Git checkout this session is actively using.",
 			promptGuidelines: [
-				"Call premind_activate_worktree whenever you begin working in a different linked or nested Git worktree than the session's startup directory, including before that branch has a pull request.",
+				"Call premind_set_active_checkout at the start of any PR work, including when already in the startup checkout, and again after switching branches before creating or following a PR.",
 			],
 			parameters: Type.Object({ path: Type.String({ minLength: 1 }) }),
 			async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
@@ -774,7 +773,7 @@ export const createPremindPiExtension = (
 					content: [
 						{
 							type: "text" as const,
-							text: `premind activated worktree ${params.path}.`,
+							text: `premind set active checkout ${params.path}.`,
 						},
 					],
 					details: {},
