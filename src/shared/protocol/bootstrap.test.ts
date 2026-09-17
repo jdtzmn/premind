@@ -138,6 +138,7 @@ describe("normal protocol v2 base envelopes", () => {
       payload: { sessionId: "session-1", busyState: "busy" },
     })
     assert.deepEqual(parsed.sessionLease, sessionLease)
+    assert.equal(parsed.protocolVersion, PROTOCOL_V2)
   })
 
   test("keeps explicit deletion out of the frozen protocol-v1 allowlist", () => {

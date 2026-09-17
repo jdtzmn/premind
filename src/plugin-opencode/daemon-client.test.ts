@@ -7,6 +7,7 @@ import type { ReminderBatch } from "../shared/schema.ts"
 type Request = {
   type: string
   protocolVersion?: number
+  sessionLease?: unknown
   payload: Record<string, unknown>
 }
 
@@ -149,6 +150,51 @@ describe("PremindDaemonClient session leases", () => {
       (releaseRequest?.payload.lease as { expiresAt?: number } | undefined)?.expiresAt,
       120_001,
     )
+  })
+
+  test("claims before an unfenced protocol-v2 session mutation", async () => {
+    const client = new PremindDaemonClient()
+    const lease = {
+      sessionId: "session-1",
+      ownerInstanceId: "daemon-a",
+      generation: 1,
+      clientIncarnationNonce: "client-a-1",
+      leaseToken: "00000000-0000-4000-8000-000000000002",
+      claimedAt: 1,
+      expiresAt: 60_001,
+    }
+    const requests: Request[] = []
+    const testClient = client as unknown as {
+      clientId: string
+      protocolVersion: number
+      daemonInstanceId?: string
+      supportedOperations: Set<string>
+      request: (request: Request) => Promise<unknown>
+    }
+    testClient.clientId = "client-a-1"
+    testClient.protocolVersion = 2
+    testClient.daemonInstanceId = "daemon-a"
+    testClient.supportedOperations = new Set([
+      "claimSessionLease",
+      "renewSessionLease",
+      "transferSessionLease",
+      "releaseSessionLease",
+    ])
+    testClient.request = async (request) => {
+      requests.push(request)
+      if (request.type === "claimSessionLease") {
+        return { lease }
+      }
+      return { ok: true, protocolVersion: 2, result: { updated: true } }
+    }
+
+    await client.updateSessionState({ sessionId: "session-1", busyState: "busy" })
+
+    assert.deepEqual(requests.map(({ type }) => type), [
+      "claimSessionLease",
+      "updateSessionState",
+    ])
+    assert.deepEqual(requests[1]?.sessionLease, lease)
   })
 })
 

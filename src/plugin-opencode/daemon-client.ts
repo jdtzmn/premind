@@ -36,11 +36,15 @@ import { ensureDaemonRunning } from "./daemon-launcher.ts"
 
 const MAX_RETRIES = 3
 const RETRY_DELAY_MS = 500
-const SESSION_LEASE_CONTROL_OPERATIONS = new Set([
+const SESSION_LEASE_EXEMPT_OPERATIONS = new Set([
   "claimSessionLease",
   "renewSessionLease",
   "transferSessionLease",
   "releaseSessionLease",
+  "registerClaudeSession",
+  "suspendClaudeSession",
+  "claimClaudeHandoff",
+  "confirmClaudeHandoff",
 ])
 
 type PremindDaemonClientOptions = {
@@ -515,13 +519,27 @@ export class PremindDaemonClient {
       protocolVersion: this.protocolVersion,
       ...(this.protocolVersion === PROTOCOL_V2 &&
       lease &&
-      !SESSION_LEASE_CONTROL_OPERATIONS.has(type)
+      !SESSION_LEASE_EXEMPT_OPERATIONS.has(type)
         ? { sessionLease: lease }
         : {}),
     }
   }
 
+  private async ensureRequestSessionLease(message: unknown): Promise<void> {
+    if (!this.supportsSessionLeaseOperation("claimSessionLease")) return
+    if (typeof message !== "object" || message === null) return
+    const request = message as Record<string, unknown>
+    const type = typeof request.type === "string" ? request.type : ""
+    if (SESSION_LEASE_EXEMPT_OPERATIONS.has(type)) return
+    const payload = request.payload
+    if (typeof payload !== "object" || payload === null || !("sessionId" in payload)) return
+    const sessionId = (payload as { sessionId?: unknown }).sessionId
+    if (typeof sessionId === "string") await this.claimSessionLease(sessionId)
+  }
+
+
   private async requestWithRetry(message: unknown, attempt = 0): Promise<unknown> {
+    await this.ensureRequestSessionLease(message)
     try {
       return await this.request(this.withNegotiatedProtocol(message))
     } catch (error) {

@@ -19,6 +19,23 @@ import { resolveGitWorktree } from "../worktrees/git-resolver.ts";
 import { WorktreeBindingRegistry } from "../worktrees/worktree-binding-registry.ts";
 import type { ActiveWorktree } from "../worktrees/worktree-binding.ts";
 
+const SESSION_LEASE_REQUIRED_OPERATIONS = new Set([
+	"registerSession",
+	"ensureSessionControl",
+	"updateSessionState",
+	"unregisterSession",
+	"deleteSession",
+	"pauseSession",
+	"resumeSession",
+	"activateWorktree",
+	"subscribe",
+	"unsubscribe",
+	"claimReminderBundle",
+	"ackReminderBundle",
+	"getPendingReminder",
+	"ackReminder",
+]);
+
 export type WorktreeResolver = (
 	requestedPath: string,
 ) => Promise<ActiveWorktree>;
@@ -35,6 +52,13 @@ export class Router {
 	) {}
 
 	async handle(request: RoutedPremindRequest): Promise<PremindResponse> {
+		if (
+			request.protocolVersion === 2 &&
+			SESSION_LEASE_REQUIRED_OPERATIONS.has(request.type) &&
+			!request.sessionLease
+		) {
+			return this.fail("SESSION_MOVED", "Protocol v2 session operation requires a lease");
+		}
 		const leaseFailure = this.attachedSessionLeaseFailure(request);
 		if (leaseFailure) return leaseFailure;
 		try {

@@ -297,7 +297,11 @@ export const unsubscribeResponseSchema = z
 export { debugStatusResponseSchema };
 
 export type PremindRequest = z.infer<typeof requestSchema>;
-export type RoutedPremindRequest = PremindRequest & {
-  sessionLease?: SessionLeaseToken;
-};
+type WithRoutedProtocol<T extends PremindRequest> = T extends PremindRequest
+  ? Omit<T, "protocolVersion"> & {
+      protocolVersion: 1 | 2;
+      sessionLease?: SessionLeaseToken;
+    }
+  : never;
+export type RoutedPremindRequest = WithRoutedProtocol<PremindRequest>;
 export type PremindResponse = z.infer<typeof responseSchema>;

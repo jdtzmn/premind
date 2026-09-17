@@ -40,16 +40,17 @@ export const parseProtocolV2RequestForRouter = (
   }
 
   const parsed = requestSchema.parse({ ...request, protocolVersion: 1 });
-  if (request.sessionLease === undefined) return parsed;
+  const routed = { ...parsed, protocolVersion: PROTOCOL_V2 };
+  if (request.sessionLease === undefined) return routed;
   return {
-    ...parsed,
+    ...routed,
     sessionLease: sessionLeaseTokenSchema.parse(request.sessionLease),
   };
 };
 
 export const toProtocolV2Response = (
   response: PremindResponse,
-  request?: PremindRequest,
+  request?: Pick<PremindRequest, "type">,
 ): ProtocolV2Response => {
   if (
     response.ok &&

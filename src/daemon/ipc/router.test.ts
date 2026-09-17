@@ -775,6 +775,13 @@ describe("session lease IPC", () => {
     const store = createStore();
     registerSession(store);
     const router = new Router(store, async () => worktree);
+    const tokenless = await router.handle({
+      type: "pauseSession",
+      protocolVersion: 2,
+      payload: { sessionId: "session-1" },
+    } as never);
+    assert.equal(tokenless.ok, false);
+    if (!tokenless.ok) assert.equal(tokenless.error.code, "SESSION_MOVED");
     const first = await router.handle({
       type: "claimSessionLease",
       protocolVersion: PREMIND_PROTOCOL_VERSION,
