@@ -148,6 +148,11 @@ type ReminderTarget = {
 	source?: SubscriptionSource;
 };
 
+
+const ownershipFor = (authorLogin: string | null | undefined, viewerLogin: string | null | undefined): SubscriptionOwnership => {
+  if (!authorLogin || !viewerLogin) return "unknown";
+  return authorLogin.toLowerCase() === viewerLogin.toLowerCase() ? "self" : "foreign";
+};
 type ReminderEventWindow = {
 	sourceEventIds: number[];
 	maximumEventSequence: number;
@@ -595,6 +600,35 @@ export class StateStore {
 				.run({ ...input, subscriptionId: randomUUID(), now });
 			this.touchPrWatcher(input.repo, input.prNumber, now);
 			return this.getSubscription(input.sessionId, input.repo, input.prNumber)!;
+		});
+	}
+
+	reconcileSubscriptionPolicies(
+		repo: string,
+		prNumber: number,
+		authorLogin: string | null | undefined,
+		viewerLogin: string | null | undefined,
+		now = Date.now(),
+	): number {
+		const ownership = ownershipFor(authorLogin, viewerLogin);
+		const policy: SubscriptionPolicy = ownership === "self" ? "actionable" : "observe-only";
+		return this.transaction(() => {
+			const result = this.db.prepare(`
+				UPDATE session_subscriptions
+				SET ownership = :ownership, policy = :policy, updated_at = :now
+				WHERE repo = :repo AND pr_number = :prNumber AND state = 'active'
+				  AND (ownership != :ownership OR policy != :policy)
+			`).run({ repo, prNumber, ownership, policy, now });
+			if ((result.changes as number) > 0) {
+				this.db.prepare(`
+					DELETE FROM reminder_batches
+					WHERE state != 'handed_off' AND subscription_id IN (
+						SELECT subscription_id FROM session_subscriptions
+						WHERE repo = :repo AND pr_number = :prNumber AND state = 'active'
+					)
+				`).run({ repo, prNumber });
+			}
+			return result.changes as number;
 		});
 	}
 
@@ -2588,13 +2622,22 @@ export class StateStore {
 			: this.listUndeliveredEvents(sessionId);
 		if (events.length === 0) return null;
 		const maxEventSeq = events.at(-1)!.seq;
+		const targetSnapshot = targetPrNumber
+			? this.getSnapshot(targetRepo, targetPrNumber) : null;
+		const worktree = subscription?.policy === "actionable"
+			? this.getWorktreeBinding(sessionId) : null;
+		const worktreeMatchesTarget = subscription?.policy === "actionable"
+			? worktree?.repo === targetRepo &&
+				worktree.branch === targetSnapshot?.core.headRefName : undefined;
 		const { reminderText, events: condensed } = renderReminder(
 			events,
-			targetPrNumber ? this.getSnapshot(targetRepo, targetPrNumber) : null,
+			targetSnapshot,
 			{
 				repo: targetRepo,
 				prNumber: targetPrNumber ?? undefined,
 				source: subscription?.source,
+				policy: subscription?.policy,
+				worktreeMatchesTarget,
 			},
 		);
 		const batchId = this.createOrReplaceReminder(

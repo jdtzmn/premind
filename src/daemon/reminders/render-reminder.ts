@@ -180,7 +180,7 @@ const sourceIds = (events: RenderedReminderEvent[]) => [...new Set(events.flatMa
 
 export function renderReminder(
   rows: ReminderSourceEvent[], snapshot: PullRequestSnapshot | null,
-  target: { repo: string; prNumber?: number; source?: "automatic" | "manual" },
+  target: { repo: string; prNumber?: number; source?: "automatic" | "manual"; policy?: "actionable" | "observe-only"; worktreeMatchesTarget?: boolean },
 ) {
   const reconciled = rows.flatMap(expand).map((candidate) => reconcile(candidate, snapshot))
   const live = reconciled.filter((item) => !item.supersededHead)
@@ -212,18 +212,26 @@ export function renderReminder(
   })
   const renderEvent = (event: ReminderEvent, index: number) => `${index + 1}. ${event.kind} - ${event.summary}${event.referenceLink ? ` (${event.referenceLink})` : ""}`
   const qualified = target.prNumber ? `${target.repo}#${target.prNumber}` : target.repo
+  const policy = target.policy ?? (target.source === "manual" ? "observe-only" : "actionable")
+  const canModify = policy === "actionable" && target.worktreeMatchesTarget !== false
+  const observeOnlyAction = "report the failing check(s)/merge conflict(s) above and wait for authorization before making changes."
+  const worktreeGate = "this is your PR, but its target worktree is not active. Investigate as needed, but do not make changes until you activate the matching worktree."
   const reminderText = [
     "<system-reminder>",
     `PR update for ${qualified}${snapshot?.core.headRefOid ? ` (HEAD: ${shortSha(snapshot.core.headRefOid)})` : ""}:`,
-    ...(target.source === "manual" ? ["", "This PR is manually subscribed. Do not make changes unless the user explicitly asks you to."] : []),
+    ...(target.source === "manual" ? ["", policy === "actionable"
+      ? "This manually subscribed PR is verified as yours."
+      : "This PR is manually subscribed but is not verified as yours. Do not make changes unless the user explicitly asks you to."] : []),
     ...(condensedLive.length ? ["", "Changes:", ...condensedLive.map(renderEvent)] : []),
     ...(supersededSummaries.length ? ["", "Superseded:", ...supersededSummaries.map(renderEvent)] : []),
-    ...(live.some((item) => item.actionable) ? ["", target.source === "manual"
-      ? "Action required: report the failing check(s)/merge conflict(s) above and wait for authorization before making changes."
-      : "Action required: resolve the failing check(s)/merge conflict(s) on HEAD before continuing. If you can't, explain why."] : []),
-    ...(live.some((item) => item.reviewAction) ? ["", target.source === "manual"
-      ? "Review action required: report the requested changes and wait for authorization before making changes."
-      : "Review action required: assess the requested changes, address actionable feedback, and explain anything you decline or cannot resolve."] : []),
+    ...(live.some((item) => item.actionable) ? ["", canModify
+      ? "Action required: resolve the failing check(s)/merge conflict(s) on HEAD before continuing. If you can't, explain why."
+      : policy === "actionable" ? `Action required: ${worktreeGate}` : `Action required: ${observeOnlyAction}`] : []),
+    ...(live.some((item) => item.reviewAction) ? ["", canModify
+      ? "Review action required: assess the requested changes, address actionable feedback, and explain anything you decline or cannot resolve."
+      : policy === "actionable"
+        ? `Review action required: ${worktreeGate}`
+        : "Review action required: report the requested changes and wait for authorization before making changes."] : []),
     ...(live.some((item) => item.unverified) ? ["", "Verify current status before acting on UNVERIFIED history; it is not a confirmed current blocker."] : []),
     "", "Incorporate only the above into your reasoning and continue.", "</system-reminder>",
   ].join("\n")

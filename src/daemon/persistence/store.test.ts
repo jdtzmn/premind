@@ -144,7 +144,8 @@ describe("StateStore", () => {
           assert.match(batch.reminderText, /Action required: report .*wait for authorization before making changes/)
           assert.doesNotMatch(batch.reminderText, /Action required: resolve/)
         } else {
-          assert.match(batch.reminderText, /Action required: resolve the failing check\(s\)\/merge conflict\(s\) on HEAD before continuing/)
+          assert.match(batch.reminderText, /target worktree is not active/)
+          assert.match(batch.reminderText, /do not make changes until you activate the matching worktree/)
         }
       } finally {
         store.close()
@@ -189,7 +190,7 @@ describe("StateStore", () => {
     assert.equal(batch.events.length, 2)
     assert.match(
       batch.reminderText,
-      /Action required: resolve the failing check\(s\)\/merge conflict\(s\) on HEAD before continuing/,
+      /target worktree is not active/,
     )
 
     const pending = store.getPendingReminder("session-1")
@@ -290,7 +291,7 @@ describe("StateStore", () => {
     assert.ok(batch.events.some((event) => event.kind === "check.superseded" && event.summary.includes("lint") === false))
     assert.match(batch.reminderText, /Changes:\n1\. check\.failed - Check failed: build/)
     assert.match(batch.reminderText, /Superseded:\n1\. check\.superseded - 1 failed on sha-old \(superseded by sha-new\)/)
-    assert.match(batch.reminderText, /Action required: resolve the failing check\(s\)\/merge conflict\(s\) on HEAD before continuing/)
+    assert.match(batch.reminderText, /target worktree is not active/)
 
     store.close()
   })

@@ -45,6 +45,15 @@ export class PullRequestWatcher {
 
   async tick(now = Date.now()) {
     const targets = this.registry.pollingTargets(now)
+    if (targets.length === 0) return
+    let viewerLogin: string | null = null
+    try {
+      viewerLogin = await this.github.getViewerLogin()
+    } catch (error) {
+      this.logger.warn("unable to identify authenticated GitHub user; subscriptions remain observe-only", {
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
     for (const target of targets) {
       const key = targetKey(target.repo, target.prNumber)
 
@@ -59,6 +68,14 @@ export class PullRequestWatcher {
         this.schedule?.recordCheck(key, now)
 
         if (result.kind === "not_modified") {
+          const policyChanges = this.store.reconcileSubscriptionPolicies(
+            target.repo, target.prNumber, previous?.core.authorLogin, viewerLogin, now,
+          )
+          if (policyChanges > 0) {
+            for (const subscription of this.store.listActiveSubscriptionsForPr(target.repo, target.prNumber)) {
+              this.store.buildReminderBatchForSubscription(subscription.subscriptionId, now)
+            }
+          }
           if (result.etag && result.etag !== cachedEtag) {
             this.store.saveEtag(PR_SNAPSHOT_ETAG_SCOPE, etagKey(target.repo, target.prNumber), result.etag, now)
           }
@@ -84,6 +101,9 @@ export class PullRequestWatcher {
           },
         }
         const events = diffSnapshot(previous, next)
+        this.store.reconcileSubscriptionPolicies(
+          target.repo, target.prNumber, next.core.authorLogin, viewerLogin, now,
+        )
         const terminal = ["MERGED", "CLOSED"].includes(next.core.state.toUpperCase())
 
         if (terminal) {

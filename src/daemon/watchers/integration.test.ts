@@ -102,6 +102,7 @@ const makeSnapshot = (overrides: Partial<PullRequestSnapshot> = {}): PullRequest
     number: 42,
     title: "Test PR",
     url: "https://github.com/acme/repo/pull/42",
+    authorLogin: "octocat",
     state: "OPEN",
     isDraft: false,
     headRefName: "feature/test",
@@ -121,6 +122,40 @@ const makeSnapshot = (overrides: Partial<PullRequestSnapshot> = {}): PullRequest
 })
 
 describe("watcher integration", () => {
+  test("classifies manually subscribed PRs from the current snapshot owner", async () => {
+    const store = createStore()
+    const github = new FixtureGitHubClient()
+    const watcher = new PullRequestWatcher(store, github)
+    store.registerClient("client-policy", { pid: 1, projectRoot: "/tmp" })
+    store.registerSession({
+      clientId: "client-policy", sessionId: "session-policy", repo: "acme/repo", branch: "feature/test",
+      isPrimary: true, status: "active", busyState: "idle",
+    })
+    const subscription = store.upsertSubscription({
+      sessionId: "session-policy", repo: "acme/repo", prNumber: 42, source: "manual",
+    })
+    assert.deepEqual([subscription.ownership, subscription.policy], ["unknown", "observe-only"])
+    github.pushSnapshot(makeSnapshot({ core: { ...makeSnapshot().core, authorLogin: "octocat" } }))
+    await watcher.tick()
+    assert.deepEqual(
+      store.getSubscriptionById(subscription.subscriptionId) && [
+        store.getSubscriptionById(subscription.subscriptionId)!.ownership,
+        store.getSubscriptionById(subscription.subscriptionId)!.policy,
+      ],
+      ["self", "actionable"],
+    )
+    github.pushSnapshot(makeSnapshot({ core: { ...makeSnapshot().core, authorLogin: "someone-else" } }))
+    await watcher.tick()
+    assert.deepEqual(
+      store.getSubscriptionById(subscription.subscriptionId) && [
+        store.getSubscriptionById(subscription.subscriptionId)!.ownership,
+        store.getSubscriptionById(subscription.subscriptionId)!.policy,
+      ],
+      ["foreign", "observe-only"],
+    )
+    store.close()
+  })
+
   test("branch discovery baselines an automatic subscription from an active worktree", async () => {
     const store = createStore()
     const github = new FixtureGitHubClient()
