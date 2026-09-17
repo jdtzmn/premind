@@ -2,31 +2,55 @@
 
 ## Context
 
-[Issue #40](https://github.com/jdtzmn/premind/issues/40) exposed that `protocolVersion: 1` does not currently identify a stable wire contract. Request and response schemas have changed while the version stayed fixed, clients parse responses directly into the newest domain schema, and capability detection is inferred from `BAD_REQUEST` fallbacks. A newly loaded Pi or OpenCode extension, or a short-lived Claude hook, can therefore encounter a daemon built from an older package and fail on an unrelated command.
+[Issue #40](https://github.com/jdtzmn/premind/issues/40) exposed that `protocolVersion: 1` does not identify a stable wire contract. Request and response schemas changed while the version stayed fixed, clients parse responses directly into the newest domain schema, and capability detection is inferred from `BAD_REQUEST` fallbacks. A newly loaded Pi or OpenCode extension, or a short-lived Claude hook, can therefore encounter an older daemon and fail on an unrelated command.
 
 The immediate regression is a pre-host-tracking `debugStatus` response whose `sessions[]` entries omit `host`. A new Pi client reaches that response after `/premind:flush` finds no reminder and refreshes the status bar, then fails while parsing the response.
 
-Mixed versions are normal: the daemon is detached and shared, hosts reload independently, Claude hooks are separate processes, and the generated Claude runtime may be older or newer than another installed host. The protocol must make that state explicit rather than treating socket reachability as compatibility.
+Mixed versions are normal:
+
+- Pi and OpenCode extensions can reload while their sessions continue.
+- Claude hooks are independent short-lived processes.
+- Several host versions can share premind state at once.
+- A user may keep one session alive across many premind releases.
+
+A protocol compatibility window is necessary, but it must not leave a compatible old daemon running forever. The product should use compatibility adapters while a new daemon becomes ready, move live sessions to it without restarting those sessions, and let old daemons drain only the sessions that have not moved.
+
+## User-visible behavior
+
+After the bridge release described below, upgrading premind should behave like a rolling server deployment:
+
+1. A newly loaded client initializes against the daemon currently serving its session and continues using the negotiated old protocol.
+2. If its packaged daemon build is newer, it starts that daemon alongside the old one on a unique socket.
+3. The new daemon becomes discoverable only after its socket, protocol codecs, and database compatibility checks are ready.
+4. At the next safe host boundary, the client claims the **same session ID** on the new daemon. The conversation, subscriptions, cursors, pending reminders, and worktree association do not restart.
+5. The old daemon keeps responding for sessions that have not moved. It is fenced from mutating a session after that session's ownership generation changes.
+6. An old daemon exits after it owns no live session leases, reminder handoffs, in-flight requests, or background coordinator lease, followed by a short rollback grace period.
+
+Normally the user sees nothing. A status surface may briefly report `premind updating…` or `premind reconnecting…`; it must not ask the user to restart a healthy host session. If several releases arrive before a safe boundary, the client moves directly to the newest ready compatible daemon rather than visiting every intermediate build.
+
+A dead session cannot pin an old daemon forever. Pi and OpenCode renew **session-scoped** leases; a process-wide client heartbeat does not renew all sessions. Claude hooks claim a session only for the invocation and do not hold a lease between hooks. When a session lease expires, ownership is cleared but durable session state remains available for a later reclaim.
 
 ## Recommended approach
 
-Keep the existing newline-delimited JSON transport and Zod, but add a stable initialization handshake, immutable versioned wire DTOs, centralized compatibility adapters, and a coordinated daemon lifecycle.
+Keep the existing newline-delimited JSON transport, Zod, and SQLite WAL database. Add:
 
-This follows established practices without introducing a transport migration:
+- an LSP/MCP-style `initialize` handshake for protocol and capability negotiation;
+- immutable versioned wire DTOs and centralized legacy adapters;
+- per-daemon instance sockets and an atomic discovery registry;
+- database-backed session leases with monotonically increasing fencing generations;
+- one database-backed, fenced background-coordinator lease so only one daemon runs schedulers and maintenance at a time;
+- expand/contract database migrations compatible with side-by-side daemon versions;
+- `semver` for build ordering and downgrade prevention;
+- `proper-lockfile` for deduplicating concurrent launches of the same build, not for enforcing a singleton daemon.
+- `fast-check` model-based commands for the bounded lease state-machine invariant test, with reproducible seeds and shrinking.
 
-- Borrow the `initialize` lifecycle used by LSP/MCP: negotiate a protocol before normal operations and exchange capabilities once.
-- Apply the tolerant-reader rule at the client boundary: response readers ignore unknown additive fields, while request writers emit only the negotiated schema.
-- Use explicit current/previous protocol support and immutable historical fixtures, as is customary for rolling client-server upgrades.
-- Replace the custom stale-lock implementation with the pure-JavaScript `proper-lockfile` package for heartbeat, stale-owner, and compromised-lock handling. The Unix socket bind remains the definitive ownership check.
-- Continue using Zod for versioned codecs and domain normalization.
-
-Do **not** migrate to JSON-RPC or Protocol Buffers in this issue. JSON-RPC standardizes calls and errors but does not solve schema compatibility or daemon ownership. Protobuf supplies excellent unknown-field behavior, but adopting code generation and a second encoding across TypeScript and the committed Claude runtime would be a much larger migration than the local protocol requires. The same compatibility guarantees can be established with the existing JSON transport and Zod.
+Do **not** migrate to JSON-RPC, Protocol Buffers, gRPC, or MCP transport in this issue. Those transports do not supply rolling ownership, session fencing, or migration safety. Protocol Buffers would improve unknown-field behavior, but introducing code generation and a second encoding across TypeScript and the committed Claude runtime is much larger than the local protocol problem. Existing Zod codecs can provide the required guarantees when wire versions are immutable.
 
 ## Protocol contract
 
 ### Bootstrap handshake
 
-Reserve a small bootstrap contract that is independent of normal protocol versions and must remain backward compatible:
+Reserve a small bootstrap contract independent of normal protocol versions:
 
 ```json
 {
@@ -39,7 +63,7 @@ Reserve a small bootstrap contract that is independent of normal protocol versio
 }
 ```
 
-A new daemon returns:
+A bridge-aware daemon returns:
 
 ```json
 {
@@ -50,21 +74,22 @@ A new daemon returns:
       "instanceId": "uuid",
       "pid": 1234,
       "version": "0.2.0",
-      "commit": "def456"
+      "commit": "def456",
+      "socketPath": "/tmp/premind-501/d-uuid.sock"
     },
     "protocols": { "min": 1, "max": 2, "selected": 2 },
     "capabilities": {
       "operations": ["registerClient", "debugStatus"],
-      "gracefulUpgrade": true
+      "rollingSessions": true
     },
-    "storage": { "schemaVersion": 3 }
+    "storage": { "schemaCapabilities": ["base", "session-leases-v1"] }
   }
 }
 ```
 
-The client selects no version itself after the response; it verifies the daemon-selected version is within the offered range and stores an immutable connection profile for the process lifetime. It renegotiates after reconnect or daemon instance change. Short-lived Claude hooks initialize once per process.
+The client verifies the selected protocol is in its offered range and stores an immutable connection profile keyed by daemon `instanceId`. It renegotiates after `SESSION_MOVED`, transport loss, or instance change. A short-lived Claude hook initializes once per invocation.
 
-A legacy daemon will reject `initialize` with its protocol-v1 `BAD_REQUEST` envelope. The client recognizes that envelope and selects a documented `legacy-v1` profile rather than guessing that the latest schemas apply.
+A pre-handshake daemon rejects `initialize` with its protocol-v1 `BAD_REQUEST` envelope. The client recognizes that exact historical envelope and selects a documented `legacy-v1` profile instead of applying current schemas.
 
 ### Version guarantees
 
@@ -72,176 +97,423 @@ A legacy daemon will reject `initialize` with its protocol-v1 `BAD_REQUEST` enve
 
 | Change | Rule |
 | --- | --- |
-| Fix internal behavior without changing wire data or semantics | No bump |
-| Add a new operation | Same version only when advertised as a capability; old clients remain unaffected |
-| Add an optional response field | Same version only after all clients for that version are tolerant readers; otherwise bump |
-| Add or change any request field | Bump, because older strict daemons may reject it |
-| Add a required response field, change a type, remove/rename a field, or change acknowledgment/error semantics | Bump |
-| Change the bootstrap envelope | Add a bootstrap version while continuing to accept bootstrap v1 |
+| Internal fix without wire or semantic change | No bump |
+| New operation | Same version only when capability-advertised and old clients remain unaffected |
+| Optional response field | Same version only when every reader for that version already ignores unknown fields; otherwise bump |
+| New or changed request field | Bump because older strict daemons may reject it |
+| Required response field, type/removal/rename, or acknowledgment/error semantic change | Bump |
+| Bootstrap change | Add a bootstrap version while continuing to accept bootstrap v1 |
 
-Protocol v1 is explicitly classified as legacy because several incompatible shapes already shipped under that number. Protocol v2 becomes the first immutable contract. New clients prefer v2 and use narrowly scoped v1 adapters only when initialization identifies a legacy daemon.
+Protocol v1 is explicitly legacy because incompatible variants already shipped under that number. Protocol v2 becomes the first immutable contract. New clients prefer their packaged daemon and newest protocol, but retain supported older codecs for the published compatibility window.
 
 ### Wire and domain separation
 
 Create versioned wire modules under `src/shared/protocol/`:
 
-- `bootstrap.ts` — stable initialization request/result and typed incompatibility errors.
-- `v1.ts` — historical v1 request/response variants needed during the compatibility window.
-- `v2.ts` — the canonical immutable contract.
-- `adapters.ts` — converts a decoded wire result into the current host-neutral domain model.
-- `capabilities.ts` — operation and lifecycle capability names.
+- `bootstrap.ts` — stable initialization and typed incompatibility errors;
+- `v1.ts` — supported historical v1 request/response variants;
+- `v2.ts` — the first immutable canonical contract;
+- `adapters.ts` — wire-to-domain normalization;
+- `capabilities.ts` — operation, rolling-session, and storage capabilities.
 
-Response codecs should use Zod's default stripping behavior (or explicit `.strip()`) so unknown additive fields do not break readers. Request codecs remain strict. Callers consume normalized domain objects and never parse a latest-version wire schema directly.
+Response codecs use Zod stripping so unknown additive fields do not break readers. Request codecs remain strict. Host code consumes normalized domain objects and never parses the newest wire schema directly.
 
-For the immediate regression, the legacy v1 `debugStatus` adapter accepts a missing `sessions[].host` and normalizes it into a distinct diagnostic domain type whose host union includes `"unknown"`. Registration and v2 wire schemas still accept only real hosts (`pi`, `opencode`, `claude`). This avoids inventing an incorrect host for historical sessions.
+For the immediate regression, the legacy v1 `debugStatus` adapter accepts missing `sessions[].host` and normalizes it into a diagnostic domain type whose host union includes `"unknown"`. Registration and v2 wire schemas still accept only real hosts (`pi`, `opencode`, `claude`).
 
 ### Stable errors
 
-Keep the current `{ ok, protocolVersion, error: { code, message } }` shape parseable for legacy requests. Add optional structured error data only where old readers will ignore it. Define at least:
+Keep `{ ok, protocolVersion, error: { code, message } }` parseable for legacy requests and add structured data only where old readers ignore it. Define:
 
-- `PROTOCOL_UNSUPPORTED` — no overlapping protocol; includes supported range.
-- `CLIENT_UPGRADE_REQUIRED` — a legacy request is too ambiguous to serve safely.
-- `DAEMON_UPGRADE_REQUIRED` — the client cannot perform the requested operation against the daemon.
-- `DAEMON_STARTING` — socket ownership exists but initialization is not complete.
-- `DAEMON_BUSY` — safe replacement cannot proceed while incompatible active leases remain.
+- `PROTOCOL_UNSUPPORTED` — no protocol overlap;
+- `CLIENT_UPGRADE_REQUIRED` — a legacy request is too ambiguous to serve safely;
+- `DAEMON_UPGRADE_REQUIRED` — the operation needs a newer daemon;
+- `DAEMON_STARTING` — an instance exists but is not ready;
+- `SESSION_MOVED` — the request used a stale instance/generation and must rediscover;
+- `SESSION_BUSY` — a non-replayable request or handoff is preventing cutover;
+- `SCHEMA_UNSUPPORTED` — the daemon cannot safely use the current database schema.
 
-The response envelope echoes the request's protocol version. That lets an old v1 client parse a clear rejection from a newer daemon instead of failing on the envelope itself.
+The envelope echoes the request protocol version so an old client can parse a clear rejection.
+
+## Daemon discovery and selection
+
+### Instance registry
+
+Each daemon binds a short, unique Unix socket such as `/tmp/premind-<uid>/d-<id>.sock`. Socket directories use owner-only permissions and stay short enough for platform Unix-socket limits.
+
+After readiness, the daemon atomically writes an instance descriptor under `PREMIND_STATE_DIR/instances/` containing its instance ID, socket path, package version, commit, supported protocol range, schema capabilities, lifecycle state, and last heartbeat. A descriptor is only a discovery hint: clients probe the socket and verify the initialization response before trusting it.
+
+Clients select in this order:
+
+1. the newest ready build with protocol and schema overlap;
+2. for equal package versions, an exact commit match to avoid switching between incomparable development builds;
+3. the currently serving compatible instance while a newer packaged daemon starts;
+4. otherwise an actionable incompatibility error.
+
+A draining, quiescent (except for its explicitly authorized rollback session), stale, unreachable, protocol-incompatible, or schema-incompatible instance is never selected for a new claim. An older client never launches its older daemon merely because a newer compatible daemon is already running. `semver` compares released versions; an exact version+commit match resolves local/development ties without attempting to order commit hashes.
+
+`proper-lockfile` uses a lock keyed by version+commit to prevent two hosts from launching duplicate instances of the same build. Different builds are intentionally allowed to coexist.
+A client launches its packaged daemon only when that build is newer than every compatible ready instance, or when no compatible ready instance exists. It never launches a lower version to match a downgraded client.
+
+### Rapid releases
+
+Five breaking contracts in one week may produce protocol versions v3 through v7. Compatibility retention keeps old clients functional, but it does not pin updated clients to old daemons:
+
+- if the session reaches a safe boundary after each release, it rolls to each exact packaged daemon;
+- if releases accumulate while the session is busy, intermediate ready daemons receive no session leases and drain, while the client moves directly to v7;
+- sessions whose clients did not update remain on their old daemons until they move, end, or their leases expire.
+
+## Session ownership and rolling cutover
+
+Store ownership separately from durable session state:
+
+```text
+session_daemon_leases
+  session_id             primary key
+  owner_instance_id
+  generation             monotonically increasing
+  lease_expires_at
+```
+
+### Claim and fencing rules
+
+- Pi and OpenCode renew each live session lease explicitly. Their generic client heartbeat proves process health only.
+- Claude hooks atomically claim for one invocation and release at its end; inactivity between hooks never pins a daemon.
+- A clean session end releases ownership immediately.
+- A crashed or silently deleted session stops renewing. After `lease_expires_at`, a compare-and-swap clears ownership while preserving the session, subscriptions, cursors, worktree binding, and reminders.
+- Claiming on another daemon increments `generation` transactionally. Every session-scoped mutation and reminder settlement validates `owner_instance_id` and `generation` in the same transaction as its write.
+- A stale daemon cannot renew, unregister, acknowledge, or mutate a migrated session. It returns `SESSION_MOVED` and the client rediscovers.
+- Transfer occurs at a host safe boundary. If a non-replayable mutation or reminder handoff is in flight, the client continues on the old daemon and retries after settlement instead of forcing cutover.
+
+When an old daemon loses its final live session, it enters `quiescent` for a short rollback grace: it serves in-flight work and permits only a fenced reclaim by a session that just left it, but accepts no unrelated new claims. After grace it enters `draining` and exits once its remaining work and coordinator lease clear. This lets a client roll back if the new instance fails immediately without allowing the old daemon to attract fresh sessions indefinitely.
+
+## Shared background work
+
+Side-by-side daemons must not run duplicate GitHub polling and maintenance loops. Use one fenced `background-coordinator` lease in SQLite:
+
+```text
+coordinator_lease
+  resource_key           primary key
+  owner_instance_id
+  generation
+  lease_expires_at
+```
+
+Only the lease holder starts branch discovery, PR polling, reaping, and cleanup schedulers. Scheduler writes validate the coordinator generation. A newer ready daemon may request leadership transfer independently of session movement; otherwise leadership changes when the lease is released or expires. Watcher state is reconstructed from SQLite as it is after a restart today.
+
+An old daemon is drainable only when it has:
+
+- no unexpired session leases;
+- no in-flight IPC requests;
+- no unsettled reminder handoffs;
+- no background-coordinator lease;
+- and no rollback-grace timer remaining.
+
+Rows for dormant sessions do not count. Therefore a crashed session delays shutdown by at most its session lease TTL plus drain grace, not forever.
+
+## Database evolution
+
+SQLite already runs in WAL mode, which supports concurrent readers and a serialized writer. Rolling daemons additionally require application-level migration discipline:
+
+1. **Expand:** add tables, columns, indexes, and dual-read/dual-write support that every daemon in the compatibility window tolerates.
+2. Roll clients and daemons while old and new versions coexist.
+3. **Contract:** remove old representations only after their protocol/build support window expires and no registered live instance requires them.
+
+Track named schema capabilities/migrations rather than treating one latest `PRAGMA user_version` as permission for destructive change. Apply migrations once under a database migration lease/transaction. A daemon checks required and unsupported capabilities before claiming sessions or coordinator leadership. An older binary encountering an incompatible contracted schema returns `SCHEMA_UNSUPPORTED` before mutation; it never attempts an automatic downgrade.
+
+## Legacy bridge exception
+
+A pre-bridge singleton daemon uses the well-known socket and does not participate in session fencing or coordinator leases. It cannot safely share SQLite with a bridge-aware active daemon. The first upgrade therefore remains a one-time exception:
+
+1. the new client uses legacy v1 adapters while the old daemon remains live;
+2. at a safe boundary, it requests graceful shutdown if supported, or presents a clear manual restart instruction if not;
+3. only after the legacy socket owner and database connection are gone does the first bridge daemon start and register the session;
+4. every later upgrade uses side-by-side rolling cutover.
+
+Never kill an unidentified PID or unlink a reachable legacy socket.
 
 ## Supported compatibility matrix
 
 | Client | Daemon | Behavior |
 | --- | --- | --- |
-| Current client | Pre-handshake v1 daemon | Detect legacy `BAD_REQUEST`, select `legacy-v1`, normalize historical responses, and use only the known v1 operation set |
-| Current client | Current daemon | Initialize, negotiate the highest common version, then gate operations by advertised capability |
-| Current client | Future daemon | Continue on the highest common retained version |
-| Future client | Current daemon | Negotiate down while the current version remains in the support window |
-| Old v1 client | Current daemon | Serve only wire shapes that are unambiguous and historically compatible; otherwise return a v1 `CLIENT_UPGRADE_REQUIRED` error |
-| No protocol overlap | Upgrade-capable older daemon | Replace only through the coordinated graceful-upgrade flow below |
-| No protocol overlap | Legacy daemon without lifecycle capability | Never signal or overwrite an unknown process; report an actionable restart/degraded-mode error |
-| Downgraded client package | Newer running daemon | Negotiate an older retained protocol; never automatically replace a newer daemon with an older binary |
-| Downgraded client with no overlap | Newer daemon/database | Reject with instructions to restore a compatible package; do not risk a storage downgrade |
+| Current client | Pre-handshake v1 singleton | Use explicit legacy profile; perform the one-time bridge cutover only through safe shutdown/manual recovery |
+| Current client | Older bridge-aware daemon | Continue temporarily, start exact packaged daemon, then move the session at a safe boundary |
+| Current client | Exact current daemon | Reuse it and negotiate the highest common protocol |
+| Current client | Future compatible daemon | Use it without launching an older daemon |
+| Old client | Its old daemon | Continue while its live session lease is renewed |
+| Old client | New compatible daemon | Negotiate a retained protocol or receive a parseable upgrade error for ambiguous v1 operations |
+| No protocol overlap | Any bridge-aware fleet | Start/select a compatible packaged instance only if the database schema overlaps; otherwise return an actionable error |
+| Downgraded package | Newer compatible daemon | Use the newer daemon; never replace it with an older build |
+| Downgraded package | Contracted newer schema | Reject before any database mutation |
 
-Pi and OpenCode background refreshes should surface a compact health error without crashing the host. User-invoked commands should return the full actionable message. Claude lifecycle hooks continue to fail open, while Claude MCP/user commands return the incompatibility diagnostic.
-
-## Safe daemon ownership and replacement
-
-Socket reachability and protocol compatibility must be separate results. A reachable incompatible daemon still owns the socket, so launchers must not spawn a competitor.
-
-Refactor startup in this order:
-
-1. Acquire a `proper-lockfile` daemon-ownership lock in `PREMIND_STATE_DIR`. Hold it for the daemon lifetime and treat `ECOMPROMISED` as fatal.
-2. Resolve a stale socket only while holding that ownership lock.
-3. Bind the Unix socket and establish exclusive ownership.
-4. Only after the bind succeeds, construct `StateStore`, inspect `PRAGMA user_version`, run transactional migrations/restart recovery, and start schedulers.
-5. Treat a connected-but-not-initialized socket as `starting`: reject normal operations if they are handled, and have launchers wait rather than spawn when connection succeeds but initialization has not produced a handshake yet.
-6. On shutdown, enter draining mode, close the listener to reject new connections, finish in-flight requests, stop schedulers, close SQLite, unlink the socket, then release the ownership lock.
-
-This requires removing `new StateStore()` from `IpcServer` constructor defaults and making service initialization explicit. No losing process may open or mutate SQLite.
-
-For an incompatible but upgrade-capable daemon:
-
-1. The client calls `prepareUpgrade` with the daemon `instanceId`, the replacement build identity, and its supported range.
-2. The daemon rejects with `DAEMON_BUSY` if incompatible active clients/sessions are still leased; the client may degrade or wait, but must not force replacement.
-3. If accepted, the daemon enters draining mode, begins closing the listener so no new connections are accepted, finishes the upgrade response and other in-flight requests, stops schedulers, closes SQLite, unlinks the socket, releases ownership, and exits.
-4. The client waits for that exact `instanceId` to disappear, starts its packaged daemon, and waits for a new initialized instance with an overlapping protocol.
-5. Existing compatible clients reconnect and re-register through their normal retry path.
-
-Never use an unverified PID kill as the upgrade mechanism. A pre-handshake legacy daemon is adapted when possible and otherwise requires a manual host/daemon restart.
-
-Add an explicit SQLite schema version and supported reader range. Migrations remain forward-only and transactional. Automatic daemon downgrade is prohibited; an older binary must reject a newer unsupported database before mutation.
+Pi and OpenCode background refreshes surface compact health state without crashing the host. User commands include actionable detail. Claude lifecycle hooks continue to fail open, while Claude commands and MCP diagnostics report incompatibility.
 
 ## Implementation phases
 
-### Phase 1 — Pin the regression with historical wire fixtures
+### Phase 1 — Pin historical v1 and the immediate regression
 
-- Capture immutable raw request/response fixtures from the last pre-host-tracking daemon, with source commit/package metadata.
-- Include pre-host `debugStatus`, no-pending-reminder delivery, single-reminder claim/ack, the earlier bundle shape, and the current tokenized bundle shape.
-- Add a socket-level fixture daemon test proving a current Pi `/premind:flush` can receive “no pending reminders,” refresh status from a response without `sessions[].host`, and finish without a schema error.
-- Add the v1 debug-status wire decoder and diagnostic-domain normalizer; do not make the v2 wire field optional or apply a global schema default.
+- Capture raw fixtures from the last pre-host daemon, the pre-bundle daemon, the first bundle daemon, and the current tokenized-bundle daemon, with source commit metadata.
+- Add versioned v1 decoders and diagnostic-domain normalization.
+- Prove Pi `/premind:flush` can receive no reminder, refresh a pre-host `debugStatus`, and finish without error.
+- Preserve existing bundle/session-control fallbacks behind the v1 adapter rather than host code.
 
-**Validation:** targeted protocol fixture test and `src/extension/__tests__/index.test.ts`. Commit.
+**Validation:** historical fixture contract test and targeted Pi/OpenCode/Claude adapter tests. Commit.
 
-### Phase 2 — Introduce initialization and immutable protocol v2
+### Phase 2 — Add initialization and immutable protocol v2
 
 - Add `src/shared/protocol/{bootstrap,v1,v2,adapters,capabilities}.ts`.
-- Split the server's parsing into a permissive header/bootstrap decoder followed by version-specific strict request decoding.
-- Add build version/commit, daemon `instanceId`, protocol range, operation capabilities, lifecycle capabilities, and storage schema version to initialize results.
-- Move response parsing out of individual daemon-client methods into a negotiated codec/adapter layer.
-- Keep legacy-v1 detection explicit; remove feature inference from generic `BAD_REQUEST` strings.
+- Split permissive header/bootstrap parsing from strict versioned request parsing.
+- Include build, instance, protocol, operations, rolling-session, and schema capabilities in initialization.
+- Move wire response parsing out of daemon-client methods.
+- Replace `BAD_REQUEST` feature inference with negotiated capabilities.
 
-**Validation:** negotiation tests for highest overlap, no overlap, malformed selection, legacy fallback, unknown additive response fields, and unsupported operations. Commit.
+**Validation:** codec/negotiation table tests for legacy fallback, overlap selection, no overlap, additive response fields, malformed selection, and stable errors. Commit.
 
-### Phase 3 — Make the daemon client host-neutral
+### Phase 3 — Add daemon instances and deterministic discovery
 
-- Move `PremindDaemonClient` from `src/plugin-opencode/` into `src/shared/` and have Pi/OpenCode consume the same negotiated client.
-- Centralize current reminder-bundle and session-control compatibility logic in the v1 adapter rather than host methods.
-- Model reconnect as: transport failure → inspect owner → initialize → re-register client/session → retry only if the operation is safe to retry.
-- Replace boolean `probeDaemon` with a typed inspection result such as `absent`, `starting`, `compatible`, `incompatible`, or `legacy`; `ensureDaemonRunning` spawns only for `absent`.
+- Add per-instance sockets, atomic descriptors, descriptor heartbeats, and stale-descriptor cleanup.
+- Add `semver` selection and `proper-lockfile` launch deduplication keyed by build.
+- Replace boolean `probeDaemon` with typed discovery states: `starting`, `ready`, `quiescent`, `draining`, `stale`, `incompatible`, or `legacy`.
+- Spawn the packaged build only when it is newer than all compatible ready instances, or when no compatible ready instance exists.
+- Bind the unique socket before opening SQLite or publishing readiness.
 
-**Validation:** existing OpenCode daemon-client tests, Pi extension tests, and new reconnect/profile-change tests. Commit.
+**Validation:** discovery selection table and concurrent same-build launch test. Commit.
 
-### Phase 4 — Establish exclusive ownership before persistence
+### Phase 4 — Add fenced session ownership and rolling cutover
 
-- Add `proper-lockfile` (and typings if needed) and replace the bespoke start-lock/stale-PID code.
-- Split socket ownership from router/store construction so bind precedes every database open, migration, recovery, prune, or scheduler start.
-- Add SQLite `user_version` checks and transactional migration boundaries.
-- Implement `prepareUpgrade`, daemon draining, exact-instance waiting, and restart with the initiating package's daemon entrypoint.
-- Reject automatic downgrade and replacement while incompatible active leases exist.
+- Add session lease storage, generation compare-and-swap, expiry, clean release, and durable dormant state.
+- Require owner generation on every session mutation and reminder settlement.
+- Move `PremindDaemonClient` into `src/shared/` and implement rediscovery after `SESSION_MOVED`.
+- Migrate at safe host boundaries without treating ordinary active session leases as blockers.
+- Keep the old instance alive through rollback grace and let it serve unmigrated sessions.
 
-**Validation:** subprocess tests race two daemon starts against temporary socket/state paths and assert exactly one owner and one recovery/migration; upgrade tests assert the old store closes before the new store opens; downgrade tests assert zero database writes. Commit.
+**Validation:** two-session rolling scenario, stale-writer fencing race, dead-session expiry, and cutover-during-handoff scenario. Commit.
 
-### Phase 5 — Apply the negotiated client to every host artifact
+### Phase 5 — Lease background coordination and make migrations rolling-safe
 
-- Pi and OpenCode initialize on session/client registration and reuse the profile until daemon `instanceId` changes.
-- Generate a shared Claude protocol client runtime from the TypeScript source with `scripts/build-claude-runtime.mjs`; `plugin-claude/bin/lib.mjs` should not maintain a separate protocol constant or parser.
-- Make Claude `ensure-daemon` distinguish incompatibility from absence and use the same upgrade policy.
-- Preserve Claude's fail-open hook behavior, but return actionable errors from MCP commands and diagnostics.
-- Add a generated-artifact drift check so CI fails when committed Claude runtime files are not rebuilt.
+- Add the fenced singleton background-coordinator lease and leadership transfer.
+- Start schedulers only while holding the live generation; reconstruct them from SQLite after transfer.
+- Introduce named schema capabilities and an expand/contract migration policy.
+- Gate session claims and coordinator leadership on schema compatibility.
+- Reject downgrade before mutation.
 
-**Validation:** `bun run test:claude`, Pi/OpenCode adapter suites, packaging tests, and clean generated-runtime diff. Commit.
+**Validation:** concurrent leader election/failover and old/new expand-schema coexistence tests. Commit.
 
-### Phase 6 — Cross-version CI and release policy
+### Phase 6 — Apply the shared runtime to every host
 
-- Add `src/test/protocol-compatibility.test.ts` and a dedicated `test:protocol-compat` script/CI job.
-- Run current-client/historical-daemon and historical-client/current-daemon fixture matrices over the real Unix-socket framing.
-- Test both debug status and reminder delivery for Pi, OpenCode, and Claude boundaries.
-- Add `docs/protocol.md` with the bump rules, matrix, error guidance, compatibility window, and manual recovery/downgrade instructions.
-- Build every host and generated runtime from one tagged source revision. Embed the same root package version/commit in daemon, Pi, OpenCode, and Claude artifacts instead of independently maintained versions.
+- Pi and OpenCode renew session-scoped leases and move at their safe lifecycle boundaries.
+- Generate the Claude protocol/discovery client from shared TypeScript; remove hand-maintained protocol constants and parsing from `plugin-claude/bin/lib.mjs`.
+- Make each Claude invocation select the newest ready compatible instance without leaving a persistent session lease.
+- Add user-visible `updating`, `reconnecting`, and actionable failure diagnostics without noisy success notifications.
+- Add a generated-artifact drift check.
 
-**Validation:** `bun run check`, `bun run test:protocol-compat`, `bun run test:harness`, `bun run test:claude`, then the existing CI suite. Commit.
+**Validation:** one parameterized adapter contract suite over Pi, OpenCode, and Claude, plus packaging/generated-runtime checks. Commit.
+
+### Phase 7 — Cross-version CI, lifecycle cleanup, and release documentation
+
+- Add a dedicated `test:protocol-compat` script and CI job.
+- Add the minimally spanning scenario suite below over real Unix sockets and temporary SQLite databases.
+- Document protocol bump rules, rolling lifecycle, support window, downgrade behavior, and manual legacy recovery in `docs/protocol.md`.
+- Build daemon, Pi, OpenCode, and Claude artifacts from one tag with the same embedded version/commit.
+
+**Validation:** `bun run check`, `bun run test:protocol-compat`, `bun run test:harness`, `bun run test:claude`, and the existing CI suite. Commit.
+
+## Minimally spanning test plan
+
+The suite should cover behavioral boundaries, not every client-version × daemon-version × host Cartesian product. Use fake clocks and explicit readiness/barrier promises; do not use timing sleeps. Reuse the existing adapter-driver registry so host coverage is parameterized rather than copied.
+
+### Invariants
+
+1. **Continuity:** moving a session never changes its durable identity, subscriptions, cursor, worktree binding, or pending reminders.
+2. **Single owner:** at most one daemon generation may mutate a session.
+3. **Dead sessions drain:** an unrenewed session cannot pin a daemon beyond lease TTL plus grace.
+4. **Live old sessions continue:** moving one session does not interrupt another session on the old daemon.
+5. **Delivery conservation:** a reminder is confirmed once or remains retryable across cutover/crash.
+6. **Single coordinator:** at most one live generation runs background polling/maintenance.
+7. **Ready-before-move:** a client never leaves a healthy old daemon for an unready candidate.
+8. **No downgrade mutation:** incompatible older code performs no database writes.
+9. **Bounded fleet:** instances with no live ownership/coordinator work eventually disappear.
+10. **Host parity:** Pi, OpenCode, and Claude use the same negotiation and ownership rules despite different lifecycles.
+
+### Core scenarios
+
+#### T1 — Historical v1 boundary
+
+Drive the current shared client against raw historical socket fixtures:
+
+- pre-host `debugStatus` without `sessions[].host`;
+- no pending reminder followed by status refresh;
+- single-reminder claim/ack;
+- old bundle response/ack;
+- current tokenized bundle response/ack.
+
+Assert normalized domain results and exact outgoing legacy wire shapes. Replay representative old requests into the current daemon and assert either the historical response shape or a v1-parseable `CLIENT_UPGRADE_REQUIRED` error.
+
+**Covers:** immediate regression, legacy detection, bidirectional v1 behavior.
+
+#### T2 — Discovery and build selection table
+
+One table-driven test supplies descriptors for exact, newer, older, starting, quiescent, draining, stale, unreachable, protocol-incompatible, and schema-incompatible instances. Assert that the client:
+
+- chooses the newest compatible ready build;
+- uses the exact commit only as a same-version tie-breaker;
+- ignores descriptor claims not confirmed by handshake;
+- ignores quiescent instances for new claims but permits a matching fenced rollback authorization;
+- remains on its healthy old instance while an exact candidate starts;
+- never launches an older daemon when a newer compatible daemon exists;
+- launches at most one copy of the same build under concurrent clients.
+
+**Covers:** deterministic selection, readiness, downgrade prevention, launch deduplication.
+
+#### T3 — Two sessions split across a rolling update
+
+Start daemon A with sessions S1 and S2. Start ready daemon B, move only S1, and assert:
+
+- S1 keeps all durable state and is served by B;
+- A rejects a late S1 mutation with `SESSION_MOVED`;
+- S2 continues normal requests and reminder delivery through A;
+- A remains alive while S2's lease is live;
+- ending S2 releases immediately and A exits only after handoffs/coordinator ownership and rollback grace clear.
+
+**Covers:** continuity, fencing, old-daemon availability, graceful drain.
+
+#### T4 — Dead session with a live host process
+
+Register S1 and S2 through one long-lived OpenCode/Pi client process. Continue the generic client heartbeat and S1 lease renewal, but stop S2 renewal without sending session-end. Advance the fake clock and assert:
+
+- S2 ownership expires despite the process heartbeat;
+- S2's durable rows remain;
+- the owning daemon can drain if S2 was its final live lease;
+- a later S2 event claims it on the newest daemon with a higher generation and preserved cursor/reminders.
+
+**Covers:** the orphaned-session case explicitly; proves client heartbeat cannot pin dead sessions.
+
+#### T5 — Atomic claim and stale-writer race
+
+Pause daemon A after it reads S1 ownership but before its write. Claim S1 on daemon B, incrementing generation, then release A. Assert A's conditional mutation, heartbeat, acknowledgment, and unregister all fail without changing data, while B's equivalent operations succeed. Race two claimers and assert exactly one generation wins.
+
+**Covers:** split-brain prevention and compare-and-swap correctness.
+
+#### T6 — Cutover during reminder delivery
+
+Exercise the two meaningful cutover points:
+
+1. before handoff claim: move immediately and let B claim/deliver;
+2. after handoff claim but before confirmation: keep S1 on A until confirmation or failed/stale recovery, then move.
+
+Assert one confirmed delivery, no duplicate injection, and no lost batch in both cases. Do not enumerate every acknowledgment state already covered by reminder-handoff unit tests.
+
+**Covers:** delivery conservation at the only non-replayable session boundary.
+
+#### T7 — Five rapid breaking releases
+
+Model bridge-aware builds/protocols v2 through v7 with one persistent session:
+
+- first, allow a safe boundary after each release and assert five transparent generation changes with unchanged session state;
+- then queue all five releases before one safe boundary and assert the session moves once from v2 directly to v7;
+- assert unused intermediate instances acquire no session lease and drain;
+- keep a second v2 client live and assert its session remains served throughout.
+
+**Covers:** the motivating product scenario, compatibility retention, coalescing, and bounded fleet size.
+
+#### T8 — Candidate failure and rollback
+
+Cover the two distinct failure boundaries:
+
+1. B fails readiness before claim: client stays on A and no ownership changes;
+2. B crashes after claim: its lease expires, the client reports `reconnecting`, and its rollback authorization lets quiescent A (or another compatible ready instance) reclaim with a newer generation.
+
+Assert durable state and pending reminders survive, unhealthy B is not immediately reselected, and no two owners write concurrently.
+
+**Covers:** ready-before-move and post-cutover recovery without multiplying failure permutations.
+
+#### T9 — Background coordinator transfer
+
+Start A and B concurrently against one temporary WAL database. Assert exactly one coordinator generation starts schedulers. Pause the old leader at a fenced write, transfer/expire leadership to B, then release A and assert:
+
+- A's stale write is rejected;
+- B reconstructs watcher state and continues polling;
+- one source update produces one persisted event/reminder, not duplicates;
+- A can exit after its sessions and grace clear.
+
+**Covers:** global split-brain prevention and scheduler continuity.
+
+#### T10 — Expand/contract and downgrade safety
+
+Apply an additive migration with A still live, start B, and prove both versions can execute their supported operations. Attempt the contract migration while A is registered and assert it is refused. After A drains and the support gate allows contraction, apply it once. Then start an older binary and assert `SCHEMA_UNSUPPORTED` occurs before any write, recovery, or scheduler startup.
+
+**Covers:** rolling database compatibility, migration serialization, and downgrade safety.
+
+#### T11 — Host lifecycle contract
+
+Run one parameterized contract through the existing Pi, OpenCode, and Claude adapter drivers:
+
+- initialize/discover newest ready daemon;
+- preserve host session identity across a move;
+- deliver one persisted reminder after the move;
+- cleanly release ownership.
+
+Add only host-specific assertions that differ:
+
+- Pi/OpenCode renew a session-scoped lease and move at their safe lifecycle boundary;
+- Claude selects per hook invocation and leaves no persistent lease.
+
+**Covers:** host parity without repeating the daemon state-machine scenarios three times.
+
+#### T12 — Legacy bridge transition
+
+Run a real pre-bridge fixture daemon on the well-known socket. Assert a bridge-aware client does not start a competing active daemon or open SQLite concurrently. Verify compatible legacy operation first, then:
+
+- graceful legacy shutdown path when supported;
+- clear manual-restart result when unsupported.
+
+After shutdown, start the first bridge daemon, reattach the same session, and prove subsequent B→C migration uses rolling cutover.
+
+**Covers:** the one unavoidable singleton transition and proves it does not leak into later upgrades.
+
+### Why this set is sufficient
+
+The twelve scenarios each cross a distinct correctness boundary: historical wire parsing, discovery, multi-session draining, orphan expiry, fencing, non-replayable handoff, rapid releases, rollout failure, global leadership, storage evolution, host lifecycle, and the legacy bridge. Removing any scenario leaves one named invariant untested. Expanding every scenario across every host or adjacent version would repeat shared logic without increasing boundary coverage.
+
+Add one bounded `fast-check` model-based test over the store-level lease model using commands for `claim`, `renew`, `move`, `expire`, `release`, and `crash`. Its only properties are the ten invariants above. Record the seed and shrunk minimal command sequence on failure; keep socket/subprocess tests deterministic and non-randomized.
 
 ## Compatibility and release policy
 
-Ship this as a bridge release before making another incompatible payload change:
+Ship a bridge release before any further incompatible payload change:
 
-1. The bridge release introduces initialization, protocol v2, v1 adapters, safe ownership, and a daemon that understands both v1 and v2.
-2. All host artifacts from that tag prefer v2 but can use supported historical v1 daemons.
-3. Subsequent releases may add protocol v3 only while retaining v2 in both client and daemon.
-4. Retain a protocol generation and its adapters for at least two published minor releases and at least 90 days, whichever is longer. Removal requires a documented release note and preserved fixtures.
-5. Historical fixtures remain permanently even after an adapter is removed, so accidental reuse of an old version number or wire shape is detectable.
-6. Publish generated Claude artifacts and the npm/Pi/OpenCode package from the same tag. CI must verify embedded version/commit values and generated files before publication.
-
-Because v1 already contains incompatible variants, current-daemon support for old v1 clients is best effort per operation: safely compatible operations continue; ambiguous operations return a parseable v1 `CLIENT_UPGRADE_REQUIRED`. Full bidirectional current/previous compatibility is guaranteed starting with v2.
+1. The bridge introduces initialization, protocol v2, instance discovery, fencing, rolling-safe schema expansion, and shared generated clients.
+2. The pre-bridge singleton transition uses the explicit legacy exception once.
+3. Every later release starts side by side and moves sessions individually.
+4. Retain a protocol generation and adapters for at least two published minor releases and at least 90 days, whichever is longer. Rapid releases therefore accumulate supported codecs; they do not force active users through manual restarts.
+5. A live old session may remain on its daemon throughout that window. Dead leases expire normally. End-of-support behavior must be announced and return an actionable upgrade error before an old daemon stops renewing an otherwise live session.
+6. Historical fixtures remain permanently even after an adapter is removed.
+7. Publish daemon, Pi, OpenCode, and generated Claude artifacts from the same tag and embedded version/commit.
 
 ## Acceptance criteria
 
-Issue #40 is complete when tests and documentation demonstrate that:
+Issue #40 is complete when deterministic tests and documentation demonstrate that:
 
-- a new client identifies a legacy daemon before applying current response schemas;
-- the pre-host `debugStatus` fixture no longer breaks Pi `/premind:flush`;
-- operation availability comes from initialization capabilities, not probing via failures;
-- protocol v2 wire schemas are immutable and separated from domain models;
-- a reachable incompatible daemon never causes a competing daemon spawn;
-- no process opens or mutates SQLite before exclusive socket ownership;
-- compatible old clients receive supported v1 responses, while ambiguous v1 requests receive a clear parseable upgrade error;
-- upgrade-capable incompatible daemons drain and hand off safely, and daemon downgrade is refused before database mutation;
-- Pi, OpenCode, Claude hooks/runtime, and the daemon pass the historical cross-version matrix;
-- generated Claude runtime files are built and released from the same protocol sources and tag;
-- and the protocol support window, bump rules, downgrade behavior, and manual recovery path are documented.
+- a new client identifies a legacy daemon before applying current schemas;
+- pre-host `debugStatus` no longer breaks Pi `/premind:flush`;
+- protocol and operation support come from initialization, not failure probing;
+- protocol v2 wire schemas are immutable and separate from domain models;
+- a new daemon becomes ready beside an old daemon before any session moves;
+- moving one session does not interrupt sessions that remain on the old daemon;
+- stale generations cannot mutate, renew, unregister, or acknowledge a moved session;
+- a dead session expires without deletion and cannot pin a daemon beyond lease TTL plus grace;
+- reminders are confirmed once or remain retryable across move and crash boundaries;
+- exactly one coordinator generation performs polling and maintenance;
+- five rapid breaking releases preserve one continuous session and coalesce when appropriate;
+- failed candidates leave the old daemon usable or recover through a newer fenced claim;
+- expand/contract migrations permit supported coexistence and refuse downgrade before mutation;
+- Pi, OpenCode, and Claude share the same negotiation/ownership implementation;
+- old daemons drain after their last live lease/work item rather than after their last durable session row;
+- generated Claude runtime files come from the same protocol sources and release tag;
+- and the support window, end-of-support behavior, downgrade behavior, and legacy recovery path are documented.
 
 ## Non-goals
 
-- Replacing the local Unix socket with HTTP, JSON-RPC, gRPC, or MCP.
+- Replacing the Unix socket transport.
 - Supporting arbitrary combinations of unreleased commits.
-- Automatically killing a legacy daemon that cannot identify itself or coordinate shutdown.
-- Making old binaries read a newer incompatible SQLite schema.
+- Automatically killing an unidentified legacy daemon.
+- Running destructive database migrations while an old supported daemon remains live.
+- Migrating a non-replayable in-flight operation by force.
