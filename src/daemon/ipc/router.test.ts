@@ -100,7 +100,9 @@ describe("Router worktree subscription operations", () => {
       protocolVersion: 1,
       payload: { sessionId: "session-1" },
     });
-    assert.equal(worktreeBindings.has("session-1"), false);
+    assert.equal(worktreeBindings.has("session-1"), true);
+    assert.equal(store.getSession("session-1")?.status, "detached");
+    assert.deepEqual(store.listBranchWatchTargets(), []);
     store.close();
   });
 

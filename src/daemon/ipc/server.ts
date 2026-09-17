@@ -39,6 +39,7 @@ const SUPPORTED_OPERATIONS = [
   "suspendClaudeSession",
   "updateSessionState",
   "unregisterSession",
+  "deleteSession",
   "pauseSession",
   "resumeSession",
   "activateWorktree",

@@ -8,6 +8,7 @@ import { DatabaseSync } from "node:sqlite"
 import { afterEach, describe, test } from "node:test"
 import {
   PREMIND_CLIENT_LEASE_TTL_MS,
+  PREMIND_CLOSED_SESSION_RETENTION_MS,
   PREMIND_PR_STREAM_RETENTION_MS,
 } from "../../shared/constants.ts"
 import { StateStore } from "./store.ts"
@@ -2354,6 +2355,45 @@ describe("session daemon leases", () => {
     } finally {
       secondStore.close()
       firstStore.close()
+    }
+  })
+})
+
+describe("session detach and deletion", () => {
+  test("detach preserves state while explicit deletion starts retention", () => {
+    const store = createStore()
+    const now = 1_000
+    try {
+      store.registerClient(
+        "client-1",
+        { pid: 1, projectRoot: "/tmp/project" },
+        now,
+      )
+      store.registerSession(
+        {
+          clientId: "client-1",
+          sessionId: "session-1",
+          repo: "acme/repo",
+          branch: "feature/x",
+          isPrimary: true,
+          status: "active",
+          busyState: "idle",
+        },
+        now,
+      )
+
+      store.unregisterSession("session-1", now + 1)
+      assert.equal(store.getSession("session-1")?.status, "detached")
+
+      assert.equal(store.deleteSession("session-1", now + 2), true)
+      assert.equal(store.getSession("session-1")?.status, "closed")
+      store.pruneClosedSessions(
+        PREMIND_CLOSED_SESSION_RETENTION_MS,
+        now + 2 + PREMIND_CLOSED_SESSION_RETENTION_MS + 1,
+      )
+      assert.equal(store.getSession("session-1"), undefined)
+    } finally {
+      store.close()
     }
   })
 })

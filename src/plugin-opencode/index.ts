@@ -24,6 +24,7 @@ type DaemonClientLike = {
   registerSession: (payload: Omit<import("../shared/schema.ts").RegisterSessionPayload, "clientId">) => Promise<unknown>
   updateSessionState: (payload: import("../shared/schema.ts").UpdateSessionStatePayload) => Promise<unknown>
   unregisterSession: (sessionId: string) => Promise<unknown>
+  deleteSession?: (sessionId: string) => Promise<unknown>
   pauseSession: (sessionId: string) => Promise<unknown>
   resumeSession: (sessionId: string) => Promise<unknown>
   activateWorktree: (payload: import("../shared/schema.ts").ActivateWorktreePayload) => Promise<unknown>
@@ -1005,7 +1006,9 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
         const wasKnownChild = knownChildSessions.delete(sessionID)
         knownRootSessions.delete(sessionID)
         if (!wasKnownChild) {
-          await daemon.unregisterSession(sessionID)
+          await (daemon.deleteSession
+				? daemon.deleteSession(sessionID)
+				: daemon.unregisterSession(sessionID))
         }
         cancelDelivery(sessionID)
         ownedSessions.delete(sessionID)

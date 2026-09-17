@@ -150,6 +150,14 @@ export class PremindDaemonClient {
     })
   }
 
+  async deleteSession(sessionId: string) {
+    await this.requestWithRetry({
+      type: "deleteSession",
+      protocolVersion: PREMIND_PROTOCOL_VERSION,
+      payload: { sessionId },
+    })
+  }
+
   async pauseSession(sessionId: string) {
     await this.requestWithRetry({
       type: "pauseSession",

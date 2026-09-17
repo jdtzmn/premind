@@ -46,7 +46,7 @@ type SessionRow = {
 	branch: string;
 	pr_number: number | null;
 	is_primary: number;
-	status: "active" | "paused" | "closed";
+	status: "active" | "paused" | "detached" | "closed";
 	busy_state: "busy" | "idle";
 	last_delivered_event_seq: number;
 	last_activity_at: number;
@@ -682,11 +682,41 @@ export class StateStore {
 		return true;
 	}
 
-	unregisterSession(sessionId: string) {
-		this.db.prepare(`DELETE FROM sessions WHERE session_id = ?`).run(sessionId);
+	unregisterSession(sessionId: string, now = Date.now()): boolean {
+		const result = this.db
+			.prepare(
+				`UPDATE sessions
+				 SET status = 'detached', busy_state = 'idle', updated_at = :now
+				 WHERE session_id = :sessionId AND status != 'closed'
+				   AND NOT EXISTS (
+				     SELECT 1 FROM session_daemon_leases
+				     WHERE session_id = :sessionId AND expires_at > :now
+				   )`,
+			)
+			.run({ sessionId, now });
+		if ((result.changes as number) === 1) this.refreshWatcherCounts(now);
+		return (result.changes as number) === 1;
+	}
+
+	deleteSession(sessionId: string, now = Date.now()): boolean {
+		const result = this.db
+			.prepare(
+				`UPDATE sessions
+				 SET status = 'closed', busy_state = 'idle', updated_at = :now
+				 WHERE session_id = :sessionId AND status != 'closed'`,
+			)
+			.run({ sessionId, now });
+		if ((result.changes as number) === 0) return false;
 		this.db
-			.prepare(`DELETE FROM reminder_batches WHERE session_id = ?`)
+			.prepare(
+				`UPDATE session_daemon_leases
+				 SET owner_instance_id = NULL, client_incarnation_nonce = NULL,
+				     lease_token_hash = NULL, expires_at = NULL
+				 WHERE session_id = ?`,
+			)
 			.run(sessionId);
+		this.refreshWatcherCounts(now);
+		return true;
 	}
 
 	upsertWorktreeBinding(
@@ -898,7 +928,7 @@ export class StateStore {
 				 WHERE session_subscriptions.repo = :repo
 				   AND session_subscriptions.pr_number = :prNumber
 				   AND session_subscriptions.state = 'active'
-				   AND sessions.status != 'closed'
+				   AND sessions.status IN ('active', 'paused')
 				 ORDER BY session_subscriptions.created_at ASC`,
 			)
 			.all({ repo, prNumber }) as Array<{
@@ -1313,7 +1343,7 @@ export class StateStore {
 			repo: string;
 			branch: string;
 			pr_number: number | null;
-			status: "active" | "paused" | "closed";
+			status: "active" | "paused" | "detached" | "closed";
 			busy_state: "busy" | "idle";
 			last_delivered_event_seq: number;
 		}>;
@@ -1432,7 +1462,9 @@ export class StateStore {
 
 	countActiveSessions() {
 		const row = this.db
-			.prepare(`SELECT COUNT(*) AS count FROM sessions WHERE status != 'closed'`)
+			.prepare(
+				`SELECT COUNT(*) AS count FROM sessions WHERE status IN ('active', 'paused')`,
+			)
 			.get() as { count: number };
 		return row.count;
 	}
@@ -1454,7 +1486,8 @@ export class StateStore {
 				`SELECT
 				   (SELECT COUNT(*) FROM session_subscriptions
 				      INNER JOIN sessions USING (session_id)
-				      WHERE session_subscriptions.state = 'active' AND sessions.status != 'closed') +
+				      WHERE session_subscriptions.state = 'active'
+				        AND sessions.status IN ('active', 'paused')) +
 				   (SELECT COUNT(*) FROM pr_watchers WHERE active_session_count > 0) +
 				   (SELECT COUNT(*) FROM branch_watchers WHERE active_session_count > 0)
 				 AS count`,
@@ -1494,7 +1527,7 @@ export class StateStore {
 				 LEFT JOIN branch_watchers
 				   ON branch_watchers.repo = worktree_bindings.repo
 				  AND branch_watchers.branch = worktree_bindings.branch
-				 WHERE sessions.status != 'closed'
+				 WHERE sessions.status IN ('active', 'paused')
 				   AND worktree_bindings.branch IS NOT NULL
 				   AND worktree_bindings.state != 'detached_head'
 				 UNION ALL
@@ -1504,7 +1537,7 @@ export class StateStore {
 				 LEFT JOIN branch_watchers
 				   ON branch_watchers.repo = sessions.repo
 				  AND branch_watchers.branch = sessions.branch
-				 WHERE sessions.status != 'closed'
+				 WHERE sessions.status IN ('active', 'paused')
 				   AND worktree_bindings.session_id IS NULL
 				 `,
 			)
@@ -1783,7 +1816,7 @@ export class StateStore {
 				   ON pr_watchers.repo = session_subscriptions.repo
 				  AND pr_watchers.pr_number = session_subscriptions.pr_number
 				 WHERE session_subscriptions.state = 'active'
-				   AND sessions.status != 'closed'
+				   AND sessions.status IN ('active', 'paused')
 				 GROUP BY session_subscriptions.repo, session_subscriptions.pr_number
 				 ORDER BY MIN(session_subscriptions.updated_at) ASC`,
 			)
@@ -1889,7 +1922,8 @@ export class StateStore {
 				`
           SELECT *
           FROM sessions
-          WHERE repo = :repo AND pr_number = :prNumber AND status != 'closed'
+          WHERE repo = :repo AND pr_number = :prNumber
+            AND status IN ('active', 'paused')
         `,
 			)
 			.all({ repo, prNumber }) as SessionRow[];
@@ -2709,7 +2743,8 @@ export class StateStore {
 				`
           SELECT *
           FROM sessions
-          WHERE repo = :repo AND branch = :branch AND status != 'closed'
+          WHERE repo = :repo AND branch = :branch
+            AND status IN ('active', 'paused')
         `,
 			)
 			.all({ repo, branch }) as SessionRow[];
@@ -2849,7 +2884,7 @@ export class StateStore {
             FROM sessions
             LEFT JOIN worktree_bindings
               ON worktree_bindings.session_id = sessions.session_id
-            WHERE sessions.status != 'closed'
+            WHERE sessions.status IN ('active', 'paused')
               AND (
                 (worktree_bindings.session_id IS NOT NULL
                   AND worktree_bindings.repo = branch_watchers.repo
@@ -2876,7 +2911,7 @@ export class StateStore {
             WHERE session_subscriptions.repo = pr_watchers.repo
               AND session_subscriptions.pr_number = pr_watchers.pr_number
               AND session_subscriptions.state = 'active'
-              AND sessions.status != 'closed'
+              AND sessions.status IN ('active', 'paused')
           ),
               updated_at = CASE
                 WHEN active_session_count != (
@@ -2887,7 +2922,7 @@ export class StateStore {
                   WHERE session_subscriptions.repo = pr_watchers.repo
                     AND session_subscriptions.pr_number = pr_watchers.pr_number
                     AND session_subscriptions.state = 'active'
-                    AND sessions.status != 'closed'
+                    AND sessions.status IN ('active', 'paused')
                 ) THEN :now
                 ELSE updated_at
               END

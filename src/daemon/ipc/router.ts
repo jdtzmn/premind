@@ -155,9 +155,18 @@ export class Router {
 					return this.ok({ updated: true, revived: result.revived });
 				}
 				case "unregisterSession":
-					this.worktreeBindings.closeSession(request.payload.sessionId);
 					this.store.unregisterSession(request.payload.sessionId);
 					return this.ok({ unregistered: true });
+				case "deleteSession": {
+					const deleted = this.store.deleteSession(request.payload.sessionId);
+					if (!deleted)
+						return this.fail(
+							"SESSION_NOT_FOUND",
+							`Unknown session: ${request.payload.sessionId}`,
+						);
+					this.worktreeBindings.closeSession(request.payload.sessionId);
+					return this.ok({ deleted: true });
+				}
 				case "pauseSession": {
 					const paused = this.store.setSessionPaused(
 						request.payload.sessionId,

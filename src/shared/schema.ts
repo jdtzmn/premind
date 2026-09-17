@@ -15,7 +15,7 @@ export const clientMetadataSchema = z
   })
   .strict();
 
-export const sessionStatusSchema = z.enum(["active", "paused", "closed"]);
+export const sessionStatusSchema = z.enum(["active", "paused", "detached", "closed"]);
 export const busyStateSchema = z.enum(["busy", "idle"]);
 export const sessionHostSchema = z.enum(["opencode", "pi", "claude"]);
 
@@ -85,6 +85,7 @@ export const unregisterSessionPayloadSchema = z
     sessionId: z.string().min(1),
   })
   .strict();
+export const deleteSessionPayloadSchema = unregisterSessionPayloadSchema;
 export const ensureSessionControlPayloadSchema = z
   .object({
     clientId: z.string().min(1),
@@ -289,6 +290,7 @@ export type UpdateSessionStatePayload = z.infer<
 export type UnregisterSessionPayload = z.infer<
   typeof unregisterSessionPayloadSchema
 >;
+export type DeleteSessionPayload = z.infer<typeof deleteSessionPayloadSchema>;
 export type SessionControlPayload = z.infer<typeof sessionControlPayloadSchema>;
 export type ClaudeSessionPayload = z.infer<typeof claudeSessionPayloadSchema>;
 export type ActivateWorktreePayload = z.infer<

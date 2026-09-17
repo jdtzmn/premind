@@ -12,6 +12,7 @@ import {
   confirmClaudeHandoffPayloadSchema,
   claudeSessionPayloadSchema,
   debugStatusPayloadSchema,
+  deleteSessionPayloadSchema,
   debugStatusResponseSchema,
   ensureSessionControlPayloadSchema,
   getGlobalDisabledPayloadSchema,
@@ -93,6 +94,11 @@ export const requestSchema = z.discriminatedUnion("type", [
     type: z.literal("unregisterSession"),
     protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION),
     payload: unregisterSessionPayloadSchema,
+  }),
+  z.object({
+    type: z.literal("deleteSession"),
+    protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION),
+    payload: deleteSessionPayloadSchema,
   }),
   z.object({
     type: z.literal("pauseSession"),
