@@ -282,7 +282,7 @@ describe("PremindDaemonClient Codex operations", () => {
     }
   });
 
-  test("allows ordinary operations to outlast a short GitHub CLI call", async () => {
+  test("leaves ordinary operations without a client deadline", async () => {
     const directory = fs.mkdtempSync(
       path.join(os.tmpdir(), "premind-client-slow-operation-"),
     );
@@ -293,7 +293,7 @@ describe("PremindDaemonClient Codex operations", () => {
           socket.end(
             `${JSON.stringify({ ok: true, protocolVersion: 1, result: {} })}\n`,
           );
-        }, 2_100);
+        }, 50);
       });
     });
     await new Promise<void>((resolve, reject) => {
@@ -306,6 +306,10 @@ describe("PremindDaemonClient Codex operations", () => {
         ensureDaemon: async () => undefined,
         maxRetries: 0,
       });
+      assert.equal(
+        (client as unknown as { requestTimeoutMs?: number }).requestTimeoutMs,
+        undefined,
+      );
       await client.heartbeat();
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));

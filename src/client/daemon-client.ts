@@ -39,8 +39,6 @@ const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 500;
 const isUnsupportedOperation = (error: unknown) =>
   error instanceof Error && error.message.startsWith("BAD_REQUEST:");
-const REQUEST_TIMEOUT_MS = 30_000;
-
 export type PremindDaemonClientOptions = {
   socketPath?: string;
   ensureDaemon: () => Promise<void>;
@@ -55,21 +53,22 @@ export class PremindDaemonClient {
   private readonly ensureDaemon: () => Promise<void>;
   private readonly maxRetries: number;
   private readonly retryDelayMs: number;
-  private readonly requestTimeoutMs: number;
+  private readonly requestTimeoutMs: number | undefined;
 
   constructor(options: PremindDaemonClientOptions) {
     this.socketPath = options.socketPath ?? PREMIND_SOCKET_PATH;
     this.ensureDaemon = options.ensureDaemon;
     this.maxRetries = options.maxRetries ?? MAX_RETRIES;
     this.retryDelayMs = options.retryDelayMs ?? RETRY_DELAY_MS;
-    this.requestTimeoutMs = options.requestTimeoutMs ?? REQUEST_TIMEOUT_MS;
+    this.requestTimeoutMs = options.requestTimeoutMs;
     if (
       !Number.isInteger(this.maxRetries) ||
       this.maxRetries < 0 ||
       !Number.isFinite(this.retryDelayMs) ||
       this.retryDelayMs < 0 ||
-      !Number.isFinite(this.requestTimeoutMs) ||
-      this.requestTimeoutMs <= 0
+      (this.requestTimeoutMs !== undefined &&
+        (!Number.isFinite(this.requestTimeoutMs) ||
+          this.requestTimeoutMs <= 0))
     ) {
       throw new Error("Invalid premind daemon client retry or timeout options");
     }
@@ -441,15 +440,17 @@ export class PremindDaemonClient {
       let buffer = "";
 
       socket.setEncoding("utf8");
-      socket.setTimeout(this.requestTimeoutMs, () => {
-        const error = Object.assign(
-          new Error(
-            `Premind daemon request timed out after ${this.requestTimeoutMs}ms`,
-          ),
-          { code: "ETIMEDOUT" },
-        );
-        socket.destroy(error);
-      });
+      if (this.requestTimeoutMs !== undefined) {
+        socket.setTimeout(this.requestTimeoutMs, () => {
+          const error = Object.assign(
+            new Error(
+              `Premind daemon request timed out after ${this.requestTimeoutMs}ms`,
+            ),
+            { code: "ETIMEDOUT" },
+          );
+          socket.destroy(error);
+        });
+      }
       socket.once("error", reject);
       socket.once("connect", () => {
         socket.write(`${JSON.stringify(message)}\n`);
