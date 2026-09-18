@@ -124,7 +124,7 @@ test("captures early daemon stderr without retaining child pipes", async () => {
 
 test("launches the dependency-closed daemon outside repository node_modules", async () => {
   const dir = createTempDir();
-  const sourceBundle = path.resolve("runtime", "premind-daemon.mjs");
+  const sourceBundle = path.resolve("generated", "premind-daemon.mjs");
   const daemonEntry = path.join(dir, "premind-daemon.mjs");
   fs.copyFileSync(sourceBundle, daemonEntry);
   const socketPath = path.join(dir, "premind.sock");
@@ -158,7 +158,7 @@ test("launches the dependency-closed daemon outside repository node_modules", as
 test("launcher caller exits promptly while the detached daemon remains reachable", async () => {
   const dir = createTempDir();
   const daemonEntry = path.join(dir, "premind-daemon.mjs");
-  fs.copyFileSync(path.resolve("runtime", "premind-daemon.mjs"), daemonEntry);
+  fs.copyFileSync(path.resolve("generated", "premind-daemon.mjs"), daemonEntry);
   const socketPath = path.join(dir, "premind.sock");
   const stateDir = path.join(dir, "state");
   const driverPath = path.join(dir, "launch.mjs");

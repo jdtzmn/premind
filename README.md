@@ -78,7 +78,7 @@ codex plugin add premind@premind
 
 Review and trust Premind's lifecycle hooks before enabling them. The plugin uses `SessionStart`, `UserPromptSubmit`, `Stop`, `Interrupt`, and `SessionEnd`; it deliberately does **not** install `PostToolUse`. If hooks are not running, open Codex's hook-management UI, review the commands, and trust the current plugin definition.
 
-The installed plugin runs dependency-closed Node bundles from its own `dist/` directory. It requires **Node 22.13+**, `git`, and an authenticated GitHub CLI (`gh auth login`). Bun, `tsx`, a source checkout, and repository `node_modules` are not runtime prerequisites. Hooks and MCP use Codex-managed `PLUGIN_DATA` for local receipts and session handles; Premind only uses network access for GitHub polling.
+The installed plugin runs dependency-closed Node bundles from its own `generated/` directory. It requires **Node 22.13+**, `git`, and an authenticated GitHub CLI (`gh auth login`). Bun, `tsx`, a source checkout, and repository `node_modules` are not runtime prerequisites. Hooks and MCP use Codex-managed `PLUGIN_DATA` for local receipts and session handles; Premind only uses network access for GitHub polling.
 
 Codex cannot wake an already-idle stock CLI thread. Updates found while idle remain durable and arrive at the next available `SessionStart`, `UserPromptSubmit`, or `Stop` boundary. An interrupted delivery may be shown again rather than silently lost.
 

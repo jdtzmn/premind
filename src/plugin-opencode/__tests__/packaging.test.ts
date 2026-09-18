@@ -55,7 +55,7 @@ describe("plugin packaging", () => {
 	});
 
 	test("daemon entry file exists relative to plugin", () => {
-		const daemonEntry = path.resolve(ROOT, "runtime", "premind-daemon.mjs");
+		const daemonEntry = path.resolve(ROOT, "generated", "premind-daemon.mjs");
 		assert.ok(
 			fs.existsSync(daemonEntry),
 			`daemon entry does not exist at ${daemonEntry}`,
@@ -70,7 +70,7 @@ describe("plugin packaging", () => {
 		assert.ok("@opencode-ai/plugin" in deps, "missing @opencode-ai/plugin");
 		assert.ok("zod" in deps, "missing zod");
 		assert.equal("tsx" in deps, false, "tsx must not be a runtime dependency");
-		assert.ok(pkg.files?.includes("runtime"), "package files should include runtime");
+		assert.ok(pkg.files?.includes("generated"), "package files should include generated runtime");
 		assert.equal(pkg.engines?.node, ">=22.13.0");
 		assert.ok(
 			!("better-sqlite3" in deps),
