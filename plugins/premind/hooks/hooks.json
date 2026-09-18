@@ -7,7 +7,7 @@
 				"hooks": [
 					{
 						"type": "command",
-						"command": "node \"${PLUGIN_ROOT}/dist/premind-hook.mjs\" SessionStart",
+						"command": "node \"${PLUGIN_ROOT}/generated/premind-hook.mjs\" SessionStart",
 						"timeout": 10,
 						"statusMessage": "Connecting premind"
 					}
@@ -19,7 +19,7 @@
 				"hooks": [
 					{
 						"type": "command",
-						"command": "node \"${PLUGIN_ROOT}/dist/premind-hook.mjs\" UserPromptSubmit",
+						"command": "node \"${PLUGIN_ROOT}/generated/premind-hook.mjs\" UserPromptSubmit",
 						"timeout": 10
 					}
 				]
@@ -30,7 +30,7 @@
 				"hooks": [
 					{
 						"type": "command",
-						"command": "node \"${PLUGIN_ROOT}/dist/premind-hook.mjs\" Stop",
+						"command": "node \"${PLUGIN_ROOT}/generated/premind-hook.mjs\" Stop",
 						"timeout": 10,
 						"statusMessage": "Checking for PR updates"
 					}
@@ -42,7 +42,7 @@
 				"hooks": [
 					{
 						"type": "command",
-						"command": "node \"${PLUGIN_ROOT}/dist/premind-hook.mjs\" Interrupt",
+						"command": "node \"${PLUGIN_ROOT}/generated/premind-hook.mjs\" Interrupt",
 						"timeout": 3
 					}
 				]
@@ -53,7 +53,7 @@
 				"hooks": [
 					{
 						"type": "command",
-						"command": "node \"${PLUGIN_ROOT}/dist/premind-hook.mjs\" SessionEnd",
+						"command": "node \"${PLUGIN_ROOT}/generated/premind-hook.mjs\" SessionEnd",
 						"timeout": 3
 					}
 				]

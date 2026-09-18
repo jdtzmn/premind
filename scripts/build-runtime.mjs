@@ -8,98 +8,112 @@ import {
 } from "node:fs";
 import path from "node:path";
 
-const pluginDist = "plugins/premind/dist";
+const generatedDirectories = {
+	package: "generated",
+	claude: "plugin-claude/generated",
+	codex: "plugins/premind/generated",
+};
+
+const publications = Object.entries(generatedDirectories).map(([name, output]) => ({
+	name,
+	output,
+	temporary: `${output}.tmp-${process.pid}`,
+	previous: `${output}.previous-${process.pid}`,
+}));
+const publicationByName = new Map(publications.map((entry) => [entry.name, entry]));
+const stagedPath = (publication, fileName) => {
+	const directory = publicationByName.get(publication)?.temporary;
+	if (!directory) throw new Error(`Unknown generated publication: ${publication}`);
+	return path.join(directory, fileName);
+};
+
 const targets = [
 	{
 		name: "daemon",
 		entrypoint: "src/daemon/index.ts",
-		output: "runtime/premind-daemon.mjs",
-		copies: ["plugin-claude/runtime/premind-daemon.mjs"],
-		pluginArtifact: "premind-daemon.mjs",
+		output: stagedPath("package", "premind-daemon.mjs"),
+		copies: [
+			stagedPath("claude", "premind-daemon.mjs"),
+			stagedPath("codex", "premind-daemon.mjs"),
+		],
 		external: ["node:sqlite"],
 	},
 	{
 		name: "codex-hook",
 		entrypoint: "src/codex/hook-runner.ts",
-		output: "runtime/premind-hook.mjs",
+		output: stagedPath("codex", "premind-hook.mjs"),
 		copies: [],
-		pluginArtifact: "premind-hook.mjs",
 		external: [],
 	},
 	{
 		name: "codex-mcp",
 		entrypoint: "src/codex/mcp-server.ts",
-		output: "runtime/premind-mcp.mjs",
+		output: stagedPath("codex", "premind-mcp.mjs"),
 		copies: [],
-		pluginArtifact: "premind-mcp.mjs",
 		external: [],
 	},
 	{
 		name: "daemon-startup",
 		entrypoint: "src/shared/daemon-startup.ts",
-		output: "plugin-claude/runtime/daemon-startup.mjs",
+		output: stagedPath("claude", "daemon-startup.mjs"),
 		copies: [],
 		external: [],
 	},
-].sort((left, right) => left.output.localeCompare(right.output));
+].sort((left, right) => left.name.localeCompare(right.name));
 
 const bun = process.env.BUN_BINARY ?? "bun";
-const temporaryPathFor = (filePath) => {
-	const extension = path.extname(filePath);
-	const stem = extension ? filePath.slice(0, -extension.length) : filePath;
-	return `${stem}.tmp-${process.pid}${extension}`;
+
+const preparePublications = () => {
+	for (const publication of publications) {
+		rmSync(publication.temporary, { recursive: true, force: true });
+		rmSync(publication.previous, { recursive: true, force: true });
+		mkdirSync(publication.temporary, { recursive: true });
+	}
 };
 
-const syncPortablePluginArtifacts = () => {
-	const temporaryDist = `${pluginDist}.tmp-${process.pid}`;
-	const previousDist = `${pluginDist}.previous-${process.pid}`;
-	rmSync(temporaryDist, { recursive: true, force: true });
-	rmSync(previousDist, { recursive: true, force: true });
-	mkdirSync(temporaryDist, { recursive: true });
+const publishGeneratedDirectories = () => {
+	if (process.env.PREMIND_BUILD_FAIL_BEFORE_PLUGIN_SYNC === "1") {
+		throw new Error("Injected failure before generated artifact publication");
+	}
 
+	const published = [];
 	try {
-		for (const target of targets) {
-			if (!target.pluginArtifact) continue;
-			if (!existsSync(target.output)) {
-				throw new Error(`Missing plugin runtime artifact: ${target.output}`);
+		for (const publication of publications) {
+			if (existsSync(publication.output)) {
+				renameSync(publication.output, publication.previous);
 			}
-			copyFileSync(target.output, path.join(temporaryDist, target.pluginArtifact));
+			try {
+				renameSync(publication.temporary, publication.output);
+			} catch (error) {
+				if (existsSync(publication.previous)) {
+					renameSync(publication.previous, publication.output);
+				}
+				throw error;
+			}
+			published.push(publication);
 		}
-		if (process.env.PREMIND_BUILD_FAIL_BEFORE_PLUGIN_SYNC === "1") {
-			throw new Error("Injected failure before portable plugin artifact sync");
+		for (const publication of publications) {
+			rmSync(publication.previous, { recursive: true, force: true });
 		}
-
-		if (existsSync(pluginDist)) renameSync(pluginDist, previousDist);
-		try {
-			renameSync(temporaryDist, pluginDist);
-		} catch (error) {
-			if (existsSync(previousDist)) renameSync(previousDist, pluginDist);
-			throw error;
+	} catch (error) {
+		for (const publication of [...published].reverse()) {
+			rmSync(publication.output, { recursive: true, force: true });
+			if (existsSync(publication.previous)) {
+				renameSync(publication.previous, publication.output);
+			}
 		}
-		rmSync(previousDist, { recursive: true, force: true });
-	} finally {
-		rmSync(temporaryDist, { recursive: true, force: true });
-		if (existsSync(previousDist) && !existsSync(pluginDist)) {
-			renameSync(previousDist, pluginDist);
-		}
+		throw error;
 	}
 };
 
-for (const target of targets) {
-	const copies = [...target.copies].sort();
-	if (!existsSync(target.entrypoint)) {
-		throw new Error(`Missing runtime entrypoint: ${target.entrypoint}`);
-	}
+preparePublications();
+try {
+	for (const target of targets) {
+		if (!existsSync(target.entrypoint)) {
+			throw new Error(`Missing runtime entrypoint: ${target.entrypoint}`);
+		}
 
-	mkdirSync(path.dirname(target.output), { recursive: true });
-	const temporaryOutput = temporaryPathFor(target.output);
-	const temporaryCopies = copies.map(temporaryPathFor);
-	rmSync(temporaryOutput, { force: true });
-	for (const temporaryCopy of temporaryCopies) {
-		rmSync(temporaryCopy, { force: true });
-	}
-
-	try {
+		mkdirSync(path.dirname(target.output), { recursive: true });
 		const result = spawnSync(
 			bun,
 			[
@@ -108,7 +122,7 @@ for (const target of targets) {
 				"--target=node",
 				"--format=esm",
 				"--banner=// @generated by scripts/build-runtime.mjs; do not edit",
-				`--outfile=${temporaryOutput}`,
+				`--outfile=${target.output}`,
 				...[...target.external]
 					.sort()
 					.flatMap((moduleName) => ["--external", moduleName]),
@@ -132,7 +146,7 @@ for (const target of targets) {
 				path.resolve("node_modules", "@biomejs", "biome", "bin", "biome"),
 				"format",
 				"--write",
-				temporaryOutput,
+				target.output,
 			],
 			{ cwd: process.cwd(), stdio: "inherit" },
 		);
@@ -143,19 +157,20 @@ for (const target of targets) {
 			);
 		}
 
-		renameSync(temporaryOutput, target.output);
-		for (const [index, copy] of copies.entries()) {
+		for (const copy of [...target.copies].sort()) {
 			mkdirSync(path.dirname(copy), { recursive: true });
-			copyFileSync(target.output, temporaryCopies[index]);
-			renameSync(temporaryCopies[index], copy);
+			copyFileSync(target.output, copy);
 		}
-	} finally {
-		rmSync(temporaryOutput, { force: true });
-		for (const temporaryCopy of temporaryCopies) {
-			rmSync(temporaryCopy, { force: true });
+		process.stdout.write(`Built ${target.name}\n`);
+	}
+	publishGeneratedDirectories();
+} finally {
+	for (const publication of publications) {
+		rmSync(publication.temporary, { recursive: true, force: true });
+		if (existsSync(publication.previous) && !existsSync(publication.output)) {
+			renameSync(publication.previous, publication.output);
+		} else {
+			rmSync(publication.previous, { recursive: true, force: true });
 		}
 	}
-	process.stdout.write(`Built ${target.name}: ${target.output}\n`);
 }
-
-syncPortablePluginArtifacts();

@@ -13,7 +13,7 @@
     "docs",
     "extensions",
     "plugin-claude",
-    "runtime",
+    "generated",
     "plugins"
   ],
   "scripts": {

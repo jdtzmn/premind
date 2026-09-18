@@ -49,13 +49,14 @@ const portableArtifactNames = [
 	"premind-hook.mjs",
 	"premind-mcp.mjs",
 ];
+const codexGeneratedPath = path.join(ROOT, "plugins", "premind", "generated");
 const trackedPluginArtifacts = new Set(
-	run("git", ["ls-files", "--", "plugins/premind/dist"])
+	run("git", ["ls-files", "--", "plugins/premind/generated"])
 		.split("\n")
 		.filter(Boolean),
 );
 for (const name of portableArtifactNames) {
-	const artifact = `plugins/premind/dist/${name}`;
+	const artifact = `plugins/premind/generated/${name}`;
 	assert.ok(trackedPluginArtifacts.has(artifact), `${artifact} is not tracked`);
 	assert.ok(fs.existsSync(path.join(ROOT, artifact)), `${artifact} is missing`);
 }
@@ -64,9 +65,9 @@ const runCodex = (args) =>
 	run("codex", args, { env: { ...process.env, CODEX_HOME: codexHome } });
 
 const generatedDirectories = [
-	path.join(ROOT, "runtime"),
-	path.join(ROOT, "plugins", "premind", "dist"),
-	path.join(ROOT, "plugin-claude", "runtime"),
+	path.join(ROOT, "generated"),
+	codexGeneratedPath,
+	path.join(ROOT, "plugin-claude", "generated"),
 ];
 
 for (const directory of generatedDirectories) {
@@ -83,9 +84,9 @@ try {
 		"plugins/premind/hooks/hooks.json",
 		"plugins/premind/mcp.json",
 		"plugins/premind/skills/premind/SKILL.md",
-		"plugins/premind/dist/premind-daemon.mjs",
-		"plugins/premind/dist/premind-hook.mjs",
-		"plugins/premind/dist/premind-mcp.mjs",
+		"plugins/premind/generated/premind-daemon.mjs",
+		"plugins/premind/generated/premind-hook.mjs",
+		"plugins/premind/generated/premind-mcp.mjs",
 	]) {
 		assert.ok(files.has(file), `npm package is missing ${file}`);
 	}
@@ -99,7 +100,7 @@ try {
 	const artifactsBeforeFailedBuild = new Map(
 		artifactNames.map((name) => [
 			name,
-			fs.readFileSync(path.join(ROOT, "plugins", "premind", "dist", name), "utf8"),
+			fs.readFileSync(path.join(codexGeneratedPath, name), "utf8"),
 		]),
 	);
 	const failedBuild = spawnSync(
@@ -118,7 +119,7 @@ try {
 	);
 	for (const name of artifactNames) {
 		assert.equal(
-			fs.readFileSync(path.join(ROOT, "plugins", "premind", "dist", name), "utf8"),
+			fs.readFileSync(path.join(codexGeneratedPath, name), "utf8"),
 			artifactsBeforeFailedBuild.get(name),
 		);
 	}
@@ -144,9 +145,9 @@ try {
 		".codex-plugin/plugin.json",
 		"hooks/hooks.json",
 		"mcp.json",
-		"dist/premind-daemon.mjs",
-		"dist/premind-hook.mjs",
-		"dist/premind-mcp.mjs",
+		"generated/premind-daemon.mjs",
+		"generated/premind-hook.mjs",
+		"generated/premind-mcp.mjs",
 	]) {
 		assert.ok(
 			fs.existsSync(path.join(installed.installedPath, file)),
@@ -169,7 +170,7 @@ try {
 	};
 	const mcpExecution = spawnSync(
 		process.execPath,
-		[path.join(installed.installedPath, "dist", "premind-mcp.mjs")],
+		[path.join(installed.installedPath, "generated", "premind-mcp.mjs")],
 		{
 			cwd: isolatedCwd,
 			encoding: "utf8",
@@ -191,7 +192,7 @@ try {
 	const hookExecution = spawnSync(
 		process.execPath,
 		[
-			path.join(installed.installedPath, "dist", "premind-hook.mjs"),
+			path.join(installed.installedPath, "generated", "premind-hook.mjs"),
 			"SessionEnd",
 		],
 		{

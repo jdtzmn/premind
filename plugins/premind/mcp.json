@@ -4,7 +4,7 @@
 		"premind": {
 			"type": "stdio",
 			"command": "node",
-			"args": ["${PLUGIN_ROOT}/dist/premind-mcp.mjs"],
+			"args": ["${PLUGIN_ROOT}/generated/premind-mcp.mjs"],
 			"cwd": "${PLUGIN_ROOT}"
 		}
 	}

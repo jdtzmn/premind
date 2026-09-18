@@ -3,3 +3,10 @@ dist/
 *.db
 *.db-shm
 *.db-wal
+.DS_Store
+*.tgz
+.pi/tasks/
+.pi/delegate/
+.pi/fusion/
+**/generated.tmp-*/
+**/generated.previous-*/

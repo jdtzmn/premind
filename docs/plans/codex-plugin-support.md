@@ -319,7 +319,7 @@ Do not advertise broad `Read`/`Write` capabilities unless schema validation and 
       "matcher": "startup|resume|clear|compact",
       "hooks": [{
         "type": "command",
-        "command": "node \"${PLUGIN_ROOT}/dist/premind-hook.mjs\" SessionStart",
+        "command": "node \"${PLUGIN_ROOT}/generated/premind-hook.mjs\" SessionStart",
         "timeout": 10,
         "statusMessage": "Connecting premind"
       }]
@@ -327,14 +327,14 @@ Do not advertise broad `Read`/`Write` capabilities unless schema validation and 
     "UserPromptSubmit": [{
       "hooks": [{
         "type": "command",
-        "command": "node \"${PLUGIN_ROOT}/dist/premind-hook.mjs\" UserPromptSubmit",
+        "command": "node \"${PLUGIN_ROOT}/generated/premind-hook.mjs\" UserPromptSubmit",
         "timeout": 10
       }]
     }],
     "Stop": [{
       "hooks": [{
         "type": "command",
-        "command": "node \"${PLUGIN_ROOT}/dist/premind-hook.mjs\" Stop",
+        "command": "node \"${PLUGIN_ROOT}/generated/premind-hook.mjs\" Stop",
         "timeout": 10,
         "statusMessage": "Checking for PR updates"
       }]
@@ -342,14 +342,14 @@ Do not advertise broad `Read`/`Write` capabilities unless schema validation and 
     "Interrupt": [{
       "hooks": [{
         "type": "command",
-        "command": "node \"${PLUGIN_ROOT}/dist/premind-hook.mjs\" Interrupt",
+        "command": "node \"${PLUGIN_ROOT}/generated/premind-hook.mjs\" Interrupt",
         "timeout": 3
       }]
     }],
     "SessionEnd": [{
       "hooks": [{
         "type": "command",
-        "command": "node \"${PLUGIN_ROOT}/dist/premind-hook.mjs\" SessionEnd",
+        "command": "node \"${PLUGIN_ROOT}/generated/premind-hook.mjs\" SessionEnd",
         "timeout": 3
       }]
     }]
@@ -370,7 +370,7 @@ There must be no `PostToolUse` entry.
     "premind": {
       "type": "stdio",
       "command": "node",
-      "args": ["${PLUGIN_ROOT}/dist/premind-mcp.mjs"],
+      "args": ["${PLUGIN_ROOT}/generated/premind-mcp.mjs"],
       "cwd": "${PLUGIN_ROOT}"
     }
   }

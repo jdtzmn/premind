@@ -6,8 +6,8 @@ Ship Claude Code support as a self-contained `plugin-claude/` plugin. It reuses 
 
 ## Settled decisions
 
-1. **Plugin root:** `plugin-claude/` is the installable Claude plugin root. Its manifest, hooks, MCP configuration, runtime, and executables remain below that directory.
-2. **Runtime:** ship a committed, reproducibly generated Node bundle at `plugin-claude/runtime/premind-daemon.mjs`. It contains the daemon and required application dependencies; Claude installs must not require a checkout, `tsx`, Bun, or repository-root `node_modules`. Require a Node version compatible with Premind's `node:sqlite` usage (Node 22+).
+1. **Plugin root:** `plugin-claude/` is the installable Claude plugin root. Its manifest, hooks, MCP configuration, generated runtime, and executables remain below that directory.
+2. **Generated runtime:** ship committed, reproducibly generated Node bundles below `plugin-claude/generated/`. They contain the daemon, startup helper, and required application dependencies; Claude installs must not require a checkout, `tsx`, Bun, or repository-root `node_modules`. Require a Node version compatible with Premind's `node:sqlite` usage (Node 22+).
 3. **Daemon launcher:** plugin-local `ensure-daemon.mjs` probes the shared Premind socket, uses a shared-state startup lock, double-checks after obtaining it, spawns the bundled Node daemon detached, waits briefly for IPC readiness, and fails open. It reuses a protocol-compatible daemon started by Pi or OpenCode; package-version differences alone do not trigger a restart.
 4. **Delivery:** v0.2 uses Stop-boundary feedback via `hookSpecificOutput.additionalContext`, never a wall-clock idle timer or `decision: "block"` error.
 5. **Claude identity:** use the shared Claude session key directly. Hooks receive `session_id`; local stdio MCP processes receive `CLAUDE_CODE_SESSION_ID`. At startup, hooks assert these values match and register `host = "claude"`, `host_session_id = <Claude ID>`. MCP tools derive their session from the environment rather than accepting a model-supplied session ID.
@@ -123,7 +123,7 @@ The plugin-bundled stdio MCP server is a thin IPC proxy. It reads `CLAUDE_CODE_S
 
 ### Phase 3 — Bundle and launch the daemon
 
-- Add a reproducible bundle command producing committed `plugin-claude/runtime/premind-daemon.mjs`.
+- Add a reproducible bundle command producing committed artifacts below `plugin-claude/generated/`.
 - Implement the lock/probe/spawn/readiness launcher.
 - Add protocol compatibility checks and installed-copy tests that run without repository paths or `tsx`.
 

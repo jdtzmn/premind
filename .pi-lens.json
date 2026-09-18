@@ -1,6 +1,7 @@
 {
   "ignore": [
-    "runtime/**",
-    "plugin-claude/runtime/**"
+    "generated/**",
+    "plugin-claude/generated/**",
+    "plugins/premind/generated/**"
   ]
 }

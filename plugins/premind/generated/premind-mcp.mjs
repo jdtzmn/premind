@@ -5044,7 +5044,7 @@ var DEFAULT_DAEMON_ENTRY = path4.resolve(
 	THIS_DIR,
 	"..",
 	"..",
-	"runtime",
+	"generated",
 	"premind-daemon.mjs",
 );
 var CONNECT_RETRY_MS = 300;

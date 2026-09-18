@@ -7,9 +7,10 @@ import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 
 const ROOT = path.resolve(import.meta.dirname, "..", "..", "..");
-const HOOK_BUNDLE = path.join(ROOT, "runtime", "premind-hook.mjs");
-const DAEMON_BUNDLE = path.join(ROOT, "runtime", "premind-daemon.mjs");
-const MCP_BUNDLE = path.join(ROOT, "runtime", "premind-mcp.mjs");
+const CODEX_GENERATED = path.join(ROOT, "plugins", "premind", "generated");
+const HOOK_BUNDLE = path.join(CODEX_GENERATED, "premind-hook.mjs");
+const DAEMON_BUNDLE = path.join(CODEX_GENERATED, "premind-daemon.mjs");
+const MCP_BUNDLE = path.join(CODEX_GENERATED, "premind-mcp.mjs");
 
 test("Codex hook bundle runs outside repository node_modules", () => {
 	const directory = fs.mkdtempSync(

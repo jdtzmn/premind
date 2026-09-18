@@ -53,7 +53,7 @@ Install the self-contained Claude plugin from a checkout or released package roo
 claude plugin install /path/to/premind/plugin-claude
 ```
 
-The plugin requires **Node 22.13+** for `node:sqlite`. Its hooks start or reuse a shared local daemon from `plugin-claude/runtime/premind-daemon.mjs`; a Claude install does not need Bun, `tsx`, a repository checkout, or repository-root `node_modules` at runtime. The launcher probes the shared socket, coordinates startup with a state-directory lock, and fails open if the daemon cannot start.
+The plugin requires **Node 22.13+** for `node:sqlite`. Its hooks start or reuse a shared local daemon from `plugin-claude/generated/premind-daemon.mjs`; a Claude install does not need Bun, `tsx`, a repository checkout, or repository-root `node_modules` at runtime. The launcher probes the shared socket, coordinates startup with a state-directory lock, and fails open if the daemon cannot start.
 
 Claude reminders are delivered only at a `Stop` boundary. A delivered batch is confirmed on Claude's next continuation Stop hook; interrupted handoffs become retryable, so duplicates are preferred to lost reminders. Inactive Claude sessions are not woken in v0.2.
 

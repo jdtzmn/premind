@@ -16,7 +16,7 @@ const DEFAULT_DAEMON_ENTRY = path.resolve(
   THIS_DIR,
   "..",
   "..",
-  "runtime",
+  "generated",
   "premind-daemon.mjs",
 );
 const CONNECT_RETRY_MS = 300;
