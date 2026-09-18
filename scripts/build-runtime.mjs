@@ -9,7 +9,6 @@ import {
 import path from "node:path";
 
 const generatedDirectories = {
-	package: "generated",
 	claude: "plugin-claude/generated",
 	codex: "plugins/premind/generated",
 };
@@ -31,11 +30,8 @@ const targets = [
 	{
 		name: "daemon",
 		entrypoint: "src/daemon/index.ts",
-		output: stagedPath("package", "premind-daemon.mjs"),
-		copies: [
-			stagedPath("claude", "premind-daemon.mjs"),
-			stagedPath("codex", "premind-daemon.mjs"),
-		],
+		output: stagedPath("codex", "premind-daemon.mjs"),
+		copies: [stagedPath("claude", "premind-daemon.mjs")],
 		external: ["node:sqlite"],
 	},
 	{

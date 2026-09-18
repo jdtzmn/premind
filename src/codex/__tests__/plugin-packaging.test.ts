@@ -40,7 +40,11 @@ test("ships a version-synchronized portable Codex plugin", () => {
 	assert.equal(plugin.extensions?.["com.openai"]?.hooks, "./hooks/hooks.json");
 	assert.equal(compatibility.hooks, "./hooks/hooks.json");
 	assert.ok(packageJson.files?.includes("plugins"));
-	assert.equal(packageJson.engines?.node, ">=22.13.0");
+	assert.equal(
+		packageJson.engines,
+		undefined,
+		"Codex runtime requirements must not raise Pi/OpenCode package requirements",
+	);
 });
 
 test("exposes only the required lifecycle hooks and Codex MCP bridge", () => {
@@ -100,7 +104,10 @@ test("keeps generated runtime artifacts beside the plugin manifests", () => {
 	}
 	assert.equal(
 		fs.readFileSync(path.join(PLUGIN_ROOT, "generated", "premind-daemon.mjs"), "utf8"),
-		fs.readFileSync(path.join(ROOT, "generated", "premind-daemon.mjs"), "utf8"),
+		fs.readFileSync(
+			path.join(ROOT, "plugin-claude", "generated", "premind-daemon.mjs"),
+			"utf8",
+		),
 	);
 });
 

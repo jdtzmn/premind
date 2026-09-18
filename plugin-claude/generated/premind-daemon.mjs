@@ -4860,31 +4860,6 @@ var isSocketReachable = (
 		connection.once("error", () => done(false));
 	});
 
-// src/shared/node-version.ts
-var MINIMUM_NODE_VERSION = "22.13.0";
-var parseVersion = (value) => {
-	const match = /^v?(\d+)\.(\d+)\.(\d+)/.exec(value.trim());
-	if (!match) return;
-	return [Number(match[1]), Number(match[2]), Number(match[3])];
-};
-var assertSupportedNodeVersion = (version, minimum = MINIMUM_NODE_VERSION) => {
-	const parsed = parseVersion(version);
-	const parsedMinimum = parseVersion(minimum);
-	if (!parsed || !parsedMinimum) {
-		throw new Error(`Cannot parse Node.js version ${JSON.stringify(version)}`);
-	}
-	let comparison = 0;
-	for (let index = 0; index < parsed.length; index += 1) {
-		comparison = parsed[index] - parsedMinimum[index];
-		if (comparison !== 0) break;
-	}
-	if (comparison < 0) {
-		throw new Error(
-			`Premind requires Node.js ${minimum} or newer for stable node:sqlite support; found ${version.trim()}`,
-		);
-	}
-};
-
 // src/daemon/logging/logger.ts
 import fs from "node:fs";
 var logStream = null;
@@ -16362,7 +16337,6 @@ class DaemonLifecycleRuntime {
 }
 
 // src/daemon/index.ts
-assertSupportedNodeVersion(process.version);
 var logger = createLogger("daemon");
 var STALENESS_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
 async function main() {

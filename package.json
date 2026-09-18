@@ -13,7 +13,6 @@
     "docs",
     "extensions",
     "plugin-claude",
-    "generated",
     "plugins"
   ],
   "scripts": {
@@ -48,19 +47,16 @@
     "notifications"
   ],
   "license": "MIT",
-  "engines": {
-    "node": ">=22.13.0"
-  },
   "dependencies": {
     "@opencode-ai/plugin": "latest",
     "@opencode-ai/sdk": "latest",
+    "tsx": "^4.20.6",
     "xstate": "^5.32.6",
     "zod": "^3.25.76"
   },
   "devDependencies": {
     "@biomejs/biome": "2.4.10",
     "@types/node": "^24.6.0",
-    "tsx": "^4.20.6",
     "typescript": "^5.9.3"
   },
   "pi": {

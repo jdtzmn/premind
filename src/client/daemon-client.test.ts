@@ -8,9 +8,12 @@ import { PremindDaemonClient } from "./daemon-client.ts";
 
 type Request = { type: string; payload: Record<string, unknown> };
 
+const createClient = () =>
+  new PremindDaemonClient({ ensureDaemon: async () => undefined });
+
 describe("PremindDaemonClient.ensureSessionControl", () => {
   test("falls back to session registration when an older daemon rejects the request", async () => {
-    const client = new PremindDaemonClient();
+    const client = createClient();
     const requests: Request[] = [];
     const testClient = client as unknown as {
       requestWithRetry: (request: Request) => Promise<unknown>;
@@ -47,7 +50,7 @@ describe("PremindDaemonClient.ensureSessionControl", () => {
   });
 
   test("propagates non-compatibility control errors", async () => {
-    const client = new PremindDaemonClient();
+    const client = createClient();
     const testClient = client as unknown as {
       requestWithRetry: (request: Request) => Promise<unknown>;
     };
@@ -71,7 +74,7 @@ describe("PremindDaemonClient.ensureSessionControl", () => {
 
 describe("reminder bundle compatibility", () => {
   test("falls back to one legacy batch when bundle operations are unavailable", async () => {
-    const client = new PremindDaemonClient();
+    const client = createClient();
     const requests: Request[] = [];
     const batch = {
       batchId: "batch-1",
@@ -127,7 +130,7 @@ describe("reminder bundle compatibility", () => {
   });
 
   test("adapts the previous protocol-v1 bundle response shape", async () => {
-    const client = new PremindDaemonClient();
+    const client = createClient();
     const requests: Request[] = [];
     const batches = ["batch-1", "batch-2"].map((batchId) => ({
       batchId,
@@ -178,7 +181,7 @@ describe("reminder bundle compatibility", () => {
 
 describe("PremindDaemonClient Codex operations", () => {
   test("uses the host-neutral atomic claim contract", async () => {
-    const client = new PremindDaemonClient();
+    const client = createClient();
     const requests: Request[] = [];
     const testClient = client as unknown as {
       requestWithRetry: (request: Request) => Promise<unknown>;

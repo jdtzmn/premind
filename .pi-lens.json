@@ -1,6 +1,5 @@
 {
   "ignore": [
-    "generated/**",
     "plugin-claude/generated/**",
     "plugins/premind/generated/**"
   ]

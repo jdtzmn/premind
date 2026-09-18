@@ -34,7 +34,6 @@ import type {
   UnsubscribePayload,
   UpdateSessionStatePayload,
 } from "../shared/schema.ts";
-import { ensureDaemonRunning as ensureDefaultDaemon } from "./daemon-launcher.ts";
 
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 500;
@@ -44,7 +43,7 @@ const REQUEST_TIMEOUT_MS = 30_000;
 
 export type PremindDaemonClientOptions = {
   socketPath?: string;
-  ensureDaemon?: () => Promise<void>;
+  ensureDaemon: () => Promise<void>;
   maxRetries?: number;
   retryDelayMs?: number;
   requestTimeoutMs?: number;
@@ -58,9 +57,9 @@ export class PremindDaemonClient {
   private readonly retryDelayMs: number;
   private readonly requestTimeoutMs: number;
 
-  constructor(options: PremindDaemonClientOptions = {}) {
+  constructor(options: PremindDaemonClientOptions) {
     this.socketPath = options.socketPath ?? PREMIND_SOCKET_PATH;
-    this.ensureDaemon = options.ensureDaemon ?? ensureDefaultDaemon;
+    this.ensureDaemon = options.ensureDaemon;
     this.maxRetries = options.maxRetries ?? MAX_RETRIES;
     this.retryDelayMs = options.retryDelayMs ?? RETRY_DELAY_MS;
     this.requestTimeoutMs = options.requestTimeoutMs ?? REQUEST_TIMEOUT_MS;

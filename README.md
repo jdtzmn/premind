@@ -173,7 +173,8 @@ ls /var/folders/*/*/*/T/premind.sock 2>/dev/null
 
 - OpenCode
 - `gh` CLI authenticated with access to your repository
-- Node 22.13+; installed OpenCode, Pi, and Claude adapters use the bundled daemon and do not require Bun, `tsx`, or repository `node_modules` at runtime
+- OpenCode/Pi: Node 22.5+ with the package's `tsx` dependency for the source daemon launcher
+- Claude Code/Codex: Node 22.13+; installed plugins use self-contained generated bundles and do not require Bun, `tsx`, or repository `node_modules` at runtime
 
 ## Architecture
 

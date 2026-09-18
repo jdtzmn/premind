@@ -18,7 +18,7 @@ var __export = (target, all) => {
 import fs5 from "node:fs";
 import path6 from "node:path";
 import readline from "node:readline";
-import { fileURLToPath as fileURLToPath2 } from "node:url";
+import { fileURLToPath } from "node:url";
 
 // node_modules/zod/v3/external.js
 var exports_external = {};
@@ -4131,8 +4131,8 @@ var coerce = {
 };
 var NEVER = INVALID;
 // src/client/daemon-client.ts
-import net2 from "node:net";
-import { randomUUID as randomUUID2 } from "node:crypto";
+import net from "node:net";
+import { randomUUID } from "node:crypto";
 
 // src/shared/constants.ts
 import os from "node:os";
@@ -4695,16 +4695,397 @@ var unsubscribeResponseSchema = exports_external
 	})
 	.strict();
 
+// src/client/daemon-client.ts
+var MAX_RETRIES = 3;
+var RETRY_DELAY_MS = 500;
+var isUnsupportedOperation = (error) =>
+	error instanceof Error && error.message.startsWith("BAD_REQUEST:");
+var REQUEST_TIMEOUT_MS = 30000;
+
+class PremindDaemonClient {
+	clientId = randomUUID();
+	socketPath;
+	ensureDaemon;
+	maxRetries;
+	retryDelayMs;
+	requestTimeoutMs;
+	constructor(options) {
+		this.socketPath = options.socketPath ?? PREMIND_SOCKET_PATH;
+		this.ensureDaemon = options.ensureDaemon;
+		this.maxRetries = options.maxRetries ?? MAX_RETRIES;
+		this.retryDelayMs = options.retryDelayMs ?? RETRY_DELAY_MS;
+		this.requestTimeoutMs = options.requestTimeoutMs ?? REQUEST_TIMEOUT_MS;
+		if (
+			!Number.isInteger(this.maxRetries) ||
+			this.maxRetries < 0 ||
+			!Number.isFinite(this.retryDelayMs) ||
+			this.retryDelayMs < 0 ||
+			!Number.isFinite(this.requestTimeoutMs) ||
+			this.requestTimeoutMs <= 0
+		) {
+			throw new Error("Invalid premind daemon client retry or timeout options");
+		}
+	}
+	registered = false;
+	projectRoot;
+	sessionSource;
+	legacyBundleClaims = new Map();
+	async registerClient(projectRoot, sessionSource) {
+		this.projectRoot = projectRoot;
+		this.sessionSource = sessionSource;
+		const response = await this.requestWithRetry({
+			type: "registerClient",
+			protocolVersion: PREMIND_PROTOCOL_VERSION,
+			payload: {
+				clientId: this.clientId,
+				metadata: {
+					pid: process.pid,
+					projectRoot,
+					sessionSource,
+				},
+			},
+		});
+		this.registered = true;
+		return registerClientResponseSchema.parse(response);
+	}
+	async heartbeat() {
+		await this.requestWithRetry({
+			type: "heartbeatClient",
+			protocolVersion: PREMIND_PROTOCOL_VERSION,
+			payload: { clientId: this.clientId },
+		});
+	}
+	async release() {
+		await this.requestWithRetry({
+			type: "releaseClient",
+			protocolVersion: PREMIND_PROTOCOL_VERSION,
+			payload: { clientId: this.clientId },
+		});
+		this.registered = false;
+	}
+	async registerSession(payload) {
+		await this.requestWithRetry({
+			type: "registerSession",
+			protocolVersion: PREMIND_PROTOCOL_VERSION,
+			payload: { ...payload, clientId: this.clientId },
+		});
+	}
+	async registerCodexSession(payload) {
+		const response = await this.requestWithRetry({
+			type: "registerCodexSession",
+			protocolVersion: PREMIND_PROTOCOL_VERSION,
+			payload,
+		});
+		return registerSessionResponseSchema.parse(response);
+	}
+	async claimReminder(payload) {
+		const response = await this.requestWithRetry({
+			type: "claimReminder",
+			protocolVersion: PREMIND_PROTOCOL_VERSION,
+			payload,
+		});
+		return claimReminderResponseSchema.parse(response);
+	}
+	async settleReminderClaim(payload) {
+		const response = await this.requestWithRetry({
+			type: "settleReminderClaim",
+			protocolVersion: PREMIND_PROTOCOL_VERSION,
+			payload,
+		});
+		return settleReminderClaimResponseSchema.parse(response);
+	}
+	async releaseSessionOwner(sessionId) {
+		const response = await this.requestWithRetry({
+			type: "releaseSessionOwner",
+			protocolVersion: PREMIND_PROTOCOL_VERSION,
+			payload: { sessionId },
+		});
+		return releaseSessionOwnerResponseSchema.parse(response);
+	}
+	async ensureSessionControl(payload) {
+		try {
+			await this.requestWithRetry({
+				type: "ensureSessionControl",
+				protocolVersion: PREMIND_PROTOCOL_VERSION,
+				payload: { ...payload, clientId: this.clientId },
+			});
+		} catch (error) {
+			if (
+				!(error instanceof Error) ||
+				!error.message.startsWith("BAD_REQUEST:")
+			) {
+				throw error;
+			}
+			const { paused, ...session } = payload;
+			await this.registerSession({
+				...session,
+				status: paused ? "paused" : "active",
+			});
+		}
+	}
+	async updateSessionState(payload) {
+		await this.requestWithRetry({
+			type: "updateSessionState",
+			protocolVersion: PREMIND_PROTOCOL_VERSION,
+			payload,
+		});
+	}
+	async unregisterSession(sessionId) {
+		await this.requestWithRetry({
+			type: "unregisterSession",
+			protocolVersion: PREMIND_PROTOCOL_VERSION,
+			payload: { sessionId },
+		});
+	}
+	async pauseSession(sessionId) {
+		await this.requestWithRetry({
+			type: "pauseSession",
+			protocolVersion: PREMIND_PROTOCOL_VERSION,
+			payload: { sessionId },
+		});
+	}
+	async resumeSession(sessionId) {
+		await this.requestWithRetry({
+			type: "resumeSession",
+			protocolVersion: PREMIND_PROTOCOL_VERSION,
+			payload: { sessionId },
+		});
+	}
+	async activateWorktree(payload) {
+		const response = await this.requestWithRetry({
+			type: "activateWorktree",
+			protocolVersion: PREMIND_PROTOCOL_VERSION,
+			payload,
+		});
+		return activateWorktreeResponseSchema.parse(response);
+	}
+	async subscribe(payload) {
+		const response = await this.requestWithRetry({
+			type: "subscribe",
+			protocolVersion: PREMIND_PROTOCOL_VERSION,
+			payload,
+		});
+		return subscribeResponseSchema.parse(response);
+	}
+	async unsubscribe(payload) {
+		const response = await this.requestWithRetry({
+			type: "unsubscribe",
+			protocolVersion: PREMIND_PROTOCOL_VERSION,
+			payload,
+		});
+		return unsubscribeResponseSchema.parse(response);
+	}
+	async claimReminderBundle(sessionId) {
+		try {
+			const response = await this.requestWithRetry({
+				type: "claimReminderBundle",
+				protocolVersion: PREMIND_PROTOCOL_VERSION,
+				payload: { sessionId },
+			});
+			const current = claimReminderBundleResponseSchema.safeParse(response);
+			if (current.success) return current.data;
+			const legacy =
+				legacyClaimReminderBundleResponseSchema.safeParse(response);
+			if (!legacy.success)
+				return claimReminderBundleResponseSchema.parse(response);
+			if (legacy.data.batches.length === 0) return { bundle: null };
+			const handoffId = randomUUID();
+			this.legacyBundleClaims.set(sessionId, {
+				handoffId,
+				batchIds: legacy.data.batches.map(({ batchId }) => batchId),
+				mode: "legacy-bundle",
+			});
+			return { bundle: { handoffId, batches: legacy.data.batches } };
+		} catch (error) {
+			if (!isUnsupportedOperation(error)) throw error;
+			const pending = await this.getPendingReminder(sessionId);
+			if (!pending.batch) return { bundle: null };
+			await this.ackReminder({
+				batchId: pending.batch.batchId,
+				sessionId,
+				state: "handed_off",
+			});
+			const handoffId = randomUUID();
+			this.legacyBundleClaims.set(sessionId, {
+				handoffId,
+				batchIds: [pending.batch.batchId],
+				mode: "single",
+			});
+			return { bundle: { handoffId, batches: [pending.batch] } };
+		}
+	}
+	async ackReminderBundle(payload) {
+		try {
+			const response = await this.requestWithRetry({
+				type: "ackReminderBundle",
+				protocolVersion: PREMIND_PROTOCOL_VERSION,
+				payload,
+			});
+			return ackReminderBundleResponseSchema.parse(response);
+		} catch (error) {
+			if (!isUnsupportedOperation(error)) throw error;
+			const claim = this.legacyBundleClaims.get(payload.sessionId);
+			if (!claim || claim.handoffId !== payload.handoffId) {
+				return { acknowledged: 0 };
+			}
+			if (claim.mode === "legacy-bundle") {
+				const response = await this.requestWithRetry({
+					type: "ackReminderBundle",
+					protocolVersion: PREMIND_PROTOCOL_VERSION,
+					payload: {
+						sessionId: payload.sessionId,
+						state: payload.state,
+						...(payload.error ? { error: payload.error } : {}),
+					},
+				});
+				const acknowledged = ackReminderBundleResponseSchema.parse(response);
+				this.legacyBundleClaims.delete(payload.sessionId);
+				return acknowledged;
+			}
+			for (const batchId of claim.batchIds) {
+				await this.ackReminder({
+					batchId,
+					sessionId: payload.sessionId,
+					state: payload.state,
+					...(payload.error ? { error: payload.error } : {}),
+				});
+			}
+			this.legacyBundleClaims.delete(payload.sessionId);
+			return { acknowledged: claim.batchIds.length };
+		}
+	}
+	async getPendingReminder(sessionId) {
+		const response = await this.requestWithRetry({
+			type: "getPendingReminder",
+			protocolVersion: PREMIND_PROTOCOL_VERSION,
+			payload: { sessionId },
+		});
+		return getPendingReminderResponseSchema.parse(response);
+	}
+	async ackReminder(payload) {
+		await this.requestWithRetry({
+			type: "ackReminder",
+			protocolVersion: PREMIND_PROTOCOL_VERSION,
+			payload,
+		});
+	}
+	async setGlobalDisabled(disabled) {
+		const response = await this.requestWithRetry({
+			type: "setGlobalDisabled",
+			protocolVersion: PREMIND_PROTOCOL_VERSION,
+			payload: { disabled },
+		});
+		return globalDisabledResponseSchema.parse(response);
+	}
+	async getGlobalDisabled() {
+		const response = await this.requestWithRetry({
+			type: "getGlobalDisabled",
+			protocolVersion: PREMIND_PROTOCOL_VERSION,
+			payload: {},
+		});
+		return globalDisabledResponseSchema.parse(response);
+	}
+	async debugStatus() {
+		const response = await this.requestWithRetry({
+			type: "debugStatus",
+			protocolVersion: PREMIND_PROTOCOL_VERSION,
+			payload: {},
+		});
+		return debugStatusResponseSchema.parse(response);
+	}
+	async pruneClosedSessions() {
+		return await this.requestWithRetry({
+			type: "pruneClosedSessions",
+			protocolVersion: PREMIND_PROTOCOL_VERSION,
+			payload: {},
+		});
+	}
+	async requestWithRetry(message, attempt = 0) {
+		try {
+			return await this.request(message);
+		} catch (error) {
+			if (attempt >= this.maxRetries) throw error;
+			const isSocketError =
+				error instanceof Error &&
+				("code" in error ||
+					error.message.includes("ECONNREFUSED") ||
+					error.message.includes("ENOENT"));
+			if (!isSocketError) throw error;
+			await this.ensureDaemon();
+			if (this.registered && this.projectRoot) {
+				try {
+					await this.request({
+						type: "registerClient",
+						protocolVersion: PREMIND_PROTOCOL_VERSION,
+						payload: {
+							clientId: this.clientId,
+							metadata: {
+								pid: process.pid,
+								projectRoot: this.projectRoot,
+								sessionSource: this.sessionSource,
+							},
+						},
+					});
+				} catch {}
+			}
+			await new Promise((resolve) =>
+				setTimeout(resolve, this.retryDelayMs * (attempt + 1)),
+			);
+			return this.requestWithRetry(message, attempt + 1);
+		}
+	}
+	async request(message) {
+		const line = await new Promise((resolve, reject) => {
+			const socket = net.createConnection(this.socketPath);
+			let buffer = "";
+			socket.setEncoding("utf8");
+			socket.setTimeout(this.requestTimeoutMs, () => {
+				const error = Object.assign(
+					new Error(
+						`Premind daemon request timed out after ${this.requestTimeoutMs}ms`,
+					),
+					{ code: "ETIMEDOUT" },
+				);
+				socket.destroy(error);
+			});
+			socket.once("error", reject);
+			socket.once("connect", () => {
+				socket.write(`${JSON.stringify(message)}
+`);
+			});
+			socket.on("data", (chunk) => {
+				buffer += chunk;
+				const newlineIndex = buffer.indexOf(`
+`);
+				if (newlineIndex >= 0) {
+					const result = buffer.slice(0, newlineIndex);
+					socket.end();
+					resolve(result);
+				}
+			});
+		});
+		let payload;
+		try {
+			payload = JSON.parse(line);
+		} catch (error) {
+			throw new Error("premind daemon returned invalid JSON", { cause: error });
+		}
+		const parsed = responseSchema.parse(payload);
+		if (!parsed.ok)
+			throw new Error(`${parsed.error.code}: ${parsed.error.message}`);
+		return parsed.result;
+	}
+}
+
 // src/client/daemon-launcher.ts
 import { spawn } from "node:child_process";
 import fs3 from "node:fs";
 import path4 from "node:path";
-import { fileURLToPath } from "node:url";
 
 // src/shared/daemon-startup.ts
-import { randomUUID } from "node:crypto";
+import { randomUUID as randomUUID2 } from "node:crypto";
 import fs from "node:fs";
-import net from "node:net";
+import net2 from "node:net";
 import path2 from "node:path";
 var DEFAULT_PROBE_TIMEOUT_MS = 250;
 var DEFAULT_STALE_LOCK_MS = 1e4;
@@ -4772,7 +5153,7 @@ var acquireDaemonStartLock = ({
 			const owner = {
 				pid: process.pid,
 				createdAt: Date.now(),
-				token: randomUUID(),
+				token: randomUUID2(),
 			};
 			fs.writeFileSync(fd, `${owner.pid}:${owner.createdAt}:${owner.token}`);
 			return { ...owner, fd, path: lockPath };
@@ -4803,7 +5184,7 @@ var inspectDaemon = (
 	timeoutMs = DEFAULT_PROBE_TIMEOUT_MS,
 ) =>
 	new Promise((resolve) => {
-		const connection = net.createConnection(socketPath);
+		const connection = net2.createConnection(socketPath);
 		let buffer = "";
 		let connected = false;
 		let settled = false;
@@ -5039,14 +5420,6 @@ var resolveNodeRuntime = (options = {}) => {
 };
 
 // src/client/daemon-launcher.ts
-var THIS_DIR = path4.dirname(fileURLToPath(import.meta.url));
-var DEFAULT_DAEMON_ENTRY = path4.resolve(
-	THIS_DIR,
-	"..",
-	"..",
-	"generated",
-	"premind-daemon.mjs",
-);
 var CONNECT_RETRY_MS = 300;
 var CONNECT_MAX_RETRIES = 20;
 var waitForProbe = async (
@@ -5077,11 +5450,11 @@ var unresponsiveDaemonError = (reason) =>
 		`A Premind daemon owns the global socket but did not answer the capability probe: ${reason}. ` +
 			"The socket was left untouched; retry after the existing daemon exits.",
 	);
-var createDaemonLauncher = (options = {}) => {
+var createDaemonLauncher = (options) => {
 	const socketPath = options.socketPath ?? PREMIND_SOCKET_PATH;
 	const stateDir = options.stateDir ?? PREMIND_STATE_DIR;
 	const requiredOperations = options.requiredOperations ?? [];
-	const daemonEntry = options.daemonEntry ?? DEFAULT_DAEMON_ENTRY;
+	const daemonEntry = options.daemonEntry;
 	const startupTimeoutMs =
 		options.startupTimeoutMs ?? CONNECT_MAX_RETRIES * CONNECT_RETRY_MS;
 	const retryMs = options.retryMs ?? CONNECT_RETRY_MS;
@@ -5239,389 +5612,6 @@ var createDaemonLauncher = (options = {}) => {
 		}
 	};
 };
-var ensureDaemonRunning = createDaemonLauncher();
-
-// src/client/daemon-client.ts
-var MAX_RETRIES = 3;
-var RETRY_DELAY_MS = 500;
-var isUnsupportedOperation = (error) =>
-	error instanceof Error && error.message.startsWith("BAD_REQUEST:");
-var REQUEST_TIMEOUT_MS = 30000;
-
-class PremindDaemonClient {
-	clientId = randomUUID2();
-	socketPath;
-	ensureDaemon;
-	maxRetries;
-	retryDelayMs;
-	requestTimeoutMs;
-	constructor(options = {}) {
-		this.socketPath = options.socketPath ?? PREMIND_SOCKET_PATH;
-		this.ensureDaemon = options.ensureDaemon ?? ensureDaemonRunning;
-		this.maxRetries = options.maxRetries ?? MAX_RETRIES;
-		this.retryDelayMs = options.retryDelayMs ?? RETRY_DELAY_MS;
-		this.requestTimeoutMs = options.requestTimeoutMs ?? REQUEST_TIMEOUT_MS;
-		if (
-			!Number.isInteger(this.maxRetries) ||
-			this.maxRetries < 0 ||
-			!Number.isFinite(this.retryDelayMs) ||
-			this.retryDelayMs < 0 ||
-			!Number.isFinite(this.requestTimeoutMs) ||
-			this.requestTimeoutMs <= 0
-		) {
-			throw new Error("Invalid premind daemon client retry or timeout options");
-		}
-	}
-	registered = false;
-	projectRoot;
-	sessionSource;
-	legacyBundleClaims = new Map();
-	async registerClient(projectRoot, sessionSource) {
-		this.projectRoot = projectRoot;
-		this.sessionSource = sessionSource;
-		const response = await this.requestWithRetry({
-			type: "registerClient",
-			protocolVersion: PREMIND_PROTOCOL_VERSION,
-			payload: {
-				clientId: this.clientId,
-				metadata: {
-					pid: process.pid,
-					projectRoot,
-					sessionSource,
-				},
-			},
-		});
-		this.registered = true;
-		return registerClientResponseSchema.parse(response);
-	}
-	async heartbeat() {
-		await this.requestWithRetry({
-			type: "heartbeatClient",
-			protocolVersion: PREMIND_PROTOCOL_VERSION,
-			payload: { clientId: this.clientId },
-		});
-	}
-	async release() {
-		await this.requestWithRetry({
-			type: "releaseClient",
-			protocolVersion: PREMIND_PROTOCOL_VERSION,
-			payload: { clientId: this.clientId },
-		});
-		this.registered = false;
-	}
-	async registerSession(payload) {
-		await this.requestWithRetry({
-			type: "registerSession",
-			protocolVersion: PREMIND_PROTOCOL_VERSION,
-			payload: { ...payload, clientId: this.clientId },
-		});
-	}
-	async registerCodexSession(payload) {
-		const response = await this.requestWithRetry({
-			type: "registerCodexSession",
-			protocolVersion: PREMIND_PROTOCOL_VERSION,
-			payload,
-		});
-		return registerSessionResponseSchema.parse(response);
-	}
-	async claimReminder(payload) {
-		const response = await this.requestWithRetry({
-			type: "claimReminder",
-			protocolVersion: PREMIND_PROTOCOL_VERSION,
-			payload,
-		});
-		return claimReminderResponseSchema.parse(response);
-	}
-	async settleReminderClaim(payload) {
-		const response = await this.requestWithRetry({
-			type: "settleReminderClaim",
-			protocolVersion: PREMIND_PROTOCOL_VERSION,
-			payload,
-		});
-		return settleReminderClaimResponseSchema.parse(response);
-	}
-	async releaseSessionOwner(sessionId) {
-		const response = await this.requestWithRetry({
-			type: "releaseSessionOwner",
-			protocolVersion: PREMIND_PROTOCOL_VERSION,
-			payload: { sessionId },
-		});
-		return releaseSessionOwnerResponseSchema.parse(response);
-	}
-	async ensureSessionControl(payload) {
-		try {
-			await this.requestWithRetry({
-				type: "ensureSessionControl",
-				protocolVersion: PREMIND_PROTOCOL_VERSION,
-				payload: { ...payload, clientId: this.clientId },
-			});
-		} catch (error) {
-			if (
-				!(error instanceof Error) ||
-				!error.message.startsWith("BAD_REQUEST:")
-			) {
-				throw error;
-			}
-			const { paused, ...session } = payload;
-			await this.registerSession({
-				...session,
-				status: paused ? "paused" : "active",
-			});
-		}
-	}
-	async updateSessionState(payload) {
-		await this.requestWithRetry({
-			type: "updateSessionState",
-			protocolVersion: PREMIND_PROTOCOL_VERSION,
-			payload,
-		});
-	}
-	async unregisterSession(sessionId) {
-		await this.requestWithRetry({
-			type: "unregisterSession",
-			protocolVersion: PREMIND_PROTOCOL_VERSION,
-			payload: { sessionId },
-		});
-	}
-	async pauseSession(sessionId) {
-		await this.requestWithRetry({
-			type: "pauseSession",
-			protocolVersion: PREMIND_PROTOCOL_VERSION,
-			payload: { sessionId },
-		});
-	}
-	async resumeSession(sessionId) {
-		await this.requestWithRetry({
-			type: "resumeSession",
-			protocolVersion: PREMIND_PROTOCOL_VERSION,
-			payload: { sessionId },
-		});
-	}
-	async activateWorktree(payload) {
-		const response = await this.requestWithRetry({
-			type: "activateWorktree",
-			protocolVersion: PREMIND_PROTOCOL_VERSION,
-			payload,
-		});
-		return activateWorktreeResponseSchema.parse(response);
-	}
-	async subscribe(payload) {
-		const response = await this.requestWithRetry({
-			type: "subscribe",
-			protocolVersion: PREMIND_PROTOCOL_VERSION,
-			payload,
-		});
-		return subscribeResponseSchema.parse(response);
-	}
-	async unsubscribe(payload) {
-		const response = await this.requestWithRetry({
-			type: "unsubscribe",
-			protocolVersion: PREMIND_PROTOCOL_VERSION,
-			payload,
-		});
-		return unsubscribeResponseSchema.parse(response);
-	}
-	async claimReminderBundle(sessionId) {
-		try {
-			const response = await this.requestWithRetry({
-				type: "claimReminderBundle",
-				protocolVersion: PREMIND_PROTOCOL_VERSION,
-				payload: { sessionId },
-			});
-			const current = claimReminderBundleResponseSchema.safeParse(response);
-			if (current.success) return current.data;
-			const legacy =
-				legacyClaimReminderBundleResponseSchema.safeParse(response);
-			if (!legacy.success)
-				return claimReminderBundleResponseSchema.parse(response);
-			if (legacy.data.batches.length === 0) return { bundle: null };
-			const handoffId = randomUUID2();
-			this.legacyBundleClaims.set(sessionId, {
-				handoffId,
-				batchIds: legacy.data.batches.map(({ batchId }) => batchId),
-				mode: "legacy-bundle",
-			});
-			return { bundle: { handoffId, batches: legacy.data.batches } };
-		} catch (error) {
-			if (!isUnsupportedOperation(error)) throw error;
-			const pending = await this.getPendingReminder(sessionId);
-			if (!pending.batch) return { bundle: null };
-			await this.ackReminder({
-				batchId: pending.batch.batchId,
-				sessionId,
-				state: "handed_off",
-			});
-			const handoffId = randomUUID2();
-			this.legacyBundleClaims.set(sessionId, {
-				handoffId,
-				batchIds: [pending.batch.batchId],
-				mode: "single",
-			});
-			return { bundle: { handoffId, batches: [pending.batch] } };
-		}
-	}
-	async ackReminderBundle(payload) {
-		try {
-			const response = await this.requestWithRetry({
-				type: "ackReminderBundle",
-				protocolVersion: PREMIND_PROTOCOL_VERSION,
-				payload,
-			});
-			return ackReminderBundleResponseSchema.parse(response);
-		} catch (error) {
-			if (!isUnsupportedOperation(error)) throw error;
-			const claim = this.legacyBundleClaims.get(payload.sessionId);
-			if (!claim || claim.handoffId !== payload.handoffId) {
-				return { acknowledged: 0 };
-			}
-			if (claim.mode === "legacy-bundle") {
-				const response = await this.requestWithRetry({
-					type: "ackReminderBundle",
-					protocolVersion: PREMIND_PROTOCOL_VERSION,
-					payload: {
-						sessionId: payload.sessionId,
-						state: payload.state,
-						...(payload.error ? { error: payload.error } : {}),
-					},
-				});
-				const acknowledged = ackReminderBundleResponseSchema.parse(response);
-				this.legacyBundleClaims.delete(payload.sessionId);
-				return acknowledged;
-			}
-			for (const batchId of claim.batchIds) {
-				await this.ackReminder({
-					batchId,
-					sessionId: payload.sessionId,
-					state: payload.state,
-					...(payload.error ? { error: payload.error } : {}),
-				});
-			}
-			this.legacyBundleClaims.delete(payload.sessionId);
-			return { acknowledged: claim.batchIds.length };
-		}
-	}
-	async getPendingReminder(sessionId) {
-		const response = await this.requestWithRetry({
-			type: "getPendingReminder",
-			protocolVersion: PREMIND_PROTOCOL_VERSION,
-			payload: { sessionId },
-		});
-		return getPendingReminderResponseSchema.parse(response);
-	}
-	async ackReminder(payload) {
-		await this.requestWithRetry({
-			type: "ackReminder",
-			protocolVersion: PREMIND_PROTOCOL_VERSION,
-			payload,
-		});
-	}
-	async setGlobalDisabled(disabled) {
-		const response = await this.requestWithRetry({
-			type: "setGlobalDisabled",
-			protocolVersion: PREMIND_PROTOCOL_VERSION,
-			payload: { disabled },
-		});
-		return globalDisabledResponseSchema.parse(response);
-	}
-	async getGlobalDisabled() {
-		const response = await this.requestWithRetry({
-			type: "getGlobalDisabled",
-			protocolVersion: PREMIND_PROTOCOL_VERSION,
-			payload: {},
-		});
-		return globalDisabledResponseSchema.parse(response);
-	}
-	async debugStatus() {
-		const response = await this.requestWithRetry({
-			type: "debugStatus",
-			protocolVersion: PREMIND_PROTOCOL_VERSION,
-			payload: {},
-		});
-		return debugStatusResponseSchema.parse(response);
-	}
-	async pruneClosedSessions() {
-		return await this.requestWithRetry({
-			type: "pruneClosedSessions",
-			protocolVersion: PREMIND_PROTOCOL_VERSION,
-			payload: {},
-		});
-	}
-	async requestWithRetry(message, attempt = 0) {
-		try {
-			return await this.request(message);
-		} catch (error) {
-			if (attempt >= this.maxRetries) throw error;
-			const isSocketError =
-				error instanceof Error &&
-				("code" in error ||
-					error.message.includes("ECONNREFUSED") ||
-					error.message.includes("ENOENT"));
-			if (!isSocketError) throw error;
-			await this.ensureDaemon();
-			if (this.registered && this.projectRoot) {
-				try {
-					await this.request({
-						type: "registerClient",
-						protocolVersion: PREMIND_PROTOCOL_VERSION,
-						payload: {
-							clientId: this.clientId,
-							metadata: {
-								pid: process.pid,
-								projectRoot: this.projectRoot,
-								sessionSource: this.sessionSource,
-							},
-						},
-					});
-				} catch {}
-			}
-			await new Promise((resolve) =>
-				setTimeout(resolve, this.retryDelayMs * (attempt + 1)),
-			);
-			return this.requestWithRetry(message, attempt + 1);
-		}
-	}
-	async request(message) {
-		const line = await new Promise((resolve, reject) => {
-			const socket = net2.createConnection(this.socketPath);
-			let buffer = "";
-			socket.setEncoding("utf8");
-			socket.setTimeout(this.requestTimeoutMs, () => {
-				const error = Object.assign(
-					new Error(
-						`Premind daemon request timed out after ${this.requestTimeoutMs}ms`,
-					),
-					{ code: "ETIMEDOUT" },
-				);
-				socket.destroy(error);
-			});
-			socket.once("error", reject);
-			socket.once("connect", () => {
-				socket.write(`${JSON.stringify(message)}
-`);
-			});
-			socket.on("data", (chunk) => {
-				buffer += chunk;
-				const newlineIndex = buffer.indexOf(`
-`);
-				if (newlineIndex >= 0) {
-					const result = buffer.slice(0, newlineIndex);
-					socket.end();
-					resolve(result);
-				}
-			});
-		});
-		let payload;
-		try {
-			payload = JSON.parse(line);
-		} catch (error) {
-			throw new Error("premind daemon returned invalid JSON", { cause: error });
-		}
-		const parsed = responseSchema.parse(payload);
-		if (!parsed.ok)
-			throw new Error(`${parsed.error.code}: ${parsed.error.message}`);
-		return parsed.result;
-	}
-}
 
 // src/codex/session-binding.ts
 import fs4 from "node:fs";
@@ -5705,7 +5695,7 @@ var resolveCodexSessionBinding = (options) => {
 };
 
 // src/codex/mcp-server.ts
-var RUNTIME_DIRECTORY = path6.dirname(fileURLToPath2(import.meta.url));
+var RUNTIME_DIRECTORY = path6.dirname(fileURLToPath(import.meta.url));
 var DAEMON_ENTRY = path6.join(RUNTIME_DIRECTORY, "premind-daemon.mjs");
 var MCP_PROTOCOL_VERSION = "2024-11-05";
 var jsonRpcIdSchema = exports_external.union([
@@ -5996,7 +5986,7 @@ var isMainModule = () => {
 	try {
 		return (
 			fs5.realpathSync(process.argv[1]) ===
-			fs5.realpathSync(fileURLToPath2(import.meta.url))
+			fs5.realpathSync(fileURLToPath(import.meta.url))
 		);
 	} catch {
 		return false;

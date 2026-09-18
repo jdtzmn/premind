@@ -1,7 +1,6 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { PREMIND_SOCKET_PATH, PREMIND_STATE_DIR } from "../shared/constants.ts";
 import {
   acquireDaemonStartLock,
@@ -11,14 +10,6 @@ import {
 } from "../shared/daemon-startup.ts";
 import { resolveNodeRuntime } from "./node-runtime.ts";
 
-const THIS_DIR = path.dirname(fileURLToPath(import.meta.url));
-const DEFAULT_DAEMON_ENTRY = path.resolve(
-  THIS_DIR,
-  "..",
-  "..",
-  "generated",
-  "premind-daemon.mjs",
-);
 const CONNECT_RETRY_MS = 300;
 const CONNECT_MAX_RETRIES = 20;
 
@@ -40,7 +31,7 @@ export type DaemonLaunchDiagnostic = {
 };
 
 export type DaemonLauncherOptions = {
-  daemonEntry?: string;
+  daemonEntry: string;
   socketPath?: string;
   stateDir?: string;
   requiredOperations?: readonly string[];
@@ -88,11 +79,11 @@ const unresponsiveDaemonError = (reason: string) =>
   );
 
 
-export const createDaemonLauncher = (options: DaemonLauncherOptions = {}) => {
+export const createDaemonLauncher = (options: DaemonLauncherOptions) => {
   const socketPath = options.socketPath ?? PREMIND_SOCKET_PATH;
   const stateDir = options.stateDir ?? PREMIND_STATE_DIR;
   const requiredOperations = options.requiredOperations ?? [];
-  const daemonEntry = options.daemonEntry ?? DEFAULT_DAEMON_ENTRY;
+  const daemonEntry = options.daemonEntry;
   const startupTimeoutMs =
     options.startupTimeoutMs ?? CONNECT_MAX_RETRIES * CONNECT_RETRY_MS;
   const retryMs = options.retryMs ?? CONNECT_RETRY_MS;
@@ -256,5 +247,3 @@ export const createDaemonLauncher = (options: DaemonLauncherOptions = {}) => {
     }
   };
 };
-
-export const ensureDaemonRunning = createDaemonLauncher();
