@@ -1,0 +1,6 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "premind-contract",
+  "version": "0.0.0",
+  "description": "Development fixture for validating Codex lifecycle hook contracts."
+}

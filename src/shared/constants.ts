@@ -31,6 +31,8 @@ export const PREMIND_SESSION_STALE_MS = 6 * 60 * 60 * 1000;
 // forever. Abandoned handoffs older than this are returned to `failed` so the
 // handoff registry retries them without waiting for a daemon restart.
 export const PREMIND_REMINDER_HANDOFF_STALE_MS = 5 * 60 * 1000;
+// Atomic adapter claims use a shorter explicit lease than legacy handoffs.
+export const PREMIND_REMINDER_CLAIM_LEASE_MS = 30_000;
 // Canonical PR watchers stay warm briefly after their final subscriber leaves.
 export const PREMIND_PR_WATCHER_IDLE_GRACE_MS = 5 * 60 * 1000;
 // Durable PR streams and inactive subscription cursors outlive their actors.

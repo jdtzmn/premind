@@ -1,0 +1,63 @@
+{
+	"description": "Synchronize Codex lifecycle with premind.",
+	"hooks": {
+		"SessionStart": [
+			{
+				"matcher": "startup|resume|clear|compact",
+				"hooks": [
+					{
+						"type": "command",
+						"command": "node \"${PLUGIN_ROOT}/generated/premind-hook.mjs\" SessionStart",
+						"timeout": 10,
+						"statusMessage": "Connecting premind"
+					}
+				]
+			}
+		],
+		"UserPromptSubmit": [
+			{
+				"hooks": [
+					{
+						"type": "command",
+						"command": "node \"${PLUGIN_ROOT}/generated/premind-hook.mjs\" UserPromptSubmit",
+						"timeout": 10
+					}
+				]
+			}
+		],
+		"Stop": [
+			{
+				"hooks": [
+					{
+						"type": "command",
+						"command": "node \"${PLUGIN_ROOT}/generated/premind-hook.mjs\" Stop",
+						"timeout": 10,
+						"statusMessage": "Checking for PR updates"
+					}
+				]
+			}
+		],
+		"Interrupt": [
+			{
+				"hooks": [
+					{
+						"type": "command",
+						"command": "node \"${PLUGIN_ROOT}/generated/premind-hook.mjs\" Interrupt",
+						"timeout": 3
+					}
+				]
+			}
+		],
+		"SessionEnd": [
+			{
+				"hooks": [
+					{
+						"type": "command",
+						"command": "node \"${PLUGIN_ROOT}/generated/premind-hook.mjs\" SessionEnd",
+						"timeout": 3
+					}
+				]
+			}
+		]
+	}
+}

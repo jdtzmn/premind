@@ -2294,6 +2294,156 @@ describe("migrate: session hosts", () => {
     store.close()
   })
 
+  test("preserves the complete Pi and OpenCode graph across the Codex schema migration", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "premind-host-graph-migrate-"))
+    tempPaths.push(dir)
+    const dbPath = path.join(dir, "premind.db")
+    const seeded = new StateStore(dbPath)
+    const now = 2_000_000
+    seeded.registerClient("pi-client", { pid: 101, projectRoot: "/repo/pi", sessionSource: "/tmp/pi.jsonl" }, now)
+    seeded.registerClient("opencode-client", { pid: 202, projectRoot: "/repo/open", sessionSource: "opencode" }, now)
+    seeded.registerSession({
+      clientId: "pi-client", sessionId: "pi-session", host: "pi", hostSessionId: "/tmp/pi.jsonl",
+      repo: "acme/repo", branch: "feature/pi", isPrimary: true, status: "active", busyState: "idle",
+    }, now)
+    seeded.registerSession({
+      clientId: "opencode-client", sessionId: "opencode-session", host: "opencode", hostSessionId: "opencode-host",
+      repo: "acme/repo", branch: "feature/open", isPrimary: true, status: "paused", busyState: "idle",
+    }, now)
+    seeded.upsertWorktreeBinding({
+      sessionId: "pi-session", root: "/repo/pi", gitDir: "/repo/.git/worktrees/pi",
+      repo: "acme/repo", branch: "feature/pi", headSha: "pi-sha", state: "active",
+    }, now)
+    seeded.upsertWorktreeBinding({
+      sessionId: "opencode-session", root: "/repo/open", gitDir: "/repo/.git/worktrees/open",
+      repo: "acme/repo", branch: "feature/open", headSha: "open-sha", state: "active",
+    }, now)
+    const piSubscription = seeded.upsertSubscription({
+      sessionId: "pi-session", repo: "acme/repo", prNumber: 7, source: "automatic",
+      writePolicy: "owned-active",
+    }, now)
+    const opencodeSubscription = seeded.upsertSubscription({
+      sessionId: "opencode-session", repo: "acme/repo", prNumber: 8, source: "manual",
+      writePolicy: "user-authorized",
+    }, now)
+    seeded.reconcileSubscriptionPolicies("acme/repo", 7, "jacob", "jacob", now)
+    seeded.reconcileSubscriptionPolicies("acme/repo", 8, "reviewer", "jacob", now)
+    seeded.recordAutomaticSubscriptionOptOut({
+      sessionId: "pi-session", gitDir: "/repo/.git/worktrees/pi", repo: "acme/repo",
+      branch: "feature/pi", prNumber: 9,
+    }, now)
+    const piSnapshot = snapshot()
+    seeded.saveSnapshot("acme/repo", 7, piSnapshot)
+    const opencodeSnapshot = snapshot()
+    opencodeSnapshot.core.number = 8
+    opencodeSnapshot.core.headRefName = "feature/open"
+    seeded.saveSnapshot("acme/repo", 8, opencodeSnapshot)
+    seeded.insertEvents("acme/repo", 7, [{
+      dedupeKey: "pi:event", kind: "check.failed", priority: "high",
+      summary: "Pi check failed", referenceLink: "https://example.test/pi", payload: { host: "pi" },
+    }], now)
+    seeded.insertEvents("acme/repo", 8, [{
+      dedupeKey: "open:event", kind: "review.submitted", priority: "medium",
+      summary: "OpenCode review", referenceLink: "https://example.test/open", payload: { host: "opencode" },
+    }], now)
+    const piBatch = seeded.createOrReplaceReminder(
+      "pi-session", piSubscription.subscriptionId, "Pi reminder", [], 1, now,
+    )
+    const opencodeBatch = seeded.createOrReplaceReminder(
+      "opencode-session", opencodeSubscription.subscriptionId, "OpenCode reminder", [], 2, now,
+    )
+    assert.equal(seeded.ackReminder({
+      batchId: opencodeBatch, sessionId: "opencode-session", state: "handed_off",
+    }, now), true)
+    seeded.close()
+
+    const rows = (db: DatabaseSync, sql: string) =>
+      (db.prepare(sql).all() as Array<Record<string, unknown>>).map((row) => ({ ...row }))
+    const captureGraph = (db: DatabaseSync) => ({
+      clients: rows(db, "SELECT * FROM client_leases ORDER BY client_id"),
+      sessions: rows(db, "SELECT * FROM sessions ORDER BY session_id"),
+      bindings: rows(db, "SELECT * FROM worktree_bindings ORDER BY session_id"),
+      subscriptions: rows(db, "SELECT * FROM session_subscriptions ORDER BY subscription_id"),
+      optOuts: rows(db, "SELECT * FROM automatic_subscription_opt_outs ORDER BY session_id, pr_number"),
+      batches: rows(db, `SELECT batch_id, session_id, subscription_id, reminder_text, events_json, state,
+        max_event_seq, handoff_id, handoff_size, canceled_at, created_at, updated_at
+        FROM reminder_batches ORDER BY batch_id`),
+      branchWatchers: rows(db, "SELECT * FROM branch_watchers ORDER BY repo, branch"),
+      prWatchers: rows(db, "SELECT * FROM pr_watchers ORDER BY repo, pr_number"),
+      snapshots: rows(db, "SELECT * FROM pr_snapshots ORDER BY repo, pr_number"),
+      events: rows(db, "SELECT * FROM pr_events ORDER BY seq"),
+    })
+
+    const legacy = new DatabaseSync(dbPath)
+    legacy.exec("PRAGMA foreign_keys = OFF")
+    legacy.exec("BEGIN IMMEDIATE")
+    legacy.exec(`
+      CREATE TABLE sessions_before_codex (
+        session_id TEXT PRIMARY KEY,
+        host TEXT NOT NULL DEFAULT 'opencode' CHECK(host IN ('opencode', 'pi', 'claude')),
+        host_session_id TEXT NOT NULL, client_id TEXT NOT NULL, repo TEXT NOT NULL, branch TEXT NOT NULL,
+        pr_number INTEGER, is_primary INTEGER NOT NULL, status TEXT NOT NULL, busy_state TEXT NOT NULL,
+        last_delivered_event_seq INTEGER NOT NULL DEFAULT 0, last_activity_at INTEGER NOT NULL,
+        created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, UNIQUE(host, host_session_id)
+      );
+      INSERT INTO sessions_before_codex SELECT * FROM sessions;
+      DROP TABLE sessions;
+      ALTER TABLE sessions_before_codex RENAME TO sessions;
+      CREATE TABLE reminder_batches_before_codex (
+        batch_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, subscription_id TEXT UNIQUE,
+        reminder_text TEXT NOT NULL, events_json TEXT NOT NULL, state TEXT NOT NULL, max_event_seq INTEGER,
+        handoff_id TEXT, handoff_size INTEGER, canceled_at INTEGER, created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        FOREIGN KEY(session_id) REFERENCES sessions(session_id) ON DELETE CASCADE,
+        FOREIGN KEY(subscription_id) REFERENCES session_subscriptions(subscription_id) ON DELETE CASCADE
+      );
+      INSERT INTO reminder_batches_before_codex
+        SELECT batch_id, session_id, subscription_id, reminder_text, events_json, state, max_event_seq,
+               handoff_id, handoff_size, canceled_at, created_at, updated_at
+        FROM reminder_batches;
+      DROP TABLE reminder_batches;
+      ALTER TABLE reminder_batches_before_codex RENAME TO reminder_batches;
+      COMMIT;
+    `)
+    legacy.exec("PRAGMA foreign_keys = ON")
+    legacy.exec("UPDATE pr_watchers SET state = 'warming_up' WHERE active_session_count > 0")
+    const before = captureGraph(legacy)
+    legacy.close()
+
+    const migrated = new StateStore(dbPath)
+    const probe = new DatabaseSync(dbPath)
+    assert.deepEqual(captureGraph(probe), before)
+    assert.deepEqual(rows(probe, "PRAGMA foreign_key_check"), [])
+    assert.deepEqual(
+      rows(probe, "SELECT batch_id, lease_expires_at FROM reminder_batches ORDER BY batch_id"),
+      [{ batch_id: opencodeBatch, lease_expires_at: null }, { batch_id: piBatch, lease_expires_at: null }].sort(
+        (left, right) => left.batch_id.localeCompare(right.batch_id),
+      ),
+    )
+    const sessionSql = probe.prepare(
+      "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'sessions'",
+    ).get() as { sql: string }
+    assert.match(sessionSql.sql, /'codex'/)
+    probe.close()
+
+    migrated.registerClient("codex-client", { pid: 303, projectRoot: "/repo/codex" }, now + 1)
+    migrated.registerSession({
+      clientId: "codex-client", sessionId: "codex-session", host: "codex", hostSessionId: "codex-host",
+      repo: "acme/repo", branch: "feature/codex", isPrimary: true, status: "dormant", busyState: "idle",
+    }, now + 1)
+    migrated.close()
+
+    const reopened = new StateStore(dbPath)
+    assert.equal(reopened.getSession("pi-session")?.host, "pi")
+    assert.equal(reopened.getSession("opencode-session")?.status, "paused")
+    assert.equal(reopened.getSession("codex-session")?.host, "codex")
+    assert.equal(reopened.getWorktreeBinding("pi-session")?.headSha, "pi-sha")
+    assert.equal(reopened.getSubscriptionById(opencodeSubscription.subscriptionId)?.writePolicy, "user-authorized")
+    assert.equal(reopened.getReminderBatchRecord(piBatch, "pi-session")?.reminderText, "Pi reminder")
+    assert.equal(reopened.getReminderBatchRecord(opencodeBatch, "opencode-session")?.state, "handed_off")
+    reopened.close()
+  })
+
 describe("subscription write policy", () => {
   test("defaults by provenance and preserves an explicit manual policy", () => {
     const store = createStore()

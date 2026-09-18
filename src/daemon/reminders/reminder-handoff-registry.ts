@@ -1,7 +1,10 @@
 import type {
   AckReminderBundlePayload,
   AckReminderPayload,
+  ClaimReminderPayload,
   ReminderBatch,
+  ReminderClaim,
+  SettleReminderClaimPayload,
 } from "../../shared/schema.ts";
 import type {
   ReminderBatchRecord,
@@ -52,7 +55,6 @@ export class ReminderHandoffRegistry {
     return this.store.getPendingReminder(sessionId);
   }
 
-
   claimReminderBundle(
     sessionId: string,
     now = Date.now(),
@@ -87,6 +89,22 @@ export class ReminderHandoffRegistry {
       for (const record of records) this.discard(record.batchId);
       throw error;
     }
+  }
+
+  claimReminder(
+    payload: ClaimReminderPayload,
+    now = Date.now(),
+  ): ReminderClaim | null {
+    return this.store.claimReminder(payload.sessionId, now);
+  }
+
+  settleReminderClaim(
+    payload: SettleReminderClaimPayload,
+    now = Date.now(),
+  ): boolean {
+    const settled = this.store.settleReminderClaim(payload, now);
+    if (settled) this.discard(payload.batchId);
+    return settled;
   }
   claimClaudeReminder(
     sessionId: string,

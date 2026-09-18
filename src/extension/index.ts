@@ -8,8 +8,9 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { PremindDaemonClient } from "../plugin-opencode/daemon-client.ts";
-import { detectGitContext } from "../plugin-opencode/git-context.ts";
+import { PremindDaemonClient } from "../client/daemon-client.ts";
+import { detectGitContext } from "../client/git-context.ts";
+import { ensureDaemonRunning } from "../plugin-opencode/daemon-launcher.ts";
 import type {
 	AckReminderPayload,
 	AckReminderBundlePayload,
@@ -288,7 +289,8 @@ export const createPremindPiExtension = (
 ) => {
 	return function premindPiExtension(pi: ExtensionAPI): void {
 		const createDaemonClient =
-			dependencies.createDaemonClient ?? (() => new PremindDaemonClient());
+			dependencies.createDaemonClient ??
+			(() => new PremindDaemonClient({ ensureDaemon: ensureDaemonRunning }));
 		const detectGit = dependencies.detectGit ?? detectGitContext;
 
 		let sessionClient: DaemonClientLike | undefined;
