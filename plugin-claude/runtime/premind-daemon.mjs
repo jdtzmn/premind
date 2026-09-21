@@ -10015,13 +10015,16 @@ class StateStore {
     };
   }
   activateWorktree(binding, now = Date.now()) {
-    return this.transaction(() => {
-      const activeBinding = this.upsertWorktreeBinding(binding, now);
+    const { activeBinding, resetSubscriptionIds } = this.transaction(() => {
+      const activeBinding2 = this.upsertWorktreeBinding(binding, now);
       this.deactivateAutomaticSubscriptions(binding.sessionId, now);
+      const resetSubscriptionIds2 = this.resetInferredSubscriptionPoliciesInTransaction(binding.sessionId, now);
       if (binding.branch)
         this.ensureBranchWatcher(binding.repo, binding.branch, now);
-      return activeBinding;
+      return { activeBinding: activeBinding2, resetSubscriptionIds: resetSubscriptionIds2 };
     });
+    this.rebuildReminderBatches(resetSubscriptionIds, now);
+    return activeBinding;
   }
   upsertSubscription(input, now = Date.now()) {
     return this.transaction(() => {
@@ -10210,21 +10213,37 @@ class StateStore {
     return subscriptions.length;
   }
   resetInferredSubscriptionPolicies(now = Date.now()) {
-    return this.transaction(() => {
+    const resetSubscriptionIds = this.transaction(() => this.resetInferredSubscriptionPoliciesInTransaction(null, now));
+    this.rebuildReminderBatches(resetSubscriptionIds, now);
+    return resetSubscriptionIds.length;
+  }
+  resetInferredSubscriptionPoliciesInTransaction(sessionId, now) {
+    const resetSubscriptionIds = this.db.prepare(`
+			SELECT subscription_id FROM session_subscriptions
+			WHERE authorization_mode = 'infer-owner' AND state = 'active'
+			  AND (:sessionId IS NULL OR session_id = :sessionId)
+			  AND (ownership != 'unknown' OR policy != 'observe-only' OR write_policy != 'observe-only')
+		`).all({ sessionId });
+    if (resetSubscriptionIds.length === 0)
+      return [];
+    this.db.prepare(`
+			UPDATE session_subscriptions
+			SET ownership = 'unknown', policy = 'observe-only', write_policy = 'observe-only', updated_at = :now
+			WHERE authorization_mode = 'infer-owner' AND state = 'active'
+			  AND (:sessionId IS NULL OR session_id = :sessionId)
+			  AND (ownership != 'unknown' OR policy != 'observe-only' OR write_policy != 'observe-only')
+		`).run({ sessionId, now });
+    for (const { subscription_id: subscriptionId } of resetSubscriptionIds) {
       this.db.prepare(`
-				DELETE FROM reminder_batches WHERE state != 'handed_off' AND subscription_id IN (
-					SELECT subscription_id FROM session_subscriptions
-					WHERE authorization_mode = 'infer-owner' AND state = 'active'
-				)
-			`).run();
-      const result = this.db.prepare(`
-				UPDATE session_subscriptions
-				SET ownership = 'unknown', policy = 'observe-only', write_policy = 'observe-only', updated_at = :now
-				WHERE authorization_mode = 'infer-owner' AND state = 'active'
-				  AND (ownership != 'unknown' OR policy != 'observe-only' OR write_policy != 'observe-only')
-			`).run({ now });
-      return result.changes;
-    });
+				DELETE FROM reminder_batches WHERE subscription_id = :subscriptionId AND state != 'handed_off'
+			`).run({ subscriptionId });
+    }
+    return resetSubscriptionIds.map(({ subscription_id: subscriptionId }) => subscriptionId);
+  }
+  rebuildReminderBatches(subscriptionIds, now) {
+    for (const subscriptionId of subscriptionIds) {
+      this.buildReminderBatchForSubscription(subscriptionId, now);
+    }
   }
   recordAutomaticSubscriptionOptOut(input, now = Date.now()) {
     this.db.prepare(`INSERT OR IGNORE INTO automatic_subscription_opt_outs (session_id, git_dir, repo, branch, pr_number, created_at)
@@ -11465,13 +11484,15 @@ class StateStore {
     }
     if (!subscriptionColumns.some((column) => column.name === "authorization_mode")) {
       this.db.exec("ALTER TABLE session_subscriptions ADD COLUMN authorization_mode TEXT NOT NULL DEFAULT 'explicit-observe'");
-      this.db.exec(`
-				UPDATE session_subscriptions SET authorization_mode = CASE
-					WHEN source = 'automatic' THEN 'infer-owner'
-					WHEN write_policy = 'user-authorized' THEN 'explicit-user-authorized'
-					ELSE 'explicit-observe'
-				END`);
     }
+    this.db.exec(`
+			UPDATE session_subscriptions SET authorization_mode = CASE
+				WHEN source = 'automatic' THEN 'infer-owner'
+				WHEN write_policy = 'user-authorized' THEN 'explicit-user-authorized'
+				ELSE authorization_mode
+			END
+			WHERE authorization_mode = 'explicit-observe'
+			  AND (source = 'automatic' OR write_policy = 'user-authorized')`);
     this.db.prepare(`INSERT OR IGNORE INTO session_subscriptions (subscription_id, session_id, repo, pr_number, source, ownership, policy, authorization_mode, write_policy, state, last_delivered_event_seq, created_at, updated_at)
 				 SELECT 'legacy:' || session_id || ':' || repo || ':' || pr_number,
 				        session_id, repo, pr_number, 'automatic', 'unknown', 'observe-only', 'infer-owner', 'observe-only', 'active', last_delivered_event_seq, created_at, updated_at
