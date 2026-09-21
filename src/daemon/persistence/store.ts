@@ -598,13 +598,19 @@ export class StateStore {
 		binding: Omit<WorktreeBinding, "updatedAt">,
 		now = Date.now(),
 	): WorktreeBinding {
-		return this.transaction(() => {
+		const { activeBinding, resetSubscriptionIds } = this.transaction(() => {
 			const activeBinding = this.upsertWorktreeBinding(binding, now);
 			this.deactivateAutomaticSubscriptions(binding.sessionId, now);
+			const resetSubscriptionIds = this.resetInferredSubscriptionPoliciesInTransaction(
+				binding.sessionId,
+				now,
+			);
 			if (binding.branch)
 				this.ensureBranchWatcher(binding.repo, binding.branch, now);
-			return activeBinding;
+			return { activeBinding, resetSubscriptionIds };
 		});
+		this.rebuildReminderBatches(resetSubscriptionIds, now);
+		return activeBinding;
 	}
 
 	upsertSubscription(
@@ -1002,21 +1008,43 @@ export class StateStore {
 	}
 
 	resetInferredSubscriptionPolicies(now = Date.now()) {
-		return this.transaction(() => {
+		const resetSubscriptionIds = this.transaction(() =>
+			this.resetInferredSubscriptionPoliciesInTransaction(null, now),
+		);
+		this.rebuildReminderBatches(resetSubscriptionIds, now);
+		return resetSubscriptionIds.length;
+	}
+
+	private resetInferredSubscriptionPoliciesInTransaction(
+		sessionId: string | null,
+		now: number,
+	): string[] {
+		const resetSubscriptionIds = this.db.prepare(`
+			SELECT subscription_id FROM session_subscriptions
+			WHERE authorization_mode = 'infer-owner' AND state = 'active'
+			  AND (:sessionId IS NULL OR session_id = :sessionId)
+			  AND (ownership != 'unknown' OR policy != 'observe-only' OR write_policy != 'observe-only')
+		`).all({ sessionId }) as Array<{ subscription_id: string }>;
+		if (resetSubscriptionIds.length === 0) return [];
+		this.db.prepare(`
+			UPDATE session_subscriptions
+			SET ownership = 'unknown', policy = 'observe-only', write_policy = 'observe-only', updated_at = :now
+			WHERE authorization_mode = 'infer-owner' AND state = 'active'
+			  AND (:sessionId IS NULL OR session_id = :sessionId)
+			  AND (ownership != 'unknown' OR policy != 'observe-only' OR write_policy != 'observe-only')
+		`).run({ sessionId, now });
+		for (const { subscription_id: subscriptionId } of resetSubscriptionIds) {
 			this.db.prepare(`
-				DELETE FROM reminder_batches WHERE state != 'handed_off' AND subscription_id IN (
-					SELECT subscription_id FROM session_subscriptions
-					WHERE authorization_mode = 'infer-owner' AND state = 'active'
-				)
-			`).run();
-			const result = this.db.prepare(`
-				UPDATE session_subscriptions
-				SET ownership = 'unknown', policy = 'observe-only', write_policy = 'observe-only', updated_at = :now
-				WHERE authorization_mode = 'infer-owner' AND state = 'active'
-				  AND (ownership != 'unknown' OR policy != 'observe-only' OR write_policy != 'observe-only')
-			`).run({ now });
-			return result.changes as number;
-		});
+				DELETE FROM reminder_batches WHERE subscription_id = :subscriptionId AND state != 'handed_off'
+			`).run({ subscriptionId });
+		}
+		return resetSubscriptionIds.map(({ subscription_id: subscriptionId }) => subscriptionId);
+	}
+
+	private rebuildReminderBatches(subscriptionIds: string[], now: number) {
+		for (const subscriptionId of subscriptionIds) {
+			this.buildReminderBatchForSubscription(subscriptionId, now);
+		}
 	}
 
 	recordAutomaticSubscriptionOptOut(
@@ -3087,14 +3115,18 @@ export class StateStore {
 			this.db.exec(
 				"ALTER TABLE session_subscriptions ADD COLUMN authorization_mode TEXT NOT NULL DEFAULT 'explicit-observe'",
 			);
-			this.db.exec(`
-				UPDATE session_subscriptions SET authorization_mode = CASE
-					WHEN source = 'automatic' THEN 'infer-owner'
-					WHEN write_policy = 'user-authorized' THEN 'explicit-user-authorized'
-					ELSE 'explicit-observe'
-				END`,
-			);
 		}
+		// This backfill is intentionally idempotent: a process can stop after SQLite
+		// commits ALTER TABLE but before it classifies the legacy rows.
+		this.db.exec(`
+			UPDATE session_subscriptions SET authorization_mode = CASE
+				WHEN source = 'automatic' THEN 'infer-owner'
+				WHEN write_policy = 'user-authorized' THEN 'explicit-user-authorized'
+				ELSE authorization_mode
+			END
+			WHERE authorization_mode = 'explicit-observe'
+			  AND (source = 'automatic' OR write_policy = 'user-authorized')`,
+		);
 		this.db
 			.prepare(
 				`INSERT OR IGNORE INTO session_subscriptions (subscription_id, session_id, repo, pr_number, source, ownership, policy, authorization_mode, write_policy, state, last_delivered_event_seq, created_at, updated_at)

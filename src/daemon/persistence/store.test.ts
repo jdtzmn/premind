@@ -1967,6 +1967,32 @@ describe("StateStore", () => {
     store.close()
   })
 
+  test("repairs authorization modes after an interrupted migration", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "premind-store-test-"))
+    const dbPath = path.join(dir, "premind.db")
+    tempPaths.push(dir)
+    const seeded = new StateStore(dbPath)
+    seeded.registerClient("migration-client", { pid: 1, projectRoot: "/repo" })
+    seeded.registerSession({
+      clientId: "migration-client", sessionId: "migration-session", repo: "acme/repo",
+      branch: "feature/migration", isPrimary: true, status: "active", busyState: "idle",
+    })
+    seeded.upsertSubscription({
+      sessionId: "migration-session", repo: "acme/repo", prNumber: 7, source: "automatic",
+    })
+    seeded.upsertSubscription({
+      sessionId: "migration-session", repo: "acme/repo", prNumber: 8, source: "manual", writePolicy: "user-authorized",
+    })
+    seeded.close()
+    const interrupted = new DatabaseSync(dbPath)
+    interrupted.exec("UPDATE session_subscriptions SET authorization_mode = 'explicit-observe'")
+    interrupted.close()
+    const repaired = new StateStore(dbPath)
+    assert.equal(repaired.getSubscription("migration-session", "acme/repo", 7)?.authorizationMode, "infer-owner")
+    assert.equal(repaired.getSubscription("migration-session", "acme/repo", 8)?.authorizationMode, "explicit-user-authorized")
+    repaired.close()
+  })
+
 
   test("migration is idempotent and a no-op on a fresh database", () => {
     // First open creates the new schema directly.
@@ -2338,7 +2364,7 @@ describe("subscription authorization", () => {
     store.close()
   })
 
-  test("resets inferred authority without changing explicit authorization", () => {
+  test("resets inferred authority without changing explicit authorization or losing pending reminders", () => {
     const store = createStore()
     store.registerClient("reset-client", { pid: 1, projectRoot: "/tmp/project" })
     store.registerSession({
@@ -2353,13 +2379,47 @@ describe("subscription authorization", () => {
       sessionId: "reset-session", repo: "acme/repo", prNumber: 7, source: "manual",
     })
     store.reconcileSubscriptionPolicies("acme/repo", 7, "feature/reset", "octocat", "octocat")
+    const current = snapshot()
+    current.core.headRefName = "feature/reset"
+    current.checks = [{ name: "lint", state: "FAILURE" }]
+    store.saveSnapshot("acme/repo", 7, current)
+    store.insertEvents("acme/repo", 7, [{
+      dedupeKey: "reset-lint", kind: "check.failed", priority: "high",
+      summary: "Check failed: lint", payload: { name: "lint", headSha: current.core.headRefOid },
+    }])
+    const initial = store.buildReminderBatchForSubscription(inferred.subscriptionId)
+    assert.match(initial?.reminderText ?? "", /Owned-active tracking/)
     const explicit = store.upsertSubscription({
       sessionId: "reset-session", repo: "acme/repo", prNumber: 8, source: "manual", writePolicy: "user-authorized",
     })
-    assert.equal(store.getSubscriptionById(inferred.subscriptionId)?.writePolicy, "owned-active")
     assert.equal(store.resetInferredSubscriptionPolicies(), 1)
     assert.equal(store.getSubscriptionById(inferred.subscriptionId)?.writePolicy, "observe-only")
+    assert.match(store.getPendingReminder("reset-session")?.reminderText ?? "", /observation-only/)
     assert.equal(store.getSubscriptionById(explicit.subscriptionId)?.writePolicy, "user-authorized")
+    store.close()
+  })
+
+  test("immediately resets inferred authority when the active checkout changes", () => {
+    const store = createStore()
+    store.registerClient("checkout-client", { pid: 1, projectRoot: "/tmp/project" })
+    store.registerSession({
+      clientId: "checkout-client", sessionId: "checkout-session", repo: "acme/repo",
+      branch: "feature/one", isPrimary: true, status: "active", busyState: "idle",
+    })
+    store.upsertWorktreeBinding({
+      sessionId: "checkout-session", root: "/tmp/one", gitDir: "/tmp/.git/worktrees/one",
+      repo: "acme/repo", branch: "feature/one", headSha: "one", state: "watching",
+    })
+    const subscription = store.upsertSubscription({
+      sessionId: "checkout-session", repo: "acme/repo", prNumber: 7, source: "manual",
+    })
+    store.reconcileSubscriptionPolicies("acme/repo", 7, "feature/one", "octocat", "octocat")
+    assert.equal(store.getSubscriptionById(subscription.subscriptionId)?.writePolicy, "owned-active")
+    store.activateWorktree({
+      sessionId: "checkout-session", root: "/tmp/two", gitDir: "/tmp/.git/worktrees/two",
+      repo: "acme/repo", branch: "feature/two", headSha: "two", state: "waiting_for_pr",
+    })
+    assert.equal(store.getSubscriptionById(subscription.subscriptionId)?.writePolicy, "observe-only")
     store.close()
   })
 })
