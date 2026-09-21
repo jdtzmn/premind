@@ -1959,8 +1959,10 @@ describe("StateStore", () => {
       store.getSubscription("session-policy-migration", "acme/repo", 7) && [
         store.getSubscription("session-policy-migration", "acme/repo", 7)!.ownership,
         store.getSubscription("session-policy-migration", "acme/repo", 7)!.policy,
+        store.getSubscription("session-policy-migration", "acme/repo", 7)!.authorizationMode,
+        store.getSubscription("session-policy-migration", "acme/repo", 7)!.writePolicy,
       ],
-      ["unknown", "observe-only"],
+      ["unknown", "observe-only", "infer-owner", "observe-only"],
     )
     store.close()
   })
@@ -1986,6 +1988,7 @@ describe("StateStore", () => {
       .all()
     assert.ok(subscriptionColumns.some((c) => c.name === "ownership"))
     assert.ok(subscriptionColumns.some((c) => c.name === "policy"))
+    assert.ok(subscriptionColumns.some((c) => c.name === "authorization_mode"))
     reopened.close()
   })
 
