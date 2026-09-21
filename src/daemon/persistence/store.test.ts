@@ -2293,9 +2293,8 @@ describe("migrate: session hosts", () => {
     assert.equal(store.getReminderBatchRecord(batchId, "legacy-claude")?.reminderText, "keep me")
     store.close()
   })
-
-describe("subscription write policy", () => {
-  test("defaults by provenance and preserves an explicit manual policy", () => {
+describe("subscription authorization", () => {
+  test("keeps explicit authority while omitted policies await verification", () => {
     const store = createStore()
     store.registerClient("policy-client", { pid: 1, projectRoot: "/tmp/project" })
     store.registerSession({
@@ -2305,20 +2304,20 @@ describe("subscription write policy", () => {
     const automatic = store.upsertSubscription({
       sessionId: "policy-session", repo: "acme/repo", prNumber: 7, source: "automatic",
     })
-    assert.equal(automatic.writePolicy, "owned-active")
+    assert.deepEqual([automatic.authorizationMode, automatic.writePolicy], ["infer-owner", "owned-active"])
     const manual = store.upsertSubscription({
       sessionId: "policy-session", repo: "acme/repo", prNumber: 8, source: "manual",
     })
-    assert.equal(manual.writePolicy, "observe-only")
+    assert.deepEqual([manual.authorizationMode, manual.writePolicy], ["infer-owner", "observe-only"])
     const authorized = store.upsertSubscription({
       sessionId: "policy-session", repo: "acme/repo", prNumber: 8, source: "manual", writePolicy: "user-authorized",
     })
-    assert.equal(authorized.writePolicy, "user-authorized")
+    assert.deepEqual([authorized.authorizationMode, authorized.writePolicy], ["explicit-user-authorized", "user-authorized"])
     const rediscovered = store.upsertSubscription({
       sessionId: "policy-session", repo: "acme/repo", prNumber: 8, source: "automatic",
     })
     assert.equal(rediscovered.source, "manual")
-    assert.equal(rediscovered.writePolicy, "user-authorized")
+    assert.deepEqual([rediscovered.authorizationMode, rediscovered.writePolicy], ["explicit-user-authorized", "user-authorized"])
     const current = snapshot()
     current.core.number = 8
     current.core.headRefName = "feature/policy"
@@ -2333,6 +2332,31 @@ describe("subscription write policy", () => {
     assert.match(batch.reminderText, /User-authorized tracking/)
     assert.match(batch.reminderText, /target worktree is not active/)
     assert.doesNotMatch(batch.reminderText, /Action required for this authorized PR/)
+    store.close()
+  })
+
+  test("resets inferred authority without changing explicit authorization", () => {
+    const store = createStore()
+    store.registerClient("reset-client", { pid: 1, projectRoot: "/tmp/project" })
+    store.registerSession({
+      clientId: "reset-client", sessionId: "reset-session", repo: "acme/repo",
+      branch: "feature/reset", isPrimary: true, status: "active", busyState: "idle",
+    })
+    store.upsertWorktreeBinding({
+      sessionId: "reset-session", root: "/tmp/reset", gitDir: "/tmp/.git/worktrees/reset",
+      repo: "acme/repo", branch: "feature/reset", headSha: "head", state: "watching",
+    })
+    const inferred = store.upsertSubscription({
+      sessionId: "reset-session", repo: "acme/repo", prNumber: 7, source: "manual",
+    })
+    store.reconcileSubscriptionPolicies("acme/repo", 7, "feature/reset", "octocat", "octocat")
+    const explicit = store.upsertSubscription({
+      sessionId: "reset-session", repo: "acme/repo", prNumber: 8, source: "manual", writePolicy: "user-authorized",
+    })
+    assert.equal(store.getSubscriptionById(inferred.subscriptionId)?.writePolicy, "owned-active")
+    assert.equal(store.resetInferredSubscriptionPolicies(), 1)
+    assert.equal(store.getSubscriptionById(inferred.subscriptionId)?.writePolicy, "observe-only")
+    assert.equal(store.getSubscriptionById(explicit.subscriptionId)?.writePolicy, "user-authorized")
     store.close()
   })
 })

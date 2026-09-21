@@ -88,9 +88,9 @@ const tools = [
         repo: { type: "string" },
         writePolicy: {
           type: "string",
-          enum: ["owned-active", "user-authorized", "observe-only"],
+          enum: ["user-authorized", "observe-only"],
           description:
-            "Optional; omitted manual subscriptions are observe-only. Use user-authorized only for explicit user authorization.",
+            "Optional; omission lets Premind verify ownership for the active checkout. Use user-authorized only for explicit user authorization, or observe-only to prevent automatic escalation.",
         },
       },
       required: ["prNumber"],

@@ -159,7 +159,7 @@ describe("pending reminder live reconciliation", () => {
       const { store, registry, subscription, save } = setupLive("manual", "user-authorized")
       try {
         save(liveSnapshot())
-        store.reconcileSubscriptionPolicies("acme/repo", 13, "octocat", "octocat")
+        store.reconcileSubscriptionPolicies("acme/repo", 13, "feature/x", "octocat", "octocat")
         store.insertEvents("acme/repo", 13, [failureEvent()])
         const built = store.buildReminderBatchForSubscription(subscription.subscriptionId)!
         assert.match(built.reminderText, /User-authorized tracking/)

@@ -48,7 +48,9 @@ type DaemonClientLike = {
 	pauseSession: (sessionId: string) => Promise<unknown>;
 	resumeSession: (sessionId: string) => Promise<unknown>;
 	activateWorktree: (payload: ActivateWorktreePayload) => Promise<unknown>;
-	subscribe: (payload: SubscribePayload) => Promise<unknown>;
+	subscribe: (payload: SubscribePayload) => Promise<{
+        subscription: { writePolicy?: "owned-active" | "user-authorized" | "observe-only" };
+    }>;
 	unsubscribe: (payload: UnsubscribePayload) => Promise<unknown>;
 	setGlobalDisabled: (disabled: boolean) => Promise<{ disabled: boolean }>;
 	updateSessionState: (payload: {
@@ -841,17 +843,27 @@ export const createPremindPiExtension = (
 			label: "Premind Subscribe",
 			description:
 				"Mandatory PR tracking: Immediately call this tool after creating, opening, discovering, or beginning work on a pull request. Do this before reporting the PR URL or status to the user. Applies after gh pr create, gh stack submit, gh stack link, or any equivalent GitHub operation.",
+			promptGuidelines: [
+				"Omit writePolicy to let Premind verify whether the authenticated GitHub user authored the PR on this session's active checkout. It remains observation-only until verified.",
+				"Use user-authorized only when the user explicitly authorizes work on this PR. Use observe-only to prevent automatic authority escalation.",
+			],
 			parameters: Type.Object({
 				prNumber: Type.Integer({ minimum: 1 }),
 				repo: Type.Optional(Type.String({ minLength: 1 })),
+				writePolicy: Type.Optional(
+					Type.Union([Type.Literal("user-authorized"), Type.Literal("observe-only")]),
+				),
 			}),
 			async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 				const sessionId = currentSessionId ?? getPiSessionId(ctx);
-				await getClient().subscribe({ sessionId, ...params });
+				const result = await getClient().subscribe({ sessionId, ...params });
 				const target = `${params.repo ?? "active worktree"}#${params.prNumber}`;
 				return {
 					content: [
-						{ type: "text" as const, text: `premind subscribed to ${target}.` },
+						{
+							type: "text" as const,
+							text: `premind subscribed to ${target} with write policy ${result.subscription.writePolicy ?? "observe-only"}.`,
+						},
 					],
 					details: {},
 				};
