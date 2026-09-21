@@ -153,8 +153,12 @@ const subscriptionControlPayloadSchema = z
   })
   .strict();
 
+const manualSubscriptionWritePolicySchema = z.enum([
+  "user-authorized",
+  "observe-only",
+]);
 export const subscribePayloadSchema = subscriptionControlPayloadSchema.extend({
-  writePolicy: subscriptionWritePolicySchema.optional(),
+  writePolicy: manualSubscriptionWritePolicySchema.optional(),
 }).strict();
 export const unsubscribePayloadSchema = subscriptionControlPayloadSchema;
 

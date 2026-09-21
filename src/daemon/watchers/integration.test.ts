@@ -131,18 +131,26 @@ describe("watcher integration", () => {
       clientId: "client-policy", sessionId: "session-policy", repo: "acme/repo", branch: "feature/test",
       isPrimary: true, status: "active", busyState: "idle",
     })
+    store.upsertWorktreeBinding({
+      sessionId: "session-policy", root: "/tmp/worktree", gitDir: "/tmp/.git/worktrees/policy",
+      repo: "acme/repo", branch: "feature/test", headSha: "head", state: "waiting_for_pr",
+    })
     const subscription = store.upsertSubscription({
       sessionId: "session-policy", repo: "acme/repo", prNumber: 42, source: "manual",
     })
-    assert.deepEqual([subscription.ownership, subscription.policy], ["unknown", "observe-only"])
+    assert.deepEqual(
+      [subscription.authorizationMode, subscription.ownership, subscription.policy, subscription.writePolicy],
+      ["infer-owner", "unknown", "observe-only", "observe-only"],
+    )
     github.pushSnapshot(makeSnapshot({ core: { ...makeSnapshot().core, authorLogin: "octocat" } }))
     await watcher.tick()
     assert.deepEqual(
       store.getSubscriptionById(subscription.subscriptionId) && [
         store.getSubscriptionById(subscription.subscriptionId)!.ownership,
         store.getSubscriptionById(subscription.subscriptionId)!.policy,
+        store.getSubscriptionById(subscription.subscriptionId)!.writePolicy,
       ],
-      ["self", "actionable"],
+      ["self", "actionable", "owned-active"],
     )
     github.pushSnapshot(makeSnapshot({ core: { ...makeSnapshot().core, authorLogin: "someone-else" } }))
     await watcher.tick()
@@ -150,9 +158,38 @@ describe("watcher integration", () => {
       store.getSubscriptionById(subscription.subscriptionId) && [
         store.getSubscriptionById(subscription.subscriptionId)!.ownership,
         store.getSubscriptionById(subscription.subscriptionId)!.policy,
+        store.getSubscriptionById(subscription.subscriptionId)!.writePolicy,
       ],
-      ["foreign", "observe-only"],
+      ["foreign", "observe-only", "observe-only"],
     )
+    store.close()
+  })
+
+  test("does not upgrade explicit observation or an unrelated checkout", async () => {
+    const store = createStore()
+    const github = new FixtureGitHubClient()
+    const watcher = new PullRequestWatcher(store, github)
+    store.registerClient("client-guard", { pid: 1, projectRoot: "/tmp" })
+    store.registerSession({
+      clientId: "client-guard", sessionId: "session-guard", repo: "acme/repo", branch: "feature/other",
+      isPrimary: true, status: "active", busyState: "idle",
+    })
+    store.upsertWorktreeBinding({
+      sessionId: "session-guard", root: "/tmp/other", gitDir: "/tmp/.git/worktrees/other",
+      repo: "acme/repo", branch: "feature/other", headSha: "other", state: "waiting_for_pr",
+    })
+    const inferred = store.upsertSubscription({
+      sessionId: "session-guard", repo: "acme/repo", prNumber: 42, source: "manual",
+    })
+    const explicit = store.upsertSubscription({
+      sessionId: "session-guard", repo: "acme/repo", prNumber: 43, source: "manual", writePolicy: "observe-only",
+    })
+    github.pushSnapshot(makeSnapshot())
+    github.pushSnapshot({ ...makeSnapshot(), core: { ...makeSnapshot().core, number: 43 } })
+    await watcher.tick()
+    assert.equal(store.getSubscriptionById(inferred.subscriptionId)?.writePolicy, "observe-only")
+    assert.equal(store.getSubscriptionById(explicit.subscriptionId)?.writePolicy, "observe-only")
+    assert.equal(store.getSubscriptionById(explicit.subscriptionId)?.authorizationMode, "explicit-observe")
     store.close()
   })
 

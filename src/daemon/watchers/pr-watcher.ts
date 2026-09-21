@@ -69,7 +69,7 @@ export class PullRequestWatcher {
 
         if (result.kind === "not_modified") {
           const policyChanges = this.store.reconcileSubscriptionPolicies(
-            target.repo, target.prNumber, previous?.core.authorLogin, viewerLogin, now,
+            target.repo, target.prNumber, previous?.core.headRefName, previous?.core.authorLogin, viewerLogin, now,
           )
           if (policyChanges > 0) {
             for (const subscription of this.store.listActiveSubscriptionsForPr(target.repo, target.prNumber)) {
@@ -102,7 +102,7 @@ export class PullRequestWatcher {
         }
         const events = diffSnapshot(previous, next)
         this.store.reconcileSubscriptionPolicies(
-          target.repo, target.prNumber, next.core.authorLogin, viewerLogin, now,
+          target.repo, target.prNumber, next.core.headRefName, next.core.authorLogin, viewerLogin, now,
         )
         const terminal = ["MERGED", "CLOSED"].includes(next.core.state.toUpperCase())
 

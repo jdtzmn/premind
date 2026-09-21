@@ -4289,9 +4289,13 @@ var subscriptionControlPayloadSchema = exports_external
 		repo: exports_external.string().min(1).optional(),
 	})
 	.strict();
+var manualSubscriptionWritePolicySchema = exports_external.enum([
+	"user-authorized",
+	"observe-only",
+]);
 var subscribePayloadSchema = subscriptionControlPayloadSchema
 	.extend({
-		writePolicy: subscriptionWritePolicySchema.optional(),
+		writePolicy: manualSubscriptionWritePolicySchema.optional(),
 	})
 	.strict();
 var unsubscribePayloadSchema = subscriptionControlPayloadSchema;

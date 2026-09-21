@@ -59,6 +59,10 @@ type SessionRow = {
 export type SubscriptionSource = "automatic" | "manual";
 export type SubscriptionOwnership = "self" | "foreign" | "unknown";
 export type SubscriptionPolicy = "actionable" | "observe-only";
+export type SubscriptionAuthorizationMode =
+	| "infer-owner"
+	| "explicit-observe"
+	| "explicit-user-authorized";
 export type SubscriptionState = "active" | "unsubscribed";
 
 export type SubscriptionWritePolicy = SharedSubscriptionWritePolicy;
@@ -105,6 +109,7 @@ export type SessionSubscription = {
 	source: SubscriptionSource;
 	ownership: SubscriptionOwnership;
 	policy: SubscriptionPolicy;
+	authorizationMode: SubscriptionAuthorizationMode;
 	writePolicy: SubscriptionWritePolicy;
 	state: SubscriptionState;
 	lastDeliveredEventSeq: number;
@@ -164,6 +169,30 @@ type ReminderTarget = {
 const ownershipFor = (authorLogin: string | null | undefined, viewerLogin: string | null | undefined): SubscriptionOwnership => {
   if (!authorLogin || !viewerLogin) return "unknown";
   return authorLogin.toLowerCase() === viewerLogin.toLowerCase() ? "self" : "foreign";
+};
+const writePolicyFor = (
+  authorizationMode: SubscriptionAuthorizationMode,
+  ownership: SubscriptionOwnership,
+  policy: SubscriptionPolicy,
+): SubscriptionWritePolicy => {
+  if (authorizationMode === "explicit-user-authorized") return "user-authorized";
+  if (authorizationMode === "explicit-observe") return "observe-only";
+  return ownership === "self" && policy === "actionable"
+    ? "owned-active"
+    : "observe-only";
+};
+const authorizationModeFor = (
+  source: SubscriptionSource,
+  writePolicy: SubscriptionWritePolicy | undefined,
+  existing: SessionSubscription | null,
+): SubscriptionAuthorizationMode => {
+  if (writePolicy === "owned-active") {
+    throw new Error("owned-active is reserved for daemon-verified subscriptions");
+  }
+  if (writePolicy === "user-authorized") return "explicit-user-authorized";
+  if (writePolicy === "observe-only") return "explicit-observe";
+  if (source === "manual" && existing?.source === "manual") return existing.authorizationMode;
+  return "infer-owner";
 };
 type ReminderEventWindow = {
 	sourceEventIds: number[];
@@ -592,13 +621,19 @@ export class StateStore {
 		binding: Omit<WorktreeBinding, "updatedAt">,
 		now = Date.now(),
 	): WorktreeBinding {
-		return this.transaction(() => {
+		const { activeBinding, resetSubscriptionIds } = this.transaction(() => {
 			const activeBinding = this.upsertWorktreeBinding(binding, now);
 			this.deactivateAutomaticSubscriptions(binding.sessionId, now);
+			const resetSubscriptionIds = this.resetInferredSubscriptionPoliciesInTransaction(
+				binding.sessionId,
+				now,
+			);
 			if (binding.branch)
 				this.ensureBranchWatcher(binding.repo, binding.branch, now);
-			return activeBinding;
+			return { activeBinding, resetSubscriptionIds };
 		});
+		this.rebuildReminderBatches(resetSubscriptionIds, now);
+		return activeBinding;
 	}
 
 	upsertSubscription(
@@ -617,24 +652,27 @@ export class StateStore {
 			}
 			const existing = this.getSubscription(input.sessionId, input.repo, input.prNumber);
 			const source = existing?.source === "manual" || input.source === "manual" ? "manual" : "automatic";
-			const writePolicy = input.writePolicy ?? (existing?.source === "manual"
-				? existing.writePolicy
-				: input.source === "manual" ? "observe-only" : existing?.writePolicy ?? "owned-active");
+			const authorizationMode = authorizationModeFor(source, input.writePolicy, existing);
+			const verifiedAutomatic = source === "automatic";
+			const ownership: SubscriptionOwnership = verifiedAutomatic ? "self" : "unknown";
+			const policy: SubscriptionPolicy = verifiedAutomatic ? "actionable" : "observe-only";
+			const writePolicy = writePolicyFor(authorizationMode, ownership, policy);
 			this.db
 				.prepare(
 					`
-					INSERT INTO session_subscriptions (subscription_id, session_id, repo, pr_number, source, ownership, policy, write_policy, state, last_delivered_event_seq, created_at, updated_at)
-					VALUES (:subscriptionId, :sessionId, :repo, :prNumber, :source, 'unknown', 'observe-only', :writePolicy, 'active', 0, :now, :now)
+					INSERT INTO session_subscriptions (subscription_id, session_id, repo, pr_number, source, ownership, policy, authorization_mode, write_policy, state, last_delivered_event_seq, created_at, updated_at)
+					VALUES (:subscriptionId, :sessionId, :repo, :prNumber, :source, :ownership, :policy, :authorizationMode, :writePolicy, 'active', 0, :now, :now)
 					ON CONFLICT(session_id, repo, pr_number) DO UPDATE SET
 						source = excluded.source,
-						ownership = CASE WHEN session_subscriptions.source = 'manual' OR excluded.source = 'manual' THEN 'unknown' ELSE session_subscriptions.ownership END,
-						policy = CASE WHEN session_subscriptions.source = 'manual' OR excluded.source = 'manual' THEN 'observe-only' ELSE session_subscriptions.policy END,
+						ownership = excluded.ownership,
+						policy = excluded.policy,
+						authorization_mode = excluded.authorization_mode,
 						write_policy = excluded.write_policy,
 						state = 'active',
 						updated_at = excluded.updated_at
 					`,
 				)
-				.run({ ...input, source, writePolicy, subscriptionId: randomUUID(), now });
+				.run({ ...input, source, ownership, policy, authorizationMode, writePolicy, subscriptionId: randomUUID(), now });
 			this.touchPrWatcher(input.repo, input.prNumber, now);
 			return this.getSubscription(input.sessionId, input.repo, input.prNumber)!;
 		});
@@ -643,19 +681,39 @@ export class StateStore {
 	reconcileSubscriptionPolicies(
 		repo: string,
 		prNumber: number,
+		headRefName: string | null | undefined,
 		authorLogin: string | null | undefined,
 		viewerLogin: string | null | undefined,
 		now = Date.now(),
 	): number {
 		const ownership = ownershipFor(authorLogin, viewerLogin);
-		const policy: SubscriptionPolicy = ownership === "self" ? "actionable" : "observe-only";
+		const canOwn = ownership === "self" && Boolean(headRefName);
 		return this.transaction(() => {
 			const result = this.db.prepare(`
 				UPDATE session_subscriptions
-				SET ownership = :ownership, policy = :policy, updated_at = :now
+				SET ownership = :ownership,
+					policy = CASE WHEN :canOwn = 1 AND EXISTS (
+						SELECT 1 FROM worktree_bindings
+						WHERE worktree_bindings.session_id = session_subscriptions.session_id
+						  AND worktree_bindings.repo = :repo
+						  AND worktree_bindings.branch = :headRefName
+					) THEN 'actionable' ELSE 'observe-only' END,
+					write_policy = CASE WHEN :canOwn = 1 AND EXISTS (
+						SELECT 1 FROM worktree_bindings
+						WHERE worktree_bindings.session_id = session_subscriptions.session_id
+						  AND worktree_bindings.repo = :repo
+						  AND worktree_bindings.branch = :headRefName
+					) THEN 'owned-active' ELSE 'observe-only' END,
+					updated_at = :now
 				WHERE repo = :repo AND pr_number = :prNumber AND state = 'active'
-				  AND (ownership != :ownership OR policy != :policy)
-			`).run({ repo, prNumber, ownership, policy, now });
+				  AND authorization_mode = 'infer-owner'
+				  AND (ownership != :ownership OR policy != CASE WHEN :canOwn = 1 AND EXISTS (
+						SELECT 1 FROM worktree_bindings
+						WHERE worktree_bindings.session_id = session_subscriptions.session_id
+						  AND worktree_bindings.repo = :repo
+						  AND worktree_bindings.branch = :headRefName
+					) THEN 'actionable' ELSE 'observe-only' END)
+			`).run({ repo, prNumber, headRefName: headRefName ?? null, ownership, canOwn: canOwn ? 1 : 0, now });
 			if ((result.changes as number) > 0) {
 				this.db.prepare(`
 					DELETE FROM reminder_batches
@@ -687,6 +745,7 @@ export class StateStore {
 					source: SubscriptionSource;
 					ownership: SubscriptionOwnership;
 					policy: SubscriptionPolicy;
+					authorization_mode: SubscriptionAuthorizationMode;
 					write_policy: SubscriptionWritePolicy;
 					state: SubscriptionState;
 					last_delivered_event_seq: number;
@@ -708,6 +767,7 @@ export class StateStore {
 					source: SubscriptionSource;
 					ownership: SubscriptionOwnership;
 					policy: SubscriptionPolicy;
+					authorization_mode: SubscriptionAuthorizationMode;
 					write_policy: SubscriptionWritePolicy;
 					state: SubscriptionState;
 					last_delivered_event_seq: number;
@@ -725,6 +785,7 @@ export class StateStore {
 		source: SubscriptionSource;
 		ownership: SubscriptionOwnership;
 		policy: SubscriptionPolicy;
+		authorization_mode: SubscriptionAuthorizationMode;
 		write_policy: SubscriptionWritePolicy;
 		state: SubscriptionState;
 		last_delivered_event_seq: number;
@@ -738,7 +799,8 @@ export class StateStore {
 			source: row.source,
 			ownership: row.ownership,
 			policy: row.policy,
-			writePolicy: row.write_policy,
+			authorizationMode: row.authorization_mode,
+			writePolicy: writePolicyFor(row.authorization_mode, row.ownership, row.policy),
 			state: row.state,
 			lastDeliveredEventSeq: row.last_delivered_event_seq,
 			updatedAt: row.updated_at,
@@ -766,24 +828,13 @@ export class StateStore {
 			source: SubscriptionSource;
 			ownership: SubscriptionOwnership;
 			policy: SubscriptionPolicy;
+			authorization_mode: SubscriptionAuthorizationMode;
 			write_policy: SubscriptionWritePolicy;
 			state: SubscriptionState;
 			last_delivered_event_seq: number;
 			updated_at: number;
 		}>;
-		return rows.map((row) => ({
-			subscriptionId: row.subscription_id,
-			sessionId: row.session_id,
-			repo: row.repo,
-			prNumber: row.pr_number,
-			source: row.source,
-			ownership: row.ownership,
-			policy: row.policy,
-			writePolicy: row.write_policy,
-			state: row.state,
-			lastDeliveredEventSeq: row.last_delivered_event_seq,
-			updatedAt: row.updated_at,
-		}));
+		return rows.map((row) => this.toSubscription(row));
 	}
 
 	listActiveSubscriptionsForPr(
@@ -809,24 +860,13 @@ export class StateStore {
 			source: SubscriptionSource;
 			ownership: SubscriptionOwnership;
 			policy: SubscriptionPolicy;
+			authorization_mode: SubscriptionAuthorizationMode;
 			write_policy: SubscriptionWritePolicy;
 			state: SubscriptionState;
 			last_delivered_event_seq: number;
 			updated_at: number;
 		}>;
-		return rows.map((row) => ({
-			subscriptionId: row.subscription_id,
-			sessionId: row.session_id,
-			repo: row.repo,
-			prNumber: row.pr_number,
-			source: row.source,
-			ownership: row.ownership,
-			policy: row.policy,
-			writePolicy: row.write_policy,
-			state: row.state,
-			lastDeliveredEventSeq: row.last_delivered_event_seq,
-			updatedAt: row.updated_at,
-		}));
+		return rows.map((row) => this.toSubscription(row));
 	}
 
 	baselineAutomaticSubscription(
@@ -861,11 +901,13 @@ export class StateStore {
 			const subscriptionId = existing?.subscriptionId ?? randomUUID();
 			this.db
 				.prepare(
-					`INSERT INTO session_subscriptions (subscription_id, session_id, repo, pr_number, source, ownership, policy, write_policy, state, last_delivered_event_seq, created_at, updated_at)
-					 VALUES (:subscriptionId, :sessionId, :repo, :prNumber, 'automatic', 'self', 'actionable', 'owned-active', 'active', :cursor, :now, :now)
+					`INSERT INTO session_subscriptions (subscription_id, session_id, repo, pr_number, source, ownership, policy, authorization_mode, write_policy, state, last_delivered_event_seq, created_at, updated_at)
+					 VALUES (:subscriptionId, :sessionId, :repo, :prNumber, 'automatic', 'self', 'actionable', 'infer-owner', 'owned-active', 'active', :cursor, :now, :now)
 					 ON CONFLICT(session_id, repo, pr_number) DO UPDATE SET
 					   ownership = 'self',
 					   policy = 'actionable',
+					   authorization_mode = 'infer-owner',
+					   write_policy = 'owned-active',
 					   state = 'active',
 					   last_delivered_event_seq = :cursor,
 					   updated_at = :now`
@@ -986,6 +1028,46 @@ export class StateStore {
 			)
 			.run({ now });
 		return subscriptions.length;
+	}
+
+	resetInferredSubscriptionPolicies(now = Date.now()) {
+		const resetSubscriptionIds = this.transaction(() =>
+			this.resetInferredSubscriptionPoliciesInTransaction(null, now),
+		);
+		this.rebuildReminderBatches(resetSubscriptionIds, now);
+		return resetSubscriptionIds.length;
+	}
+
+	private resetInferredSubscriptionPoliciesInTransaction(
+		sessionId: string | null,
+		now: number,
+	): string[] {
+		const resetSubscriptionIds = this.db.prepare(`
+			SELECT subscription_id FROM session_subscriptions
+			WHERE authorization_mode = 'infer-owner' AND state = 'active'
+			  AND (:sessionId IS NULL OR session_id = :sessionId)
+			  AND (ownership != 'unknown' OR policy != 'observe-only' OR write_policy != 'observe-only')
+		`).all({ sessionId }) as Array<{ subscription_id: string }>;
+		if (resetSubscriptionIds.length === 0) return [];
+		this.db.prepare(`
+			UPDATE session_subscriptions
+			SET ownership = 'unknown', policy = 'observe-only', write_policy = 'observe-only', updated_at = :now
+			WHERE authorization_mode = 'infer-owner' AND state = 'active'
+			  AND (:sessionId IS NULL OR session_id = :sessionId)
+			  AND (ownership != 'unknown' OR policy != 'observe-only' OR write_policy != 'observe-only')
+		`).run({ sessionId, now });
+		for (const { subscription_id: subscriptionId } of resetSubscriptionIds) {
+			this.db.prepare(`
+				DELETE FROM reminder_batches WHERE subscription_id = :subscriptionId AND state != 'handed_off'
+			`).run({ subscriptionId });
+		}
+		return resetSubscriptionIds.map(({ subscription_id: subscriptionId }) => subscriptionId);
+	}
+
+	private rebuildReminderBatches(subscriptionIds: string[], now: number) {
+		for (const subscriptionId of subscriptionIds) {
+			this.buildReminderBatchForSubscription(subscriptionId, now);
+		}
 	}
 
 	recordAutomaticSubscriptionOptOut(
@@ -2997,6 +3079,7 @@ export class StateStore {
         source TEXT NOT NULL CHECK(source IN ('automatic', 'manual')),
         ownership TEXT NOT NULL DEFAULT 'unknown' CHECK(ownership IN ('self', 'foreign', 'unknown')),
         policy TEXT NOT NULL DEFAULT 'observe-only' CHECK(policy IN ('actionable', 'observe-only')),
+        authorization_mode TEXT NOT NULL DEFAULT 'explicit-observe' CHECK(authorization_mode IN ('infer-owner', 'explicit-observe', 'explicit-user-authorized')),
         write_policy TEXT NOT NULL CHECK(write_policy IN ('owned-active', 'user-authorized', 'observe-only')),
         state TEXT NOT NULL CHECK(state IN ('active', 'unsubscribed')),
         last_delivered_event_seq INTEGER NOT NULL DEFAULT 0,
@@ -3213,11 +3296,27 @@ export class StateStore {
 			}
 		}
 
+		if (!subscriptionColumns.some((column) => column.name === "authorization_mode")) {
+			this.db.exec(
+				"ALTER TABLE session_subscriptions ADD COLUMN authorization_mode TEXT NOT NULL DEFAULT 'explicit-observe'",
+			);
+		}
+		// This backfill is intentionally idempotent: a process can stop after SQLite
+		// commits ALTER TABLE but before it classifies the legacy rows.
+		this.db.exec(`
+			UPDATE session_subscriptions SET authorization_mode = CASE
+				WHEN source = 'automatic' THEN 'infer-owner'
+				WHEN write_policy = 'user-authorized' THEN 'explicit-user-authorized'
+				ELSE authorization_mode
+			END
+			WHERE authorization_mode = 'explicit-observe'
+			  AND (source = 'automatic' OR write_policy = 'user-authorized')`,
+		);
 		this.db
 			.prepare(
-				`INSERT OR IGNORE INTO session_subscriptions (subscription_id, session_id, repo, pr_number, source, ownership, policy, write_policy, state, last_delivered_event_seq, created_at, updated_at)
+				`INSERT OR IGNORE INTO session_subscriptions (subscription_id, session_id, repo, pr_number, source, ownership, policy, authorization_mode, write_policy, state, last_delivered_event_seq, created_at, updated_at)
 				 SELECT 'legacy:' || session_id || ':' || repo || ':' || pr_number,
-				        session_id, repo, pr_number, 'automatic', 'unknown', 'observe-only', 'owned-active', 'active', last_delivered_event_seq, created_at, updated_at
+				        session_id, repo, pr_number, 'automatic', 'unknown', 'observe-only', 'infer-owner', 'observe-only', 'active', last_delivered_event_seq, created_at, updated_at
 				 FROM sessions WHERE pr_number IS NOT NULL`,
 			)
 			.run();
