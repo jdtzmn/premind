@@ -42,6 +42,24 @@ const v1Response = (response: ProxyResponse): ProxyResponse => ({
   ...response,
   protocolVersion: 1,
 });
+export const projectV1ProxyResponse = (
+  operation: string,
+  response: ProxyResponse,
+): ProxyResponse => {
+  const projected = v1Response(response);
+  if (operation !== "claimReminderBundle" || !projected.ok) return projected;
+  const result = projected.result as {
+    bundle?: { batches?: unknown[] } | null;
+  };
+  return {
+    ...projected,
+    result: {
+      ...result,
+      batches: result.bundle?.batches ?? [],
+    },
+  };
+};
+
 
 const failure = (code: string, message: string): ProxyResponse => ({
   ok: false,
@@ -84,7 +102,8 @@ export class LegacyV1ProxyRouter {
     if (sessionId && !isClaudeOperation) {
       const mapping = this.store.getLegacyProxyLease(sessionId);
       if (!mapping) return failure("SESSION_MOVED", "Legacy session must re-register");
-      return v1Response(
+      return projectV1ProxyResponse(
+        request.type,
         await this.requestModern({
           ...request,
           protocolVersion: 2,
@@ -93,7 +112,8 @@ export class LegacyV1ProxyRouter {
       );
     }
 
-    return v1Response(
+    return projectV1ProxyResponse(
+      request.type,
       await this.requestModern({ ...request, protocolVersion: 2 } as RoutedPremindRequest),
     );
   }

@@ -3,9 +3,17 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, test } from "node:test";
+import {
+  claimReminderBundleResponseSchema,
+  legacyClaimReminderBundleResponseSchema,
+} from "../ipc.ts";
 import { Router } from "../../daemon/ipc/router.ts";
 import { StateStore } from "../../daemon/persistence/store.ts";
-import { LegacyV1ProxyRouter, SAFE_V1_PROXY_OPERATIONS } from "./legacy-v1-proxy.ts";
+import {
+  LegacyV1ProxyRouter,
+  projectV1ProxyResponse,
+  SAFE_V1_PROXY_OPERATIONS,
+} from "./legacy-v1-proxy.ts";
 
 const directories: string[] = [];
 afterEach(() => {
@@ -37,6 +45,22 @@ describe("safe protocol-v1 proxy", () => {
     assert.equal(response.ok, false);
     if (!response.ok) assert.equal(response.error.code, "BAD_REQUEST");
     store.close();
+  });
+
+  test("projects bundle claims for both captured protocol-v1 decoders", () => {
+    const projected = projectV1ProxyResponse("claimReminderBundle", {
+      ok: true,
+      protocolVersion: 2,
+      result: { bundle: null },
+    });
+    assert.equal(projected.ok, true);
+    if (!projected.ok) return;
+    assert.deepEqual(claimReminderBundleResponseSchema.parse(projected.result), {
+      bundle: null,
+    });
+    assert.deepEqual(legacyClaimReminderBundleResponseSchema.parse(projected.result), {
+      batches: [],
+    });
   });
 
   test("maps tokenless identities to rotating durable leases", async () => {

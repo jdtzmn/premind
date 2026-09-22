@@ -244,9 +244,9 @@ export const claimReminderBundleResponseSchema = z.object({
     .nullable(),
 });
 
-export const legacyClaimReminderBundleResponseSchema = z
-  .object({ batches: z.array(reminderBatchSchema) })
-  .strict();
+export const legacyClaimReminderBundleResponseSchema = z.object({
+  batches: z.array(reminderBatchSchema),
+});
 
 export const ackReminderBundleResponseSchema = z.object({
   acknowledged: z.number().int().nonnegative(),
