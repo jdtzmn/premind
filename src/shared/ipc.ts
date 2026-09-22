@@ -12,8 +12,10 @@ import {
   activateWorktreePayloadSchema,
   confirmClaudeHandoffPayloadSchema,
   claudeSessionPayloadSchema,
+  claimSessionLeasePayloadSchema,
   codexSessionPayloadSchema,
   debugStatusPayloadSchema,
+  deleteSessionPayloadSchema,
   debugStatusResponseSchema,
   ensureSessionControlPayloadSchema,
   getGlobalDisabledPayloadSchema,
@@ -22,7 +24,9 @@ import {
   registerClientPayloadSchema,
   registerSessionPayloadSchema,
   releaseClientPayloadSchema,
+  releaseSessionLeasePayloadSchema,
   releaseSessionOwnerPayloadSchema,
+  renewSessionLeasePayloadSchema,
   reminderBatchSchema,
   reminderClaimSchema,
   settleReminderClaimPayloadSchema,
@@ -30,10 +34,12 @@ import {
   setGlobalDisabledPayloadSchema,
   suspendClaudeSessionPayloadSchema,
   subscribePayloadSchema,
+  transferSessionLeasePayloadSchema,
   unsubscribePayloadSchema,
   unregisterSessionPayloadSchema,
   updateSessionStatePayloadSchema,
 } from "./schema.ts";
+import type { SessionLeaseToken } from "./schema.ts";
 
 export const requestSchema = z.discriminatedUnion("type", [
   z.object({
@@ -50,6 +56,26 @@ export const requestSchema = z.discriminatedUnion("type", [
     type: z.literal("releaseClient"),
     protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION),
     payload: releaseClientPayloadSchema,
+  }),
+  z.object({
+    type: z.literal("claimSessionLease"),
+    protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION),
+    payload: claimSessionLeasePayloadSchema,
+  }),
+  z.object({
+    type: z.literal("renewSessionLease"),
+    protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION),
+    payload: renewSessionLeasePayloadSchema,
+  }),
+  z.object({
+    type: z.literal("transferSessionLease"),
+    protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION),
+    payload: transferSessionLeasePayloadSchema,
+  }),
+  z.object({
+    type: z.literal("releaseSessionLease"),
+    protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION),
+    payload: releaseSessionLeasePayloadSchema,
   }),
   z.object({
     type: z.literal("registerSession"),
@@ -120,6 +146,11 @@ export const requestSchema = z.discriminatedUnion("type", [
     payload: unregisterSessionPayloadSchema,
   }),
   z.object({
+    type: z.literal("deleteSession"),
+    protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION),
+    payload: deleteSessionPayloadSchema,
+  }),
+  z.object({
     type: z.literal("pauseSession"),
     protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION),
     payload: sessionControlPayloadSchema,
@@ -186,6 +217,18 @@ export const requestSchema = z.discriminatedUnion("type", [
   }),
 ]);
 
+export const legacyRequestSchema = requestSchema.refine(
+  (request) =>
+    ![
+      "claimSessionLease",
+      "renewSessionLease",
+      "transferSessionLease",
+      "releaseSessionLease",
+      "deleteSession",
+    ].includes(request.type),
+  { message: "Operation is not available in frozen protocol v1" },
+);
+
 export const successResponseSchema = z.object({
   ok: z.literal(true),
   protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION),
@@ -226,9 +269,9 @@ export const claimReminderBundleResponseSchema = z.object({
     .nullable(),
 });
 
-export const legacyClaimReminderBundleResponseSchema = z
-  .object({ batches: z.array(reminderBatchSchema) })
-  .strict();
+export const legacyClaimReminderBundleResponseSchema = z.object({
+  batches: z.array(reminderBatchSchema),
+});
 
 export const ackReminderBundleResponseSchema = z.object({
   acknowledged: z.number().int().nonnegative(),
@@ -294,4 +337,11 @@ export const unsubscribeResponseSchema = z
 export { debugStatusResponseSchema };
 
 export type PremindRequest = z.infer<typeof requestSchema>;
+type WithRoutedProtocol<T extends PremindRequest> = T extends PremindRequest
+  ? Omit<T, "protocolVersion"> & {
+      protocolVersion: 1 | 2;
+      sessionLease?: SessionLeaseToken;
+    }
+  : never;
+export type RoutedPremindRequest = WithRoutedProtocol<PremindRequest>;
 export type PremindResponse = z.infer<typeof responseSchema>;

@@ -6,7 +6,11 @@ import os from "node:os"
 import path from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { afterEach, describe, test } from "node:test"
-import { PREMIND_PR_STREAM_RETENTION_MS } from "../../shared/constants.ts"
+import {
+  PREMIND_CLIENT_LEASE_TTL_MS,
+  PREMIND_CLOSED_SESSION_RETENTION_MS,
+  PREMIND_PR_STREAM_RETENTION_MS,
+} from "../../shared/constants.ts"
 import { StateStore } from "./store.ts"
 import type { PullRequestSnapshot } from "../github/types.ts"
 import { diffSnapshot } from "../github/diff.ts"
@@ -831,19 +835,27 @@ describe("StateStore", () => {
     assert.equal(recovery.prunedClients, 1)
     assert.equal(store.countActiveClients(), 0)
 
-    // The uncertain handed-off batch survives as failed so the registry can retry it.
+    // The uncertain handoff survives durably but cannot be injected while detached.
     assert.equal(recovery.resetBatches, 1)
     assert.equal(store.getReminderBatchRecord(batch.batchId)?.state, "failed")
-    assert.equal(store.getPendingReminder("session-restart")?.batchId, batch.batchId)
 
-    // Only one session on its branch — nothing deduplicated.
+    // Session, watcher state, and reminder cursor survive without an owner.
     assert.equal(recovery.dedupedSessions, 0)
-
-    // Session and watcher state should survive.
     assert.equal(recovery.recoveredSessions, 1)
-    assert.ok(store.getSession("session-restart"))
+    assert.equal(store.getSession("session-restart")?.status, "detached")
+    assert.equal(store.getPendingReminder("session-restart"), null)
 
-    // Events survive, so rebuilding should work after a new client registers.
+    // Reattachment revives delivery from the retained cursor.
+    store.registerClient("client-new", { pid: 222, projectRoot: "/tmp/project" })
+    store.ensureSessionControl({
+      clientId: "client-new",
+      sessionId: "session-restart",
+      repo: "acme/repo",
+      branch: "feature/restart",
+      isPrimary: true,
+      busyState: "idle",
+      paused: false,
+    })
     const rebuilt = store.buildReminderBatch("session-restart")
     assert.ok(rebuilt)
     assert.equal(rebuilt.events.length, 1)
@@ -1072,7 +1084,7 @@ describe("StateStore", () => {
     assert.equal(result.reaped, 1)
 
     assert.equal(store.getSession("session-fresh")?.status, "active")
-    assert.equal(store.getSession("session-stale")?.status, "closed")
+    assert.equal(store.getSession("session-stale")?.status, "detached")
     store.close()
   })
 
@@ -1097,7 +1109,7 @@ describe("StateStore", () => {
 
     const result = store.reapStaleSessions(threshold, now)
     assert.equal(result.reaped, 1)
-    assert.equal(store.getSession("session-paused-stale")?.status, "closed")
+    assert.equal(store.getSession("session-paused-stale")?.status, "detached")
     store.close()
   })
 
@@ -1620,8 +1632,17 @@ describe("StateStore", () => {
     const recovery = store.recoverFromRestart()
     assert.equal(recovery.dedupedSessions, 0)
     assert.equal(recovery.recoveredSessions, 2)
-    assert.equal(store.getSession("same-branch-a")?.status, "active")
-    assert.equal(store.getSession("same-branch-b")?.status, "active")
+    assert.equal(store.getSession("same-branch-a")?.status, "detached")
+    assert.equal(store.getSession("same-branch-b")?.status, "detached")
+    assert.equal(store.getPendingReminder("same-branch-b"), null)
+
+    store.registerClient("client-restarted", { pid: 2, projectRoot: "/tmp/project" })
+    for (const sessionId of ["same-branch-a", "same-branch-b"]) {
+      store.ensureSessionControl({
+        clientId: "client-restarted", sessionId, repo: "acme/repo",
+        branch: "feature/shared", isPrimary: true, busyState: "idle", paused: false,
+      })
+    }
     assert.equal(store.getPendingReminder("same-branch-b")?.batchId, firstB.batchId)
     confirmReminder(store, firstB.batchId, "same-branch-b")
 
@@ -1985,6 +2006,7 @@ describe("StateStore", () => {
     })
     seeded.close()
     const interrupted = new DatabaseSync(dbPath)
+    interrupted.function("premind_expected_storage_epoch", () => 1)
     interrupted.exec("UPDATE session_subscriptions SET authorization_mode = 'explicit-observe'")
     interrupted.close()
     const repaired = new StateStore(dbPath)
@@ -2291,7 +2313,7 @@ describe("migrate: legacy pr_watchers upgrade", () => {
 })
 
 describe("migrate: session hosts", () => {
-  test("backfills legacy hosts and preserves active Claude reminder batches during lease pruning", () => {
+  test("backfills legacy hosts and preserves dormant sessions during pruning", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "premind-host-migrate-"))
     tempPaths.push(dir)
     const dbPath = path.join(dir, "premind.db")
@@ -2316,8 +2338,8 @@ describe("migrate: session hosts", () => {
     const batchId = store.createOrReplaceReminder("legacy-claude", null, "keep me", [], 0)
 
     const pruned = store.pruneClosedOrOrphanedSessions()
-    assert.equal(pruned.sessions, 1)
-    assert.equal(store.getSession("legacy-opencode"), undefined)
+    assert.equal(pruned.sessions, 0)
+    assert.equal(store.getSession("legacy-opencode")?.status, "active")
     assert.equal(store.getSession("legacy-claude")?.status, "active")
     assert.equal(store.getReminderBatchRecord(batchId, "legacy-claude")?.reminderText, "keep me")
     store.close()
@@ -2403,6 +2425,7 @@ describe("migrate: session hosts", () => {
     })
 
     const legacy = new DatabaseSync(dbPath)
+    legacy.function("premind_expected_storage_epoch", () => 1)
     legacy.exec("PRAGMA foreign_keys = OFF")
     legacy.exec("BEGIN IMMEDIATE")
     legacy.exec(`
@@ -2573,4 +2596,334 @@ describe("subscription authorization", () => {
     store.close()
   })
 })
+})
+
+describe("session daemon leases", () => {
+  test("expires tokens immediately and preserves monotonic generations", () => {
+    const store = createStore()
+    const now = 1_000
+    try {
+      const first = store.claimSessionLease(
+        {
+          sessionId: "session-1",
+          ownerInstanceId: "daemon-a",
+          clientIncarnationNonce: "client-a-1",
+        },
+        now,
+      )
+      assert.equal(first.generation, 1)
+      assert.equal(
+        store.validateSessionLease(
+          first,
+          now + PREMIND_CLIENT_LEASE_TTL_MS - 1,
+        ),
+        true,
+      )
+      assert.equal(
+        store.renewSessionLease(
+          first,
+          now + PREMIND_CLIENT_LEASE_TTL_MS,
+        ),
+        false,
+        "an expired token cannot renew in place",
+      )
+
+      const second = store.claimSessionLease(
+        {
+          sessionId: "session-1",
+          ownerInstanceId: "daemon-b",
+          clientIncarnationNonce: "client-b-1",
+        },
+        now + PREMIND_CLIENT_LEASE_TTL_MS,
+      )
+      assert.equal(second.generation, 2)
+      assert.equal(store.validateSessionLease(first, second.claimedAt), false)
+      assert.equal(store.releaseSessionLease(second, second.claimedAt + 1), true)
+
+      const third = store.claimSessionLease(
+        {
+          sessionId: "session-1",
+          ownerInstanceId: "daemon-a",
+          clientIncarnationNonce: "client-a-2",
+        },
+        second.claimedAt + 2,
+      )
+      assert.equal(third.generation, 3)
+      assert.equal(store.validateSessionLease(first, third.claimedAt), false)
+    } finally {
+      store.close()
+    }
+  })
+
+  test("fences an ABA owner after two explicit transfers", () => {
+    const store = createStore()
+    try {
+      const first = store.claimSessionLease({
+        sessionId: "session-1",
+        ownerInstanceId: "daemon-a",
+        clientIncarnationNonce: "client-a-1",
+      })
+      const second = store.transferSessionLease(first, {
+        ownerInstanceId: "daemon-b",
+        clientIncarnationNonce: "client-b-1",
+      })
+      const third = store.transferSessionLease(second, {
+        ownerInstanceId: "daemon-a",
+        clientIncarnationNonce: "client-a-2",
+      })
+
+      assert.deepEqual(
+        [first.generation, second.generation, third.generation],
+        [1, 2, 3],
+      )
+      assert.equal(store.validateSessionLease(first), false)
+      assert.equal(store.validateSessionLease(second), false)
+      assert.equal(store.validateSessionLease(third), true)
+      let staleWriteRan = false
+      assert.throws(
+        () => store.withSessionLease(first, () => { staleWriteRan = true }),
+        /SESSION_MOVED/,
+      )
+      assert.equal(staleWriteRan, false)
+      assert.equal(store.withSessionLease(third, () => 42), 42)
+    } finally {
+      store.close()
+    }
+  })
+
+  test("allows only one concurrent claimant", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "premind-lease-race-"))
+    const dbPath = path.join(dir, "premind.db")
+    tempPaths.push(dir)
+    const firstStore = new StateStore(dbPath)
+    const secondStore = new StateStore(dbPath)
+    try {
+      const winner = firstStore.claimSessionLease({
+        sessionId: "session-1",
+        ownerInstanceId: "daemon-a",
+        clientIncarnationNonce: "client-a-1",
+      })
+      assert.throws(
+        () =>
+          secondStore.claimSessionLease({
+            sessionId: "session-1",
+            ownerInstanceId: "daemon-b",
+            clientIncarnationNonce: "client-b-1",
+          }),
+        /SESSION_BUSY/,
+      )
+      assert.equal(secondStore.validateSessionLease(winner), true)
+    } finally {
+      secondStore.close()
+      firstStore.close()
+    }
+  })
+
+  test("fences previous daemon leases during restart recovery", () => {
+    const store = createStore()
+    try {
+      const previous = store.claimSessionLease({
+        sessionId: "session-1",
+        ownerInstanceId: "daemon-a",
+        clientIncarnationNonce: "client-a-1",
+      }, 1_000)
+
+      store.recoverFromRestart(1_001)
+      assert.equal(store.validateSessionLease(previous, 1_001), false)
+
+      const replacement = store.claimSessionLease({
+        sessionId: "session-1",
+        ownerInstanceId: "daemon-b",
+        clientIncarnationNonce: "client-b-1",
+      }, 1_001)
+      assert.equal(replacement.generation, 2)
+    } finally {
+      store.close()
+    }
+  })
+})
+
+describe("daemon and coordinator fencing", () => {
+  test("fences stale incarnations and coordinator generations", () => {
+    const store = createStore()
+    try {
+      const daemonA = store.claimDaemonInstanceLease({
+        instanceId: "daemon-a",
+        incarnationNonce: "daemon-a-1",
+        storageEpoch: 1,
+      }, 1_000)
+      assert.equal(daemonA.generation, 1)
+      assert.equal(store.getStorageEpoch(), 1)
+      const coordinatorA = store.claimCoordinatorLease(daemonA, 1_001)
+      assert.equal(coordinatorA.generation, 1)
+
+      const daemonB = store.claimDaemonInstanceLease({
+        instanceId: "daemon-b",
+        incarnationNonce: "daemon-b-1",
+      }, 1_002)
+      assert.equal(daemonB.generation, 2)
+      assert.throws(() => store.claimCoordinatorLease(daemonB, 1_003), /COORDINATOR_BUSY/)
+      const coordinatorB = store.transferCoordinatorLease(coordinatorA, daemonB, 1_004)
+      assert.equal(coordinatorB.generation, 2)
+
+      let staleCommitRan = false
+      assert.throws(
+        () => store.withCoordinatorLease(coordinatorA, () => { staleCommitRan = true }, 1_005),
+        /COORDINATOR_MOVED/,
+      )
+      assert.equal(staleCommitRan, false)
+      assert.equal(store.withCoordinatorLease(coordinatorB, () => 42, 1_005), 42)
+
+      const reincarnatedA = store.claimDaemonInstanceLease({
+        instanceId: "daemon-a",
+        incarnationNonce: "daemon-a-2",
+      }, 1_006)
+      assert.equal(reincarnatedA.generation, 3)
+      assert.equal(store.validateDaemonInstanceLease(daemonA, 1_006), false)
+      assert.throws(
+        () => store.claimDaemonInstanceLease({
+          instanceId: "daemon-c",
+          incarnationNonce: "daemon-c-1",
+          storageEpoch: 2,
+        }, 1_007),
+        /STORAGE_EPOCH_MOVED/,
+      )
+    } finally {
+      store.close()
+    }
+  })
+
+  test("transfers expired handoff execution without changing its stable id", () => {
+    const store = createStore()
+    try {
+      const first = store.claimHandoffExecution(
+        "00000000-0000-4000-8000-000000000010",
+        "session-1",
+        { ownerInstanceId: "daemon-a", sessionGeneration: 1 },
+        1_000,
+      )
+      assert.equal(first.executionGeneration, 1)
+      assert.throws(
+        () => store.claimHandoffExecution(
+          first.handoffId,
+          first.sessionId,
+          { ownerInstanceId: "daemon-b", sessionGeneration: 2 },
+          first.expiresAt - 1,
+        ),
+        /HANDOFF_BUSY/,
+      )
+      const moved = store.claimHandoffExecution(
+        first.handoffId,
+        first.sessionId,
+        { ownerInstanceId: "daemon-b", sessionGeneration: 2 },
+        first.expiresAt,
+      )
+      assert.equal(moved.handoffId, first.handoffId)
+      assert.equal(moved.executionGeneration, 2)
+      assert.equal(store.validateHandoffExecution(first, first.expiresAt), false)
+      assert.equal(store.validateHandoffExecution(moved, first.expiresAt), true)
+    } finally {
+      store.close()
+    }
+  })
+
+  test("fences every stale connection write after a storage epoch raise", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "premind-epoch-test-"))
+    tempPaths.push(dir)
+    const dbPath = path.join(dir, "premind.db")
+    const staleStore = new StateStore(dbPath)
+    const migrationConnection = new DatabaseSync(dbPath)
+    try {
+      migrationConnection.exec(
+        `UPDATE storage_metadata SET storage_epoch = 2 WHERE singleton = 1`,
+      )
+      assert.throws(
+        () => staleStore.registerClient("stale-client", { pid: 1, projectRoot: "/repo" }),
+        /STORAGE_EPOCH_MOVED/,
+      )
+    } finally {
+      migrationConnection.close()
+      staleStore.close()
+    }
+
+    const currentStore = new StateStore(dbPath)
+    try {
+      currentStore.registerClient("current-client", { pid: 2, projectRoot: "/repo" })
+      assert.equal(currentStore.hasActiveClient("current-client"), true)
+    } finally {
+      currentStore.close()
+    }
+  })
+
+  test("reloads only unexpired durable legacy proxy mappings", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "premind-proxy-map-test-"))
+    tempPaths.push(dir)
+    const dbPath = path.join(dir, "premind.db")
+    const store = new StateStore(dbPath)
+    const lease = store.claimSessionLease({
+      sessionId: "legacy-session",
+      ownerInstanceId: "daemon-a",
+      clientIncarnationNonce: "proxy-1",
+    }, 1_000)
+    store.saveLegacyProxyLease({
+      clientId: "legacy-client",
+      proxyIncarnationNonce: "proxy-1",
+      lease,
+    })
+    store.close()
+
+    const reopened = new StateStore(dbPath)
+    try {
+      assert.deepEqual(reopened.getLegacyProxyLease("legacy-session", 1_001), {
+        clientId: "legacy-client",
+        proxyIncarnationNonce: "proxy-1",
+        lease,
+      })
+      assert.equal(reopened.listLegacyProxyLeases("legacy-client", 1_001).length, 1)
+      assert.equal(reopened.getLegacyProxyLease("legacy-session", lease.expiresAt), null)
+      assert.equal(reopened.pruneExpiredLegacyProxyLeases(lease.expiresAt), 1)
+    } finally {
+      reopened.close()
+    }
+  })
+})
+
+
+describe("session detach and deletion", () => {
+  test("detach preserves state while explicit deletion starts retention", () => {
+    const store = createStore()
+    const now = 1_000
+    try {
+      store.registerClient(
+        "client-1",
+        { pid: 1, projectRoot: "/tmp/project" },
+        now,
+      )
+      store.registerSession(
+        {
+          clientId: "client-1",
+          sessionId: "session-1",
+          repo: "acme/repo",
+          branch: "feature/x",
+          isPrimary: true,
+          status: "active",
+          busyState: "idle",
+        },
+        now,
+      )
+
+      store.unregisterSession("session-1", now + 1)
+      assert.equal(store.getSession("session-1")?.status, "detached")
+
+      assert.equal(store.deleteSession("session-1", now + 2), true)
+      assert.equal(store.getSession("session-1")?.status, "closed")
+      store.pruneClosedSessions(
+        PREMIND_CLOSED_SESSION_RETENTION_MS,
+        now + 2 + PREMIND_CLOSED_SESSION_RETENTION_MS + 1,
+      )
+      assert.equal(store.getSession("session-1"), undefined)
+    } finally {
+      store.close()
+    }
+  })
 })

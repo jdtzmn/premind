@@ -22,6 +22,9 @@ describe("premind plugin compatibility harness", () => {
       unregisterSession: async (sessionId: string) => {
         operations.push(`unregister:${sessionId}`)
       },
+      deleteSession: async (sessionId: string) => {
+        operations.push(`delete:${sessionId}`)
+      },
       pauseSession: async (sessionId: string) => {
         operations.push(`pause:${sessionId}`)
       },
@@ -266,8 +269,9 @@ describe("premind plugin compatibility harness", () => {
     assert.match(toolProbeResult, /premind doctor/)
     assert.match(toolProbeResult, /commands registered: yes/)
 
-    // 9. session.deleted unregisters.
+    // 9. session.deleted starts explicit retention.
     await runtime.event({ event: { type: "session.deleted", properties: { sessionID: "session-1" } } })
-    assert.ok(operations.includes("unregister:session-1"))
+    assert.ok(operations.includes("delete:session-1"))
+    assert.equal(operations.includes("unregister:session-1"), false)
   })
 })

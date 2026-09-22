@@ -13,7 +13,25 @@ export const PREMIND_STATE_DIR =
           path.join(os.homedir(), ".local", "state"),
         "premind",
       ));
-export const PREMIND_DB_PATH = path.join(PREMIND_STATE_DIR, "premind.db");
+export const PREMIND_LEGACY_DB_PATH = path.join(PREMIND_STATE_DIR, "premind.db");
+export const PREMIND_DB_PATH = path.join(
+  PREMIND_STATE_DIR,
+  "epochs",
+  "1",
+  "premind.db",
+);
+export const PREMIND_MODERN_SOCKET_PATH = path.join(
+  os.tmpdir(),
+  "premind-modern-epoch-1.sock",
+);
+export const PREMIND_COMPATIBILITY_MARKER_PATH = path.join(
+  PREMIND_STATE_DIR,
+  "compatibility-v1.json",
+);
+export const PREMIND_COMPATIBILITY_LOCK_PATH = path.join(
+  PREMIND_STATE_DIR,
+  "compatibility-v1.lock",
+);
 // SQLite's `busy_timeout` is configured from this allowlisted constant rather
 // than interpolated dynamic SQL in StateStore.
 export const PREMIND_DATABASE_BUSY_TIMEOUT_MS = 5_000;
@@ -23,6 +41,8 @@ export const PREMIND_EVENT_DETAIL_DIR = path.join(
 );
 export const PREMIND_CLIENT_HEARTBEAT_MS = 10_000;
 export const PREMIND_CLIENT_LEASE_TTL_MS = 30_000;
+export const PREMIND_DAEMON_LEASE_TTL_MS = 30_000;
+export const PREMIND_COORDINATOR_LEASE_TTL_MS = 30_000;
 export const PREMIND_IDLE_SHUTDOWN_GRACE_MS = 15_000;
 export const PREMIND_IDLE_DELIVERY_THRESHOLD_MS = 60_000;
 export const PREMIND_SESSION_STALE_MS = 6 * 60 * 60 * 1000;

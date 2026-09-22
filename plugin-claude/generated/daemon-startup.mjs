@@ -21,7 +21,20 @@ var PREMIND_STATE_DIR =
 					path.join(os.homedir(), ".local", "state"),
 				"premind",
 			));
-var PREMIND_DB_PATH = path.join(PREMIND_STATE_DIR, "premind.db");
+var PREMIND_LEGACY_DB_PATH = path.join(PREMIND_STATE_DIR, "premind.db");
+var PREMIND_DB_PATH = path.join(PREMIND_STATE_DIR, "epochs", "1", "premind.db");
+var PREMIND_MODERN_SOCKET_PATH = path.join(
+	os.tmpdir(),
+	"premind-modern-epoch-1.sock",
+);
+var PREMIND_COMPATIBILITY_MARKER_PATH = path.join(
+	PREMIND_STATE_DIR,
+	"compatibility-v1.json",
+);
+var PREMIND_COMPATIBILITY_LOCK_PATH = path.join(
+	PREMIND_STATE_DIR,
+	"compatibility-v1.lock",
+);
 var PREMIND_EVENT_DETAIL_DIR = path.join(PREMIND_STATE_DIR, "event-details");
 var PREMIND_SESSION_STALE_MS = 6 * 60 * 60 * 1000;
 var PREMIND_REMINDER_HANDOFF_STALE_MS = 5 * 60 * 1000;

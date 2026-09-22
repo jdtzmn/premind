@@ -16,8 +16,8 @@ var __export = (target, all) => {
 
 // src/codex/hook-runner.ts
 import fs6 from "node:fs";
-import path7 from "node:path";
-import { fileURLToPath } from "node:url";
+import path8 from "node:path";
+import { fileURLToPath as fileURLToPath2 } from "node:url";
 
 // src/client/daemon-client.ts
 import net from "node:net";
@@ -38,7 +38,20 @@ var PREMIND_STATE_DIR =
 					path.join(os.homedir(), ".local", "state"),
 				"premind",
 			));
-var PREMIND_DB_PATH = path.join(PREMIND_STATE_DIR, "premind.db");
+var PREMIND_LEGACY_DB_PATH = path.join(PREMIND_STATE_DIR, "premind.db");
+var PREMIND_DB_PATH = path.join(PREMIND_STATE_DIR, "epochs", "1", "premind.db");
+var PREMIND_MODERN_SOCKET_PATH = path.join(
+	os.tmpdir(),
+	"premind-modern-epoch-1.sock",
+);
+var PREMIND_COMPATIBILITY_MARKER_PATH = path.join(
+	PREMIND_STATE_DIR,
+	"compatibility-v1.json",
+);
+var PREMIND_COMPATIBILITY_LOCK_PATH = path.join(
+	PREMIND_STATE_DIR,
+	"compatibility-v1.lock",
+);
 var PREMIND_EVENT_DETAIL_DIR = path.join(PREMIND_STATE_DIR, "event-details");
 var PREMIND_CLIENT_HEARTBEAT_MS = 1e4;
 var PREMIND_CLIENT_LEASE_TTL_MS = 30000;
@@ -4174,6 +4187,7 @@ var clientMetadataSchema = exports_external
 var sessionStatusSchema = exports_external.enum([
 	"active",
 	"paused",
+	"detached",
 	"dormant",
 	"closed",
 ]);
@@ -4237,6 +4251,40 @@ var updateSessionStatePayloadSchema = exports_external
 var unregisterSessionPayloadSchema = exports_external
 	.object({
 		sessionId: exports_external.string().min(1),
+	})
+	.strict();
+var deleteSessionPayloadSchema = unregisterSessionPayloadSchema;
+var sessionLeaseTokenSchema = exports_external
+	.object({
+		sessionId: exports_external.string().min(1),
+		ownerInstanceId: exports_external.string().min(1),
+		generation: exports_external.number().int().positive(),
+		clientIncarnationNonce: exports_external.string().min(1),
+		leaseToken: exports_external.string().uuid(),
+		claimedAt: exports_external.number().int().nonnegative(),
+		expiresAt: exports_external.number().int().positive(),
+	})
+	.strict();
+var claimSessionLeasePayloadSchema = exports_external
+	.object({
+		sessionId: exports_external.string().min(1),
+		ownerInstanceId: exports_external.string().min(1),
+		clientIncarnationNonce: exports_external.string().min(1),
+	})
+	.strict();
+var renewSessionLeasePayloadSchema = exports_external
+	.object({ lease: sessionLeaseTokenSchema })
+	.strict();
+var releaseSessionLeasePayloadSchema = renewSessionLeasePayloadSchema;
+var transferSessionLeasePayloadSchema = exports_external
+	.object({
+		lease: sessionLeaseTokenSchema,
+		nextOwner: exports_external
+			.object({
+				ownerInstanceId: exports_external.string().min(1),
+				clientIncarnationNonce: exports_external.string().min(1),
+			})
+			.strict(),
 	})
 	.strict();
 var ensureSessionControlPayloadSchema = exports_external
@@ -4379,7 +4427,10 @@ var getGlobalDisabledPayloadSchema = exports_external.object({}).strict();
 var debugStatusPayloadSchema = exports_external.object({}).strict();
 var daemonInfoSchema = exports_external
 	.object({
-		protocolVersion: exports_external.literal(PREMIND_PROTOCOL_VERSION),
+		protocolVersion: exports_external.union([
+			exports_external.literal(PREMIND_PROTOCOL_VERSION),
+			exports_external.literal(2),
+		]),
 		heartbeatMs: exports_external.literal(PREMIND_CLIENT_HEARTBEAT_MS),
 		leaseTtlMs: exports_external.literal(PREMIND_CLIENT_LEASE_TTL_MS),
 		idleShutdownGraceMs: exports_external.literal(
@@ -4404,7 +4455,7 @@ var debugStatusResponseSchema = exports_external
 			exports_external
 				.object({
 					sessionId: exports_external.string().min(1),
-					host: sessionHostSchema,
+					host: sessionHostSchema.or(exports_external.literal("unknown")),
 					repo: exports_external.string().min(1),
 					branch: exports_external.string().min(1),
 					prNumber: exports_external.number().int().nullable(),
@@ -4463,6 +4514,26 @@ var requestSchema = exports_external.discriminatedUnion("type", [
 		type: exports_external.literal("releaseClient"),
 		protocolVersion: exports_external.literal(PREMIND_PROTOCOL_VERSION),
 		payload: releaseClientPayloadSchema,
+	}),
+	exports_external.object({
+		type: exports_external.literal("claimSessionLease"),
+		protocolVersion: exports_external.literal(PREMIND_PROTOCOL_VERSION),
+		payload: claimSessionLeasePayloadSchema,
+	}),
+	exports_external.object({
+		type: exports_external.literal("renewSessionLease"),
+		protocolVersion: exports_external.literal(PREMIND_PROTOCOL_VERSION),
+		payload: renewSessionLeasePayloadSchema,
+	}),
+	exports_external.object({
+		type: exports_external.literal("transferSessionLease"),
+		protocolVersion: exports_external.literal(PREMIND_PROTOCOL_VERSION),
+		payload: transferSessionLeasePayloadSchema,
+	}),
+	exports_external.object({
+		type: exports_external.literal("releaseSessionLease"),
+		protocolVersion: exports_external.literal(PREMIND_PROTOCOL_VERSION),
+		payload: releaseSessionLeasePayloadSchema,
 	}),
 	exports_external.object({
 		type: exports_external.literal("registerSession"),
@@ -4533,6 +4604,11 @@ var requestSchema = exports_external.discriminatedUnion("type", [
 		payload: unregisterSessionPayloadSchema,
 	}),
 	exports_external.object({
+		type: exports_external.literal("deleteSession"),
+		protocolVersion: exports_external.literal(PREMIND_PROTOCOL_VERSION),
+		payload: deleteSessionPayloadSchema,
+	}),
+	exports_external.object({
 		type: exports_external.literal("pauseSession"),
 		protocolVersion: exports_external.literal(PREMIND_PROTOCOL_VERSION),
 		payload: sessionControlPayloadSchema,
@@ -4598,6 +4674,17 @@ var requestSchema = exports_external.discriminatedUnion("type", [
 		payload: debugStatusPayloadSchema,
 	}),
 ]);
+var legacyRequestSchema = requestSchema.refine(
+	(request) =>
+		![
+			"claimSessionLease",
+			"renewSessionLease",
+			"transferSessionLease",
+			"releaseSessionLease",
+			"deleteSession",
+		].includes(request.type),
+	{ message: "Operation is not available in frozen protocol v1" },
+);
 var successResponseSchema = exports_external.object({
 	ok: exports_external.literal(true),
 	protocolVersion: exports_external.literal(PREMIND_PROTOCOL_VERSION),
@@ -4632,9 +4719,9 @@ var claimReminderBundleResponseSchema = exports_external.object({
 		.strict()
 		.nullable(),
 });
-var legacyClaimReminderBundleResponseSchema = exports_external
-	.object({ batches: exports_external.array(reminderBatchSchema) })
-	.strict();
+var legacyClaimReminderBundleResponseSchema = exports_external.object({
+	batches: exports_external.array(reminderBatchSchema),
+});
 var ackReminderBundleResponseSchema = exports_external.object({
 	acknowledged: exports_external.number().int().nonnegative(),
 });
@@ -4698,20 +4785,242 @@ var unsubscribeResponseSchema = exports_external
 	})
 	.strict();
 
+// src/shared/protocol/capabilities.ts
+var protocolRangeFields = {
+	min: exports_external.number().int().positive(),
+	max: exports_external.number().int().positive(),
+};
+var protocolRangeSchema = exports_external
+	.object(protocolRangeFields)
+	.refine(({ min, max }) => min <= max, {
+		message: "Protocol minimum must not exceed maximum",
+	});
+var selectedProtocolRangeSchema = exports_external
+	.object({
+		...protocolRangeFields,
+		selected: exports_external.number().int().positive(),
+	})
+	.refine(
+		({ min, max, selected }) =>
+			min <= max && selected >= min && selected <= max,
+		{ message: "Selected protocol must be within the supported range" },
+	);
+var storageCapabilitiesSchema = exports_external.object({
+	epoch: exports_external.number().int().nonnegative(),
+	capabilities: exports_external.array(exports_external.string().min(1)),
+});
+var operationCapabilitiesSchema = exports_external.object({
+	operations: exports_external.array(exports_external.string().min(1)),
+	rollingSessions: exports_external.boolean(),
+});
+var daemonLifecycleStateSchema = exports_external.string().min(1);
+var protocolErrorCodeSchema = exports_external.enum([
+	"PROTOCOL_UNSUPPORTED",
+	"CLIENT_UPGRADE_REQUIRED",
+	"DAEMON_UPGRADE_REQUIRED",
+	"DAEMON_STARTING",
+	"DAEMON_DOWNGRADE_BLOCKED",
+	"SESSION_MOVED",
+	"SESSION_BUSY",
+	"SCHEMA_UNSUPPORTED",
+	"SUPPORT_EXPIRED",
+]);
+
+// src/shared/protocol/descriptor.ts
+var daemonInstanceIdentitySchema = exports_external.object({
+	instanceId: exports_external.string().uuid(),
+	pid: exports_external.number().int().positive(),
+	version: exports_external.string().min(1),
+	commit: exports_external.string().min(1),
+	socketPath: exports_external.string().min(1),
+	lifecycleState: daemonLifecycleStateSchema,
+});
+var instanceDescriptorV1Schema = daemonInstanceIdentitySchema.extend({
+	descriptorFormat: exports_external.literal(1),
+	protocols: protocolRangeSchema,
+	storage: storageCapabilitiesSchema,
+	heartbeatAt: exports_external.number().int().nonnegative(),
+});
+
+// src/shared/protocol/bootstrap.ts
+var BOOTSTRAP_VERSION = 1;
+var bootstrapInitializeRequestSchema = exports_external.object({
+	type: exports_external.literal("initialize"),
+	bootstrapVersion: exports_external.literal(BOOTSTRAP_VERSION),
+	payload: exports_external.object({
+		client: exports_external.object({
+			host: sessionHostSchema,
+			version: exports_external.string().min(1),
+			commit: exports_external.string().min(1),
+			incarnationNonce: exports_external.string().uuid(),
+		}),
+		protocols: protocolRangeSchema,
+	}),
+});
+var bootstrapSuccessResponseSchema = exports_external.object({
+	ok: exports_external.literal(true),
+	bootstrapVersion: exports_external.literal(BOOTSTRAP_VERSION),
+	result: exports_external.object({
+		daemon: daemonInstanceIdentitySchema,
+		protocols: selectedProtocolRangeSchema,
+		capabilities: operationCapabilitiesSchema,
+		storage: storageCapabilitiesSchema,
+	}),
+});
+var bootstrapErrorResponseSchema = exports_external.object({
+	ok: exports_external.literal(false),
+	bootstrapVersion: exports_external.literal(BOOTSTRAP_VERSION),
+	error: exports_external.object({
+		code: protocolErrorCodeSchema,
+		message: exports_external.string().min(1),
+		supported: protocolRangeSchema.optional(),
+	}),
+});
+var bootstrapResponseSchema = exports_external.discriminatedUnion("ok", [
+	bootstrapSuccessResponseSchema,
+	bootstrapErrorResponseSchema,
+]);
+
+// src/shared/protocol/v2.ts
+var PROTOCOL_V2 = 2;
+var protocolV2SuccessResponseSchema = exports_external.object({
+	ok: exports_external.literal(true),
+	protocolVersion: exports_external.literal(PROTOCOL_V2),
+	result: exports_external.unknown(),
+});
+var protocolV2ErrorResponseSchema = exports_external.object({
+	ok: exports_external.literal(false),
+	protocolVersion: exports_external.literal(PROTOCOL_V2),
+	error: exports_external.object({
+		code: exports_external.string().min(1),
+		message: exports_external.string().min(1),
+	}),
+});
+var protocolV2ResponseSchema = exports_external.discriminatedUnion("ok", [
+	protocolV2SuccessResponseSchema,
+	protocolV2ErrorResponseSchema,
+]);
+
+// src/shared/protocol/v1.ts
+var isRecord = (value) => typeof value === "object" && value !== null;
+var isV1UnsupportedOperation = (error) =>
+	error instanceof Error && error.message.startsWith("BAD_REQUEST:");
+var decodeV1ClaimReminderBundleResponse = (value) => {
+	const tokenized = claimReminderBundleResponseSchema.safeParse(value);
+	if (tokenized.success) {
+		return { variant: "tokenized", response: tokenized.data };
+	}
+	const firstBundle = legacyClaimReminderBundleResponseSchema.safeParse(value);
+	if (firstBundle.success) {
+		return { variant: "first-bundle", response: firstBundle.data };
+	}
+	return {
+		variant: "tokenized",
+		response: claimReminderBundleResponseSchema.parse(value),
+	};
+};
+var decodeV1DebugStatusResponse = (value) => {
+	if (!isRecord(value) || !Array.isArray(value.sessions)) {
+		return debugStatusResponseSchema.parse(value);
+	}
+	return debugStatusResponseSchema.parse({
+		...value,
+		sessions: value.sessions.map((session) =>
+			isRecord(session) && session.host === undefined
+				? { ...session, host: "unknown" }
+				: session,
+		),
+	});
+};
+
+// src/shared/version.ts
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+
+// src/shared/version.generated.ts
+var PREMIND_BUILD_COMMIT = "------";
+
+// src/shared/version.ts
+import { fileURLToPath } from "node:url";
+import path2 from "node:path";
+var PACKAGE_ROOT = path2.resolve(
+	fileURLToPath(new URL("../..", import.meta.url)),
+);
+var PACKAGE_JSON_PATH = path2.join(PACKAGE_ROOT, "package.json");
+var UNKNOWN_COMMIT = "------";
+var readPackageVersion = () => {
+	try {
+		const metadata = JSON.parse(readFileSync(PACKAGE_JSON_PATH, "utf8"));
+		return typeof metadata.version === "string" ? metadata.version : "0.0.0";
+	} catch {
+		return "0.0.0";
+	}
+};
+var readCommitHash = () => {
+	if (/^[0-9a-f]{6}$/i.test(PREMIND_BUILD_COMMIT)) return PREMIND_BUILD_COMMIT;
+	try {
+		const repositoryRoot = execFileSync(
+			"git",
+			["rev-parse", "--show-toplevel"],
+			{
+				cwd: PACKAGE_ROOT,
+				encoding: "utf8",
+				stdio: ["ignore", "pipe", "ignore"],
+			},
+		).trim();
+		if (path2.resolve(repositoryRoot) !== PACKAGE_ROOT) return UNKNOWN_COMMIT;
+		const hash = execFileSync("git", ["rev-parse", "--short=6", "HEAD"], {
+			cwd: PACKAGE_ROOT,
+			encoding: "utf8",
+			stdio: ["ignore", "pipe", "ignore"],
+		}).trim();
+		return /^[0-9a-f]{6,}$/i.test(hash) ? hash.slice(0, 6) : UNKNOWN_COMMIT;
+	} catch {
+		return UNKNOWN_COMMIT;
+	}
+};
+var formatPremindVersion = (version, commit) =>
+	`v${version} (${commit.slice(0, 6)})`;
+var PREMIND_VERSION = readPackageVersion();
+var PREMIND_COMMIT = readCommitHash();
+var PREMIND_VERSION_LABEL = formatPremindVersion(
+	PREMIND_VERSION,
+	PREMIND_COMMIT,
+);
+
 // src/client/daemon-client.ts
 var MAX_RETRIES = 3;
 var RETRY_DELAY_MS = 500;
-var isUnsupportedOperation = (error) =>
-	error instanceof Error && error.message.startsWith("BAD_REQUEST:");
+var SESSION_LEASE_EXEMPT_OPERATIONS = new Set([
+	"claimSessionLease",
+	"renewSessionLease",
+	"transferSessionLease",
+	"releaseSessionLease",
+	"registerClaudeSession",
+	"suspendClaudeSession",
+	"claimClaudeHandoff",
+	"confirmClaudeHandoff",
+	"registerCodexSession",
+	"claimReminder",
+	"settleReminderClaim",
+	"releaseSessionOwner",
+]);
 
 class PremindDaemonClient {
 	clientId = randomUUID();
+	host;
 	socketPath;
 	ensureDaemon;
 	maxRetries;
 	retryDelayMs;
 	requestTimeoutMs;
+	protocolVersion = PREMIND_PROTOCOL_VERSION;
+	initialized = false;
+	daemonInstanceId;
+	supportedOperations = new Set();
+	sessionLeases = new Map();
 	constructor(options) {
+		this.host = options.host ?? "opencode";
 		this.socketPath = options.socketPath ?? PREMIND_SOCKET_PATH;
 		this.ensureDaemon = options.ensureDaemon;
 		this.maxRetries = options.maxRetries ?? MAX_RETRIES;
@@ -4728,11 +5037,15 @@ class PremindDaemonClient {
 			throw new Error("Invalid premind daemon client retry or timeout options");
 		}
 	}
+	get selectedProtocolVersion() {
+		return this.protocolVersion;
+	}
 	registered = false;
 	projectRoot;
 	sessionSource;
 	legacyBundleClaims = new Map();
 	async registerClient(projectRoot, sessionSource) {
+		await this.initializeProtocol();
 		this.projectRoot = projectRoot;
 		this.sessionSource = sessionSource;
 		const response = await this.requestWithRetry({
@@ -4756,8 +5069,14 @@ class PremindDaemonClient {
 			protocolVersion: PREMIND_PROTOCOL_VERSION,
 			payload: { clientId: this.clientId },
 		});
+		for (const sessionId of [...this.sessionLeases.keys()]) {
+			await this.renewSessionLease(sessionId);
+		}
 	}
 	async release() {
+		for (const sessionId of [...this.sessionLeases.keys()]) {
+			await this.releaseSessionLease(sessionId);
+		}
 		await this.requestWithRetry({
 			type: "releaseClient",
 			protocolVersion: PREMIND_PROTOCOL_VERSION,
@@ -4766,6 +5085,7 @@ class PremindDaemonClient {
 		this.registered = false;
 	}
 	async registerSession(payload) {
+		await this.claimSessionLease(payload.sessionId);
 		await this.requestWithRetry({
 			type: "registerSession",
 			protocolVersion: PREMIND_PROTOCOL_VERSION,
@@ -4805,6 +5125,7 @@ class PremindDaemonClient {
 		return releaseSessionOwnerResponseSchema.parse(response);
 	}
 	async ensureSessionControl(payload) {
+		await this.claimSessionLease(payload.sessionId);
 		try {
 			await this.requestWithRetry({
 				type: "ensureSessionControl",
@@ -4812,12 +5133,7 @@ class PremindDaemonClient {
 				payload: { ...payload, clientId: this.clientId },
 			});
 		} catch (error) {
-			if (
-				!(error instanceof Error) ||
-				!error.message.startsWith("BAD_REQUEST:")
-			) {
-				throw error;
-			}
+			if (!isV1UnsupportedOperation(error)) throw error;
 			const { paused, ...session } = payload;
 			await this.registerSession({
 				...session,
@@ -4838,6 +5154,20 @@ class PremindDaemonClient {
 			protocolVersion: PREMIND_PROTOCOL_VERSION,
 			payload: { sessionId },
 		});
+		this.sessionLeases.delete(sessionId);
+	}
+	async deleteSession(sessionId) {
+		try {
+			await this.requestWithRetry({
+				type: "deleteSession",
+				protocolVersion: PREMIND_PROTOCOL_VERSION,
+				payload: { sessionId },
+			});
+			this.sessionLeases.delete(sessionId);
+		} catch (error) {
+			if (!isV1UnsupportedOperation(error)) throw error;
+			await this.unregisterSession(sessionId);
+		}
 	}
 	async pauseSession(sessionId) {
 		await this.requestWithRetry({
@@ -4884,22 +5214,18 @@ class PremindDaemonClient {
 				protocolVersion: PREMIND_PROTOCOL_VERSION,
 				payload: { sessionId },
 			});
-			const current = claimReminderBundleResponseSchema.safeParse(response);
-			if (current.success) return current.data;
-			const legacy =
-				legacyClaimReminderBundleResponseSchema.safeParse(response);
-			if (!legacy.success)
-				return claimReminderBundleResponseSchema.parse(response);
-			if (legacy.data.batches.length === 0) return { bundle: null };
+			const decoded = decodeV1ClaimReminderBundleResponse(response);
+			if (decoded.variant === "tokenized") return decoded.response;
+			if (decoded.response.batches.length === 0) return { bundle: null };
 			const handoffId = randomUUID();
 			this.legacyBundleClaims.set(sessionId, {
 				handoffId,
-				batchIds: legacy.data.batches.map(({ batchId }) => batchId),
+				batchIds: decoded.response.batches.map(({ batchId }) => batchId),
 				mode: "legacy-bundle",
 			});
-			return { bundle: { handoffId, batches: legacy.data.batches } };
+			return { bundle: { handoffId, batches: decoded.response.batches } };
 		} catch (error) {
-			if (!isUnsupportedOperation(error)) throw error;
+			if (!isV1UnsupportedOperation(error)) throw error;
 			const pending = await this.getPendingReminder(sessionId);
 			if (!pending.batch) return { bundle: null };
 			await this.ackReminder({
@@ -4925,7 +5251,7 @@ class PremindDaemonClient {
 			});
 			return ackReminderBundleResponseSchema.parse(response);
 		} catch (error) {
-			if (!isUnsupportedOperation(error)) throw error;
+			if (!isV1UnsupportedOperation(error)) throw error;
 			const claim = this.legacyBundleClaims.get(payload.sessionId);
 			if (!claim || claim.handoffId !== payload.handoffId) {
 				return { acknowledged: 0 };
@@ -4993,7 +5319,7 @@ class PremindDaemonClient {
 			protocolVersion: PREMIND_PROTOCOL_VERSION,
 			payload: {},
 		});
-		return debugStatusResponseSchema.parse(response);
+		return decodeV1DebugStatusResponse(response);
 	}
 	async pruneClosedSessions() {
 		return await this.requestWithRetry({
@@ -5002,9 +5328,186 @@ class PremindDaemonClient {
 			payload: {},
 		});
 	}
-	async requestWithRetry(message, attempt = 0) {
+	supportsSessionLeaseOperation(operation) {
+		return (
+			this.protocolVersion === PROTOCOL_V2 &&
+			this.daemonInstanceId !== undefined &&
+			this.supportedOperations.has(operation)
+		);
+	}
+	async claimSessionLease(sessionId) {
+		if (!this.supportsSessionLeaseOperation("claimSessionLease")) return null;
+		const current = this.sessionLeases.get(sessionId);
+		if (
+			current &&
+			current.ownerInstanceId === this.daemonInstanceId &&
+			current.clientIncarnationNonce === this.clientId
+		) {
+			return current;
+		}
+		const response = await this.requestWithRetry({
+			type: "claimSessionLease",
+			protocolVersion: PREMIND_PROTOCOL_VERSION,
+			payload: {
+				sessionId,
+				ownerInstanceId: this.daemonInstanceId,
+				clientIncarnationNonce: this.clientId,
+			},
+		});
+		const lease = sessionLeaseTokenSchema.parse(response.lease);
+		if (
+			lease.sessionId !== sessionId ||
+			lease.ownerInstanceId !== this.daemonInstanceId ||
+			lease.clientIncarnationNonce !== this.clientId
+		) {
+			throw new Error(
+				"SESSION_MOVED: daemon returned a mismatched session lease",
+			);
+		}
+		this.sessionLeases.set(sessionId, lease);
+		return lease;
+	}
+	async renewSessionLease(sessionId) {
+		const current = this.sessionLeases.get(sessionId);
+		if (!current || !this.supportsSessionLeaseOperation("renewSessionLease"))
+			return;
+		const response = await this.requestWithRetry({
+			type: "renewSessionLease",
+			protocolVersion: PREMIND_PROTOCOL_VERSION,
+			payload: { lease: current },
+		});
+		const renewed = sessionLeaseTokenSchema.parse(response.lease);
+		if (
+			renewed.sessionId !== current.sessionId ||
+			renewed.ownerInstanceId !== current.ownerInstanceId ||
+			renewed.generation !== current.generation ||
+			renewed.clientIncarnationNonce !== current.clientIncarnationNonce ||
+			renewed.leaseToken !== current.leaseToken
+		) {
+			this.sessionLeases.delete(sessionId);
+			throw new Error(
+				"SESSION_MOVED: daemon renewed a different session lease",
+			);
+		}
+		this.sessionLeases.set(sessionId, renewed);
+	}
+	async releaseSessionLease(sessionId) {
+		const lease = this.sessionLeases.get(sessionId);
+		if (!lease) return;
 		try {
-			return await this.request(message);
+			if (this.supportsSessionLeaseOperation("releaseSessionLease")) {
+				await this.requestWithRetry({
+					type: "releaseSessionLease",
+					protocolVersion: PREMIND_PROTOCOL_VERSION,
+					payload: { lease },
+				});
+			}
+		} finally {
+			this.sessionLeases.delete(sessionId);
+		}
+	}
+	async initializeProtocol() {
+		if (this.initialized) return;
+		const response = await this.requestRaw({
+			type: "initialize",
+			bootstrapVersion: 1,
+			payload: {
+				client: {
+					host: this.host,
+					version: PREMIND_VERSION,
+					commit: PREMIND_COMMIT,
+					incarnationNonce: this.clientId,
+				},
+				protocols: { min: PREMIND_PROTOCOL_VERSION, max: PROTOCOL_V2 },
+			},
+		});
+		const bootstrap = bootstrapResponseSchema.safeParse(response);
+		if (bootstrap.success) {
+			if (!bootstrap.data.ok) {
+				throw new Error(
+					`${bootstrap.data.error.code}: ${bootstrap.data.error.message}`,
+				);
+			}
+			const selected = bootstrap.data.result.protocols.selected;
+			if (selected !== PREMIND_PROTOCOL_VERSION && selected !== PROTOCOL_V2) {
+				throw new Error(
+					`PROTOCOL_UNSUPPORTED: Unexpected protocol ${selected}`,
+				);
+			}
+			const nextDaemonInstanceId = bootstrap.data.result.daemon.instanceId;
+			if (
+				this.daemonInstanceId !== undefined &&
+				this.daemonInstanceId !== nextDaemonInstanceId
+			) {
+				this.sessionLeases.clear();
+			}
+			this.daemonInstanceId = nextDaemonInstanceId;
+			this.supportedOperations = new Set(
+				bootstrap.data.result.capabilities.operations,
+			);
+			this.protocolVersion = selected;
+			this.initialized = true;
+			return;
+		}
+		const legacy = responseSchema.safeParse(response);
+		if (
+			legacy.success &&
+			!legacy.data.ok &&
+			legacy.data.error.code === "BAD_REQUEST"
+		) {
+			this.protocolVersion = PREMIND_PROTOCOL_VERSION;
+			this.daemonInstanceId = undefined;
+			this.supportedOperations.clear();
+			this.sessionLeases.clear();
+			this.initialized = true;
+			return;
+		}
+		throw bootstrap.error;
+	}
+	withNegotiatedProtocol(message) {
+		if (typeof message !== "object" || message === null) return message;
+		if (!("protocolVersion" in message)) return message;
+		const request = message;
+		const payload = request.payload;
+		const sessionId =
+			typeof payload === "object" && payload !== null && "sessionId" in payload
+				? payload.sessionId
+				: undefined;
+		const lease =
+			typeof sessionId === "string"
+				? this.sessionLeases.get(sessionId)
+				: undefined;
+		const type = typeof request.type === "string" ? request.type : "";
+		return {
+			...request,
+			protocolVersion: this.protocolVersion,
+			...(this.protocolVersion === PROTOCOL_V2 &&
+			lease &&
+			!SESSION_LEASE_EXEMPT_OPERATIONS.has(type)
+				? { sessionLease: lease }
+				: {}),
+		};
+	}
+	async ensureRequestSessionLease(message) {
+		if (!this.supportsSessionLeaseOperation("claimSessionLease")) return;
+		if (typeof message !== "object" || message === null) return;
+		const request = message;
+		const type = typeof request.type === "string" ? request.type : "";
+		if (SESSION_LEASE_EXEMPT_OPERATIONS.has(type)) return;
+		const payload = request.payload;
+		if (
+			typeof payload !== "object" ||
+			payload === null ||
+			!("sessionId" in payload)
+		)
+			return;
+		const sessionId = payload.sessionId;
+		if (typeof sessionId === "string") await this.claimSessionLease(sessionId);
+	}
+	async requestWithRetry(message, attempt = 0) {
+		await this.ensureRequestSessionLease(message);
+		try {
+			return await this.request(this.withNegotiatedProtocol(message));
 		} catch (error) {
 			if (attempt >= this.maxRetries) throw error;
 			const isSocketError =
@@ -5014,11 +5517,13 @@ class PremindDaemonClient {
 					error.message.includes("ENOENT"));
 			if (!isSocketError) throw error;
 			await this.ensureDaemon();
+			this.initialized = false;
+			await this.initializeProtocol();
 			if (this.registered && this.projectRoot) {
 				try {
 					await this.request({
 						type: "registerClient",
-						protocolVersion: PREMIND_PROTOCOL_VERSION,
+						protocolVersion: this.protocolVersion,
 						payload: {
 							clientId: this.clientId,
 							metadata: {
@@ -5037,6 +5542,22 @@ class PremindDaemonClient {
 		}
 	}
 	async request(message) {
+		const response = await this.requestRaw(message);
+		const protocolVersion =
+			typeof message === "object" &&
+			message !== null &&
+			"protocolVersion" in message
+				? message.protocolVersion
+				: PREMIND_PROTOCOL_VERSION;
+		const parsed =
+			protocolVersion === PROTOCOL_V2
+				? protocolV2ResponseSchema.parse(response)
+				: responseSchema.parse(response);
+		if (!parsed.ok)
+			throw new Error(`${parsed.error.code}: ${parsed.error.message}`);
+		return parsed.result;
+	}
+	async requestRaw(message) {
 		const line = await new Promise((resolve, reject) => {
 			const socket = net.createConnection(this.socketPath);
 			let buffer = "";
@@ -5068,29 +5589,20 @@ class PremindDaemonClient {
 				}
 			});
 		});
-		let payload;
-		try {
-			payload = JSON.parse(line);
-		} catch (error) {
-			throw new Error("premind daemon returned invalid JSON", { cause: error });
-		}
-		const parsed = responseSchema.parse(payload);
-		if (!parsed.ok)
-			throw new Error(`${parsed.error.code}: ${parsed.error.message}`);
-		return parsed.result;
+		return JSON.parse(line);
 	}
 }
 
 // src/client/daemon-launcher.ts
 import { spawn } from "node:child_process";
 import fs3 from "node:fs";
-import path4 from "node:path";
+import path5 from "node:path";
 
 // src/shared/daemon-startup.ts
 import { randomUUID as randomUUID2 } from "node:crypto";
 import fs from "node:fs";
 import net2 from "node:net";
-import path2 from "node:path";
+import path3 from "node:path";
 var DEFAULT_PROBE_TIMEOUT_MS = 250;
 var DEFAULT_STALE_LOCK_MS = 1e4;
 var CLAUDE_REQUIRED_DAEMON_OPERATIONS = [
@@ -5150,7 +5662,7 @@ var acquireDaemonStartLock = ({
 	staleLockMs = DEFAULT_STALE_LOCK_MS,
 } = {}) => {
 	fs.mkdirSync(stateDir, { recursive: true });
-	const lockPath = path2.join(stateDir, "daemon-start.lock");
+	const lockPath = path3.join(stateDir, "daemon-start.lock");
 	for (let attempt = 0; attempt < 2; attempt++) {
 		try {
 			const fd = fs.openSync(lockPath, "wx");
@@ -5307,7 +5819,7 @@ var inspectDaemon = (
 // src/client/node-runtime.ts
 import { spawnSync } from "node:child_process";
 import fs2 from "node:fs";
-import path3 from "node:path";
+import path4 from "node:path";
 
 // src/shared/node-version.ts
 var MINIMUM_NODE_VERSION = "22.13.0";
@@ -5381,10 +5893,10 @@ var findOnPath = (name, environmentPath = process.env.PATH ?? "") => {
 		process.platform === "win32"
 			? [`${name}.exe`, `${name}.cmd`, name]
 			: [name];
-	for (const directory of environmentPath.split(path3.delimiter)) {
+	for (const directory of environmentPath.split(path4.delimiter)) {
 		if (!directory) continue;
 		for (const candidateName of names) {
-			const candidate = path3.join(directory, candidateName);
+			const candidate = path4.join(directory, candidateName);
 			if (fs2.existsSync(candidate)) return candidate;
 		}
 	}
@@ -5513,9 +6025,9 @@ var createDaemonLauncher = (options) => {
 			const runtime = resolveNodeRuntime({
 				executable: options.nodeExecutable,
 			});
-			const spawnCwd = options.cwd ?? path4.dirname(daemonEntry);
+			const spawnCwd = options.cwd ?? path5.dirname(daemonEntry);
 			const spawnCommand = `${runtime.executable} ${daemonEntry}`;
-			const logPath = path4.join(stateDir, "daemon.log");
+			const logPath = path5.join(stateDir, "daemon.log");
 			const baseDiagnostic = {
 				runner: runtime.executable,
 				daemonEntry,
@@ -5662,7 +6174,7 @@ async function detectGitContext(cwd) {
 // src/codex/delivery-receipts.ts
 import { randomUUID as randomUUID3 } from "node:crypto";
 import fs4 from "node:fs";
-import path5 from "node:path";
+import path6 from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 // src/codex/schemas.ts
@@ -5810,15 +6322,15 @@ var acquireSessionLifecycleLock = async (
 	const timeoutMs = options.timeoutMs ?? DEFAULT_LOCK_TIMEOUT_MS;
 	const staleMs = options.staleMs ?? DEFAULT_LOCK_STALE_MS;
 	const retryMs = options.retryMs ?? DEFAULT_RETRY_MS;
-	const stateDirectory = path5.join(pluginData, "premind", "v1");
-	const sessionDirectory = path5.join(
+	const stateDirectory = path6.join(pluginData, "premind", "v1");
+	const sessionDirectory = path6.join(
 		stateDirectory,
 		"sessions",
 		encodeSessionId(sessionId),
 	);
-	const receiptsDirectory = path5.join(sessionDirectory, "receipts");
+	const receiptsDirectory = path6.join(sessionDirectory, "receipts");
 	fs4.mkdirSync(receiptsDirectory, { recursive: true });
-	const databasePath = path5.join(
+	const databasePath = path6.join(
 		stateDirectory,
 		"codex-lifecycle-locks.sqlite",
 	);
@@ -5896,7 +6408,7 @@ var acquireSessionLifecycleLock = async (
 				try {
 					const receipt = codexDeliveryReceiptSchema.parse(
 						JSON.parse(
-							fs4.readFileSync(path5.join(receiptsDirectory, fileName), "utf8"),
+							fs4.readFileSync(path6.join(receiptsDirectory, fileName), "utf8"),
 						),
 					);
 					if (receipt.sessionId === sessionId) receipts.push(receipt);
@@ -5905,7 +6417,7 @@ var acquireSessionLifecycleLock = async (
 			return receipts;
 		},
 		compareAndDeleteReceipt(receipt) {
-			const receiptPath = path5.join(
+			const receiptPath = path6.join(
 				receiptsDirectory,
 				receiptFileName(receipt.handoffId),
 			);
@@ -5935,7 +6447,7 @@ var acquireSessionLifecycleLock = async (
 					"Codex receipt session does not own this lifecycle lock",
 				);
 			}
-			const receiptPath = path5.join(
+			const receiptPath = path6.join(
 				receiptsDirectory,
 				receiptFileName(parsed.handoffId),
 			);
@@ -6359,7 +6871,7 @@ var runCodexLifecycle = async (eventName, rawInput, dependencies) => {
 // src/codex/session-binding.ts
 import { randomUUID as randomUUID4 } from "node:crypto";
 import fs5 from "node:fs";
-import path6 from "node:path";
+import path7 from "node:path";
 var sessionBindingSchema = exports_external
 	.object({
 		sessionHandle: exports_external.string().uuid(),
@@ -6371,7 +6883,7 @@ var sessionBindingSchema = exports_external
 var encodeSessionId2 = (sessionId) =>
 	Buffer.from(sessionId, "utf8").toString("base64url");
 var canonicalizeCwd = (cwd) => {
-	const resolved = path6.resolve(cwd);
+	const resolved = path7.resolve(cwd);
 	try {
 		return fs5.realpathSync.native(resolved);
 	} catch (error) {
@@ -6381,9 +6893,9 @@ var canonicalizeCwd = (cwd) => {
 	}
 };
 var bindingsDirectory = (pluginData) =>
-	path6.join(pluginData, "premind", "v1", "session-bindings");
+	path7.join(pluginData, "premind", "v1", "session-bindings");
 var bindingPath = (pluginData, sessionId) =>
-	path6.join(
+	path7.join(
 		bindingsDirectory(pluginData),
 		`${encodeSessionId2(sessionId)}.json`,
 	);
@@ -6433,8 +6945,8 @@ var ensureCodexSessionBinding = (
 };
 
 // src/codex/hook-runner.ts
-var RUNTIME_DIRECTORY = path7.dirname(fileURLToPath(import.meta.url));
-var DAEMON_ENTRY = path7.join(RUNTIME_DIRECTORY, "premind-daemon.mjs");
+var RUNTIME_DIRECTORY = path8.dirname(fileURLToPath2(import.meta.url));
+var DAEMON_ENTRY = path8.join(RUNTIME_DIRECTORY, "premind-daemon.mjs");
 var MAX_INPUT_BYTES = 1024 * 1024;
 var CLEANUP_REQUEST_TIMEOUT_MS = 500;
 var CLEANUP_LOCK_TIMEOUT_MS = 300;
@@ -6559,7 +7071,7 @@ var isMainModule = () => {
 	try {
 		return (
 			fs6.realpathSync(process.argv[1]) ===
-			fs6.realpathSync(fileURLToPath(import.meta.url))
+			fs6.realpathSync(fileURLToPath2(import.meta.url))
 		);
 	} catch {
 		return false;
