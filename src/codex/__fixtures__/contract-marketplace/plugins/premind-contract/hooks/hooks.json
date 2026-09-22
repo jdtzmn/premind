@@ -1,0 +1,40 @@
+{
+  "description": "Capture sanitized Codex lifecycle contracts for premind development.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${PLUGIN_ROOT}/hooks/contract-hook.mjs\" SessionStart",
+            "timeout": 10,
+            "additionalContextLimit": 1000
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${PLUGIN_ROOT}/hooks/contract-hook.mjs\" UserPromptSubmit",
+            "timeout": 10,
+            "additionalContextLimit": 1000
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${PLUGIN_ROOT}/hooks/contract-hook.mjs\" Stop",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

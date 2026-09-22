@@ -180,7 +180,7 @@ const sourceIds = (events: RenderedReminderEvent[]) => [...new Set(events.flatMa
 
 export function renderReminder(
   rows: ReminderSourceEvent[], snapshot: PullRequestSnapshot | null,
-  target: { repo: string; prNumber?: number; source?: "automatic" | "manual"; policy?: "actionable" | "observe-only"; worktreeMatchesTarget?: boolean },
+  target: { repo: string; prNumber?: number; source?: "automatic" | "manual"; policy?: "actionable" | "observe-only"; worktreeMatchesTarget?: boolean; writePolicy?: "owned-active" | "user-authorized" | "observe-only" },
 ) {
   const reconciled = rows.flatMap(expand).map((candidate) => reconcile(candidate, snapshot))
   const live = reconciled.filter((item) => !item.supersededHead)
@@ -212,28 +212,58 @@ export function renderReminder(
   })
   const renderEvent = (event: ReminderEvent, index: number) => `${index + 1}. ${event.kind} - ${event.summary}${event.referenceLink ? ` (${event.referenceLink})` : ""}`
   const qualified = target.prNumber ? `${target.repo}#${target.prNumber}` : target.repo
-  const policy = target.policy ?? (target.source === "manual" ? "observe-only" : "actionable")
-  const canModify = policy === "actionable" && target.worktreeMatchesTarget !== false
-  const observeOnlyAction = "report the failing check(s)/merge conflict(s) above and wait for authorization before making changes."
-  const worktreeGate = "this is your PR, but its target worktree is not active. Investigate as needed, but do not make changes until you activate the matching worktree."
+  // Persisted writePolicy is authoritative. source/policy are a conservative
+  // compatibility fallback for batches created before writePolicy existed.
+  const writePolicy = target.writePolicy ?? (target.policy === "observe-only"
+    ? "observe-only"
+    : target.policy === "actionable"
+      ? target.source === "manual" ? "user-authorized" : "owned-active"
+      : target.source === "manual" ? "observe-only" : "owned-active")
+  const legacyManualActionable = !target.writePolicy && target.source === "manual" && target.policy === "actionable"
+  const mayAct = writePolicy !== "observe-only" && target.worktreeMatchesTarget !== false
+  const hasReviewAction = live.some((item) => item.reviewAction)
+  const hasFeedback = live.some((item) =>
+    item.event.kind === "issue_comment.created" || item.event.kind === "issue_comment.edited" ||
+    item.event.kind === "review_comment.created" || item.event.kind === "review_comment.edited")
+  const terminalKind = live.find((item) => item.event.kind === "pr.merged" || item.event.kind === "pr.closed")?.event.kind
+  const authority = legacyManualActionable || writePolicy === "owned-active" ? "owned" : "authorized"
+  const worktreeGate = "the target worktree is not active. Investigate as needed, but do not make changes until you activate the matching worktree."
+  const trackingGuidance = writePolicy === "observe-only"
+    ? "This PR is observation-only. Do not edit, push to, rebase, merge, or comment on this PR unless the user explicitly authorizes it."
+    : legacyManualActionable
+      ? "This manually subscribed PR has explicit authorization and is verified as yours. Follow the current task and repository policy; do not merge, force-push, or take unrelated external actions without authorization."
+      : writePolicy === "user-authorized"
+        ? "User-authorized tracking: act only within the assigned task and repository policy; do not merge, force-push, or take unrelated external actions without authorization."
+        : "Owned-active tracking: this PR author matches the authenticated account. Follow the current task and repository policy; do not merge, force-push, or take unrelated external actions without authorization."
+  const actionGuidance = `Action required for this ${authority} PR: investigate the current-HEAD CI failure(s)/merge conflict(s), then resolve the applicable failure(s)/conflict(s) on HEAD within the assigned task. Continue unrelated assigned work if appropriate.`
+  const reviewGuidance = `Review action for this ${authority} PR: triage the requested changes, address actionable feedback within the assigned task, and explain anything you decline or cannot resolve. Continue unrelated assigned work if appropriate.`
+  const feedbackGuidance = "Feedback triage for this PR: assess whether the comments apply to current HEAD, address actionable items within the assigned task, and explain any deliberate non-change."
   const reminderText = [
     "<system-reminder>",
     `PR update for ${qualified}${snapshot?.core.headRefOid ? ` (HEAD: ${shortSha(snapshot.core.headRefOid)})` : ""}:`,
-    ...(target.source === "manual" ? ["", policy === "actionable"
-      ? "This manually subscribed PR is verified as yours."
-      : "This PR is manually subscribed but is not verified as yours. Do not make changes unless the user explicitly asks you to."] : []),
+    "", trackingGuidance,
     ...(condensedLive.length ? ["", "Changes:", ...condensedLive.map(renderEvent)] : []),
     ...(supersededSummaries.length ? ["", "Superseded:", ...supersededSummaries.map(renderEvent)] : []),
-    ...(live.some((item) => item.actionable) ? ["", canModify
-      ? "Action required: resolve the failing check(s)/merge conflict(s) on HEAD before continuing. If you can't, explain why."
-      : policy === "actionable" ? `Action required: ${worktreeGate}` : `Action required: ${observeOnlyAction}`] : []),
-    ...(live.some((item) => item.reviewAction) ? ["", canModify
-      ? "Review action required: assess the requested changes, address actionable feedback, and explain anything you decline or cannot resolve."
-      : policy === "actionable"
-        ? `Review action required: ${worktreeGate}`
-        : "Review action required: report the requested changes and wait for authorization before making changes."] : []),
+    ...(live.some((item) => item.actionable) ? ["", mayAct
+      ? actionGuidance
+      : writePolicy === "observe-only"
+        ? "Observation-only CI/conflict update: do not modify this PR. Report the current status if it affects assigned work, then continue that work."
+        : `Action required: ${worktreeGate}`] : []),
+    ...(hasReviewAction ? ["", mayAct
+      ? reviewGuidance
+      : writePolicy === "observe-only"
+        ? "Observation-only review feedback: do not modify or reply on this PR. Report it only if it affects assigned work, then continue that work."
+        : `Review action required: ${worktreeGate}`] : []),
+    ...(hasFeedback && !hasReviewAction ? ["", mayAct
+      ? feedbackGuidance
+      : writePolicy === "observe-only"
+        ? "Observation-only feedback: do not modify or reply on this PR. Use it only if it affects assigned work, then continue that work."
+        : `Feedback triage required: ${worktreeGate}`] : []),
+    ...(terminalKind ? ["", terminalKind === "pr.merged"
+      ? "PR merged. Stop making PR-specific changes. Update a branch/worktree only if the assigned work depends on this merge; do not invent new work."
+      : "PR closed without merging. Stop PR-specific remediation; do not reopen or recreate it unless explicitly authorized."] : []),
     ...(live.some((item) => item.unverified) ? ["", "Verify current status before acting on UNVERIFIED history; it is not a confirmed current blocker."] : []),
-    "", "Incorporate only the above into your reasoning and continue.", "</system-reminder>",
+    "", "Use only this update as context. Follow the scoped instruction above, then continue assigned work; do not invent new work.", "</system-reminder>",
   ].join("\n")
   return { reminderText, events: [...condensedLive, ...supersededSummaries] }
 }

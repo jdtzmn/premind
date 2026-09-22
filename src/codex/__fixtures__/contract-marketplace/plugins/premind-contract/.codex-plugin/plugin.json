@@ -1,0 +1,11 @@
+{
+  "name": "premind-contract",
+  "version": "0.0.0",
+  "description": "Codex compatibility overlay for the premind contract fixture.",
+  "hooks": "./hooks/hooks.json",
+  "interface": {
+    "displayName": "premind contract fixture",
+    "shortDescription": "Validate premind lifecycle hooks",
+    "category": "Developer Tools"
+  }
+}

@@ -3,21 +3,21 @@ import {
 	PREMIND_CLIENT_LEASE_TTL_MS,
 	PREMIND_IDLE_SHUTDOWN_GRACE_MS,
 } from "../../shared/constants.ts";
-import { CLAUDE_REQUIRED_DAEMON_OPERATIONS } from "../../shared/daemon-startup.ts";
+import { PREMIND_DAEMON_OPERATIONS } from "../../shared/daemon-startup.ts";
+import type { PremindResponse, RoutedPremindRequest } from "../../shared/ipc.ts";
 import {
-	debugStatusResponseSchema,
 	type AckReminderPayload,
+	debugStatusResponseSchema,
 	type RegisterClientPayload,
 	type SubscribePayload,
 	type UnsubscribePayload,
 } from "../../shared/schema.ts";
-import type { PremindResponse, RoutedPremindRequest } from "../../shared/ipc.ts";
 import { createLogger } from "../logging/logger.ts";
 import type { StateStore } from "../persistence/store.ts";
 import { ReminderHandoffRegistry } from "../reminders/reminder-handoff-registry.ts";
 import { resolveGitWorktree } from "../worktrees/git-resolver.ts";
-import { WorktreeBindingRegistry } from "../worktrees/worktree-binding-registry.ts";
 import type { ActiveWorktree } from "../worktrees/worktree-binding.ts";
+import { WorktreeBindingRegistry } from "../worktrees/worktree-binding-registry.ts";
 
 const SESSION_LEASE_REQUIRED_OPERATIONS = new Set([
 	"registerSession",
@@ -40,6 +40,11 @@ export type WorktreeResolver = (
 	requestedPath: string,
 ) => Promise<ActiveWorktree>;
 
+class InactiveCodexSessionError extends Error {
+	constructor() {
+		super("Codex session is no longer active");
+	}
+}
 export class Router {
 	private readonly logger = createLogger("daemon.ipc");
 
@@ -50,6 +55,17 @@ export class Router {
 		private readonly reminderHandoffs = new ReminderHandoffRegistry(store),
 		private readonly onDemandChanged: () => void = () => {},
 	) {}
+
+	private requireActiveCodexSession(
+		sessionId: string,
+	): PremindResponse | undefined {
+		const session = this.store.getSession(sessionId);
+		if (!session || session.host !== "codex") return undefined;
+		if (session.status === "active" || session.status === "paused") {
+			return undefined;
+		}
+		return this.fail("SESSION_INACTIVE", "Codex session is no longer active");
+	}
 
 	async handle(request: RoutedPremindRequest): Promise<PremindResponse> {
 		if (
@@ -167,6 +183,24 @@ export class Router {
 					});
 					return this.ok({ registered: true, created });
 				}
+				case "registerCodexSession": {
+					const { reactivate, ...payload } = request.payload;
+					const existingStatus = this.store.getSession(payload.sessionId)?.status;
+					const { created } = this.store.registerSession({
+						...payload,
+						host: "codex",
+						hostSessionId: payload.hostSessionId ?? payload.sessionId,
+						clientId: `codex:${payload.sessionId}`,
+						isPrimary: true,
+						status:
+							reactivate === false && existingStatus ? existingStatus : "active",
+					});
+					return this.ok({
+						registered: true,
+						created,
+						active: this.store.getSession(payload.sessionId)?.status === "active",
+					});
+				}
 				case "touchClaudeSession": {
 					const result = this.store.updateSessionState(request.payload);
 					if (!result.updated)
@@ -176,6 +210,14 @@ export class Router {
 						);
 					return this.ok({ updated: true, revived: result.revived });
 				}
+				case "claimReminder":
+					return this.ok({
+						claim: this.reminderHandoffs.claimReminder(request.payload),
+					});
+				case "settleReminderClaim":
+					return this.ok({
+						settled: this.reminderHandoffs.settleReminderClaim(request.payload),
+					});
 				case "claimClaudeReminder":
 					return this.ok({
 						batch: this.reminderHandoffs.claimClaudeReminder(
@@ -188,6 +230,15 @@ export class Router {
 							request.payload.sessionId,
 						),
 					});
+				case "releaseSessionOwner": {
+					const released = this.store.releaseSessionOwner(request.payload.sessionId);
+					if (!released)
+						return this.fail(
+							"SESSION_NOT_FOUND",
+							`Unknown session: ${request.payload.sessionId}`,
+						);
+					return this.ok({ released: true });
+				}
 				case "suspendClaudeSession": {
 					const suspended = this.store.suspendClaudeSession(
 						request.payload.sessionId,
@@ -371,7 +422,7 @@ export class Router {
 								heartbeatMs: PREMIND_CLIENT_HEARTBEAT_MS,
 								leaseTtlMs: PREMIND_CLIENT_LEASE_TTL_MS,
 								idleShutdownGraceMs: PREMIND_IDLE_SHUTDOWN_GRACE_MS,
-								operations: [...CLAUDE_REQUIRED_DAEMON_OPERATIONS],
+								operations: [...PREMIND_DAEMON_OPERATIONS],
 							},
 							globallyDisabled: this.store.isGloballyDisabled(),
 							activeClients: this.store.countActiveClients(),
@@ -407,6 +458,8 @@ export class Router {
 		request: RoutedPremindRequest & { type: "activateWorktree" },
 	): Promise<PremindResponse> {
 		const payload = request.payload;
+		const inactive = this.requireActiveCodexSession(payload.sessionId);
+		if (inactive) return inactive;
 		if (!this.store.getSession(payload.sessionId)) {
 			return this.fail(
 				"SESSION_NOT_FOUND",
@@ -418,26 +471,37 @@ export class Router {
 		try {
 			worktree = await this.resolveWorktree(payload.path);
 		} catch (error) {
+			if (error instanceof InactiveCodexSessionError) {
+				return this.fail("SESSION_INACTIVE", error.message);
+			}
 			return this.fail(
 				"WORKTREE_RESOLUTION_FAILED",
 				error instanceof Error ? error.message : "Unable to resolve Git worktree",
 			);
 		}
 		try {
-			const binding = this.withAttachedSessionLease(request, () =>
-				this.worktreeBindings.activateResolvedWorktree(
+			const binding = this.withAttachedSessionLease(request, () => {
+				if (this.requireActiveCodexSession(payload.sessionId)) {
+					throw new InactiveCodexSessionError();
+				}
+				return this.worktreeBindings.activateResolvedWorktree(
 					payload.sessionId,
 					payload.path,
 					worktree,
-				),
-			);
+				);
+			});
 			return this.ok({ binding, watching: binding.branch !== null });
 		} catch (error) {
+			if (error instanceof InactiveCodexSessionError) {
+				return this.fail("SESSION_INACTIVE", error.message);
+			}
 			return this.sessionLeaseFailure(error);
 		}
 	}
 
 	private handleSubscribe(payload: SubscribePayload): PremindResponse {
+		const inactive = this.requireActiveCodexSession(payload.sessionId);
+		if (inactive) return inactive;
 		if (!this.store.getSession(payload.sessionId)) {
 			return this.fail(
 				"SESSION_NOT_FOUND",
@@ -458,6 +522,7 @@ export class Router {
 			repo,
 			prNumber: payload.prNumber,
 			source: "manual",
+			writePolicy: payload.writePolicy,
 		});
 		return this.ok({
 			subscription: {
@@ -466,6 +531,7 @@ export class Router {
 				repo: stored.repo,
 				prNumber: stored.prNumber,
 				source: stored.source,
+				writePolicy: stored.writePolicy,
 				state: stored.state,
 				lastDeliveredEventSeq: stored.lastDeliveredEventSeq,
 				updatedAt: stored.updatedAt,
@@ -474,6 +540,8 @@ export class Router {
 	}
 
 	private handleUnsubscribe(payload: UnsubscribePayload): PremindResponse {
+		const inactive = this.requireActiveCodexSession(payload.sessionId);
+		if (inactive) return inactive;
 		if (!this.store.getSession(payload.sessionId)) {
 			return this.fail(
 				"SESSION_NOT_FOUND",

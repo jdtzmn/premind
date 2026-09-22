@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, describe, test } from "node:test";
 import { bootstrapResponseSchema } from "../../shared/protocol/bootstrap.ts";
 import { protocolV2ResponseSchema } from "../../shared/protocol/v2.ts";
-import { PremindDaemonClient } from "../../plugin-opencode/daemon-client.ts";
+import { PremindDaemonClient } from "../../client/daemon-client.ts";
 import { StateStore } from "../persistence/store.ts";
 import { IpcServer } from "./server.ts";
 
@@ -77,7 +77,11 @@ describe("IpcServer protocol negotiation", () => {
 
   test("a current client negotiates v2 before normal operations", async () => {
     const { server, socketPath } = await createServer();
-    const client = new PremindDaemonClient({ host: "pi", socketPath });
+    const client = new PremindDaemonClient({
+		host: "pi",
+		socketPath,
+		ensureDaemon: async () => {},
+	});
     try {
       await client.registerClient("/tmp/project", "test");
       const status = await client.debugStatus();
@@ -129,7 +133,11 @@ describe("IpcServer protocol negotiation", () => {
       });
     });
     await new Promise<void>((resolve) => legacyServer.listen(socketPath, resolve));
-    const client = new PremindDaemonClient({ host: "pi", socketPath });
+    const client = new PremindDaemonClient({
+		host: "pi",
+		socketPath,
+		ensureDaemon: async () => {},
+	});
 
     try {
       await client.registerClient("/tmp/project", "test");

@@ -8,11 +8,11 @@ import {
   probeDaemon,
   releaseDaemonStartLock,
   waitForDaemon,
-} from "../runtime/daemon-startup.mjs";
+} from "../generated/daemon-startup.mjs";
 
 const runtimePath = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
-  "../runtime/premind-daemon.mjs",
+  "../generated/premind-daemon.mjs",
 );
 const startupTimeoutMs = 2_000;
 

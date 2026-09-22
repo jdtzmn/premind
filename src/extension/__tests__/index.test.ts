@@ -6,7 +6,7 @@ import {
 	renderPremindPiStatus,
 	renderPremindReminderText,
 } from "../index.ts";
-import { PremindDaemonClient } from "../../plugin-opencode/daemon-client.ts";
+import { PremindDaemonClient } from "../../client/daemon-client.ts";
 import type {
 	DebugStatusResponse,
 	RegisterSessionPayload,
@@ -245,10 +245,12 @@ const createClient = (
 				sessionId: string;
 				prNumber: number;
 				repo?: string;
+				writePolicy?: "user-authorized" | "observe-only";
 			}) => {
 				operations.push(
-					`subscribe:${payload.sessionId}:${payload.repo ?? "default"}:${payload.prNumber}`,
+					`subscribe:${payload.sessionId}:${payload.repo ?? "default"}:${payload.prNumber}:${payload.writePolicy ?? "inferred"}`,
 				);
+				return { subscription: { writePolicy: payload.writePolicy ?? "observe-only" } };
 			},
 			unsubscribe: async (payload: {
 				sessionId: string;
@@ -474,6 +476,7 @@ describe("premind Pi extension", () => {
 								repo: "other/repo",
 								prNumber: 456,
 								source: "manual",
+								writePolicy: "observe-only",
 								state: "active",
 								pendingEventCount: 4,
 							},
@@ -481,7 +484,7 @@ describe("premind Pi extension", () => {
 					},
 				],
 			}),
-			/worktree owner\/repo @ feature\/pi \(watching\) \| subscriptions other\/repo#456 \(manual\/active, pending 4\)/,
+			/worktree owner\/repo @ feature\/pi \(watching\) \| subscriptions other\/repo#456 \(manual\/observe-only\/active, pending 4\)/,
 		);
 	});
 
@@ -1023,7 +1026,7 @@ describe("premind Pi extension", () => {
 		);
 		await subscribeTool.execute(
 			"tool-call-2",
-			{ prNumber: 13 },
+			{ prNumber: 13, writePolicy: "user-authorized" },
 			undefined,
 			undefined,
 			ctx,
@@ -1038,10 +1041,10 @@ describe("premind Pi extension", () => {
 
 		assert.deepEqual(client.operations, [
 			"activateWorktree:/tmp/session.jsonl:/tmp/other-worktree",
-			"subscribe:/tmp/session.jsonl:owner/repo:42",
+			"subscribe:/tmp/session.jsonl:owner/repo:42:inferred",
 			"unsubscribe:/tmp/session.jsonl:owner/repo:42",
 			"activateWorktree:/tmp/session.jsonl:/tmp/tool-worktree",
-			"subscribe:/tmp/session.jsonl:default:13",
+			"subscribe:/tmp/session.jsonl:default:13:user-authorized",
 			"unsubscribe:/tmp/session.jsonl:default:13",
 		]);
 		assert.deepEqual(
@@ -1088,7 +1091,7 @@ describe("premind Pi extension", () => {
 			),
 		) as unknown;
 		const mock = createMockPi();
-		const client = new PremindDaemonClient();
+		const client = new PremindDaemonClient({ ensureDaemon: async () => {} });
 		const testClient = client as unknown as {
 			requestWithRetry: (request: { type: string }) => Promise<unknown>;
 		};

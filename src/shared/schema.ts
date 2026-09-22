@@ -15,9 +15,20 @@ export const clientMetadataSchema = z
   })
   .strict();
 
-export const sessionStatusSchema = z.enum(["active", "paused", "detached", "closed"]);
+export const sessionStatusSchema = z.enum([
+  "active",
+  "paused",
+  "detached",
+  "dormant",
+  "closed",
+]);
 export const busyStateSchema = z.enum(["busy", "idle"]);
-export const sessionHostSchema = z.enum(["opencode", "pi", "claude"]);
+export const sessionHostSchema = z.enum([
+  "opencode",
+  "pi",
+  "claude",
+  "codex",
+]);
 
 // Only idleDeliveryThresholdMs is actually consumed today. Add new fields
 // here as they become real features. Defining fields that aren't wired
@@ -139,6 +150,7 @@ export const sessionControlPayloadSchema = z
   })
   .strict();
 export const suspendClaudeSessionPayloadSchema = sessionControlPayloadSchema;
+export const releaseSessionOwnerPayloadSchema = sessionControlPayloadSchema;
 
 // Claude hook processes are short lived, so this deliberately has no clientId.
 // The daemon owns the stable identity derived from Claude's session_id.
@@ -151,6 +163,9 @@ export const claudeSessionPayloadSchema = z
     busyState: busyStateSchema.default("idle"),
   })
   .strict();
+export const codexSessionPayloadSchema = claudeSessionPayloadSchema.extend({
+  reactivate: z.boolean().optional(),
+});
 
 export const activateWorktreePayloadSchema = z
   .object({
@@ -158,6 +173,12 @@ export const activateWorktreePayloadSchema = z
     path: z.string().min(1),
   })
   .strict();
+
+export const subscriptionWritePolicySchema = z.enum([
+  "owned-active",
+  "user-authorized",
+  "observe-only",
+]);
 
 const subscriptionControlPayloadSchema = z
   .object({
@@ -167,7 +188,13 @@ const subscriptionControlPayloadSchema = z
   })
   .strict();
 
-export const subscribePayloadSchema = subscriptionControlPayloadSchema;
+const manualSubscriptionWritePolicySchema = z.enum([
+  "user-authorized",
+  "observe-only",
+]);
+export const subscribePayloadSchema = subscriptionControlPayloadSchema.extend({
+  writePolicy: manualSubscriptionWritePolicySchema.optional(),
+}).strict();
 export const unsubscribePayloadSchema = subscriptionControlPayloadSchema;
 
 export const reminderEventSchema = z
@@ -188,6 +215,7 @@ export const reminderBatchSchema = z
     prNumber: z.number().int().positive().optional(),
     subscriptionId: z.string().min(1).optional(),
     source: z.enum(["automatic", "manual"]).optional(),
+    writePolicy: subscriptionWritePolicySchema.optional(),
     reminderText: z.string().min(1),
     events: z.array(reminderEventSchema),
   })
@@ -196,6 +224,37 @@ export const reminderBatchSchema = z
 export const getPendingReminderPayloadSchema = z
   .object({
     sessionId: z.string().min(1),
+  })
+  .strict();
+
+export const reminderBoundarySchema = z.enum([
+  "session_start",
+  "user_prompt_submit",
+  "stop",
+]);
+
+export const claimReminderPayloadSchema = z
+  .object({
+    sessionId: z.string().min(1),
+    boundary: reminderBoundarySchema,
+  })
+  .strict();
+
+export const reminderClaimSchema = z
+  .object({
+    batch: reminderBatchSchema,
+    handoffId: z.string().uuid(),
+    leaseExpiresAt: z.number().int().positive(),
+  })
+  .strict();
+
+export const settleReminderClaimPayloadSchema = z
+  .object({
+    sessionId: z.string().min(1),
+    batchId: z.string().min(1),
+    handoffId: z.string().uuid(),
+    outcome: z.enum(["confirmed", "failed"]),
+    failureReason: z.string().min(1).optional(),
   })
   .strict();
 
@@ -283,6 +342,7 @@ export const debugStatusResponseSchema = z
                   repo: z.string().min(1),
                   prNumber: z.number().int().positive(),
                   source: z.enum(["automatic", "manual"]),
+                  writePolicy: subscriptionWritePolicySchema,
                   state: z.enum(["active", "unsubscribed"]),
                   pendingEventCount: z.number().int().nonnegative(),
                 })
@@ -298,6 +358,7 @@ export const debugStatusResponseSchema = z
 export type ClientMetadata = z.infer<typeof clientMetadataSchema>;
 export type PremindConfig = z.infer<typeof premindConfigSchema>;
 export type SessionHost = z.infer<typeof sessionHostSchema>;
+export type SubscriptionWritePolicy = z.infer<typeof subscriptionWritePolicySchema>;
 export type RegisterClientPayload = z.infer<typeof registerClientPayloadSchema>;
 export type HeartbeatClientPayload = z.infer<
   typeof heartbeatClientPayloadSchema
@@ -327,6 +388,7 @@ export type DeleteSessionPayload = z.infer<typeof deleteSessionPayloadSchema>;
 export type SessionLeaseToken = z.infer<typeof sessionLeaseTokenSchema>;
 export type SessionControlPayload = z.infer<typeof sessionControlPayloadSchema>;
 export type ClaudeSessionPayload = z.infer<typeof claudeSessionPayloadSchema>;
+export type CodexSessionPayload = z.infer<typeof codexSessionPayloadSchema>;
 export type ActivateWorktreePayload = z.infer<
   typeof activateWorktreePayloadSchema
 >;
@@ -334,6 +396,12 @@ export type SubscribePayload = z.infer<typeof subscribePayloadSchema>;
 export type UnsubscribePayload = z.infer<typeof unsubscribePayloadSchema>;
 export type ReminderEvent = z.infer<typeof reminderEventSchema>;
 export type ReminderBatch = z.infer<typeof reminderBatchSchema>;
+export type ReminderBoundary = z.infer<typeof reminderBoundarySchema>;
+export type ClaimReminderPayload = z.infer<typeof claimReminderPayloadSchema>;
+export type ReminderClaim = z.infer<typeof reminderClaimSchema>;
+export type SettleReminderClaimPayload = z.infer<
+  typeof settleReminderClaimPayloadSchema
+>;
 export type AckReminderPayload = z.infer<typeof ackReminderPayloadSchema>;
 export type AckReminderBundlePayload = z.infer<
   typeof ackReminderBundlePayloadSchema

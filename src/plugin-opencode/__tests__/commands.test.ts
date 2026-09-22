@@ -54,13 +54,13 @@ describe("plugin commands", () => {
           state: "watching",
         },
         subscriptions: [
-          { repo: "acme/repo", prNumber: 42, source: "automatic", state: "active", pendingEventCount: 2 },
-          { repo: "other/repo", prNumber: 99, source: "manual", state: "unsubscribed", pendingEventCount: 0 },
+          { repo: "acme/repo", prNumber: 42, source: "automatic", writePolicy: "owned-active", state: "active", pendingEventCount: 2 },
+          { repo: "other/repo", prNumber: 99, source: "manual", writePolicy: "observe-only", state: "unsubscribed", pendingEventCount: 0 },
         ],
       }],
     })
     assert.match(rendered, /worktree acme\/repo @ feature\/x \(watching\)/)
-    assert.match(rendered, /subscriptions acme\/repo#42 \(automatic\/active, pending 2\), other\/repo#99 \(manual\/unsubscribed, pending 0\)/)
+    assert.match(rendered, /subscriptions acme\/repo#42 \(automatic\/owned-active\/active, pending 2\), other\/repo#99 \(manual\/observe-only\/unsubscribed, pending 0\)/)
   })
 
   test("explains when automatic watching is disabled for a foreign PR", () => {

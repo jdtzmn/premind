@@ -144,9 +144,9 @@ describe("StateStore", () => {
         if (scenario.stale || (!scenario.failing && !scenario.conflict)) {
           assert.doesNotMatch(batch.reminderText, /Action required:/)
         } else if (scenario.manual) {
-          assert.match(batch.reminderText, /Do not make changes unless the user explicitly asks you to/)
-          assert.match(batch.reminderText, /Action required: report .*wait for authorization before making changes/)
-          assert.doesNotMatch(batch.reminderText, /Action required: resolve/)
+          assert.match(batch.reminderText, /This PR is observation-only/)
+          assert.match(batch.reminderText, /Observation-only CI\/conflict update/)
+          assert.doesNotMatch(batch.reminderText, /wait for authorization/)
         } else {
           assert.match(batch.reminderText, /target worktree is not active/)
           assert.match(batch.reminderText, /do not make changes until you activate the matching worktree/)
@@ -1845,9 +1845,9 @@ describe("StateStore", () => {
     }])
     const staleBatch = store.buildReminderBatchForSubscription(manual.subscriptionId)
     assert.ok(staleBatch)
-    assert.match(staleBatch.reminderText, /manually subscribed/)
-    assert.match(staleBatch.reminderText, /Do not make changes unless the user explicitly asks/)
-    assert.match(staleBatch.reminderText, /wait for authorization before making changes/)
+    assert.match(staleBatch.reminderText, /observation-only/i)
+    assert.match(staleBatch.reminderText, /Do not edit, push to, rebase, merge, or comment on this PR/)
+    assert.match(staleBatch.reminderText, /Observation-only CI\/conflict update/)
     ;(store as any).db
       .prepare(`UPDATE session_subscriptions SET state = 'unsubscribed' WHERE subscription_id = ?`)
       .run(manual.subscriptionId)
@@ -1980,10 +1980,39 @@ describe("StateStore", () => {
       store.getSubscription("session-policy-migration", "acme/repo", 7) && [
         store.getSubscription("session-policy-migration", "acme/repo", 7)!.ownership,
         store.getSubscription("session-policy-migration", "acme/repo", 7)!.policy,
+        store.getSubscription("session-policy-migration", "acme/repo", 7)!.authorizationMode,
+        store.getSubscription("session-policy-migration", "acme/repo", 7)!.writePolicy,
       ],
-      ["unknown", "observe-only"],
+      ["unknown", "observe-only", "infer-owner", "observe-only"],
     )
     store.close()
+  })
+
+  test("repairs authorization modes after an interrupted migration", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "premind-store-test-"))
+    const dbPath = path.join(dir, "premind.db")
+    tempPaths.push(dir)
+    const seeded = new StateStore(dbPath)
+    seeded.registerClient("migration-client", { pid: 1, projectRoot: "/repo" })
+    seeded.registerSession({
+      clientId: "migration-client", sessionId: "migration-session", repo: "acme/repo",
+      branch: "feature/migration", isPrimary: true, status: "active", busyState: "idle",
+    })
+    seeded.upsertSubscription({
+      sessionId: "migration-session", repo: "acme/repo", prNumber: 7, source: "automatic",
+    })
+    seeded.upsertSubscription({
+      sessionId: "migration-session", repo: "acme/repo", prNumber: 8, source: "manual", writePolicy: "user-authorized",
+    })
+    seeded.close()
+    const interrupted = new DatabaseSync(dbPath)
+    interrupted.function("premind_expected_storage_epoch", () => 1)
+    interrupted.exec("UPDATE session_subscriptions SET authorization_mode = 'explicit-observe'")
+    interrupted.close()
+    const repaired = new StateStore(dbPath)
+    assert.equal(repaired.getSubscription("migration-session", "acme/repo", 7)?.authorizationMode, "infer-owner")
+    assert.equal(repaired.getSubscription("migration-session", "acme/repo", 8)?.authorizationMode, "explicit-user-authorized")
+    repaired.close()
   })
 
 
@@ -2007,6 +2036,7 @@ describe("StateStore", () => {
       .all()
     assert.ok(subscriptionColumns.some((c) => c.name === "ownership"))
     assert.ok(subscriptionColumns.some((c) => c.name === "policy"))
+    assert.ok(subscriptionColumns.some((c) => c.name === "authorization_mode"))
     reopened.close()
   })
 
@@ -2314,6 +2344,258 @@ describe("migrate: session hosts", () => {
     assert.equal(store.getReminderBatchRecord(batchId, "legacy-claude")?.reminderText, "keep me")
     store.close()
   })
+
+  test("preserves the complete Pi and OpenCode graph across the Codex schema migration", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "premind-host-graph-migrate-"))
+    tempPaths.push(dir)
+    const dbPath = path.join(dir, "premind.db")
+    const seeded = new StateStore(dbPath)
+    const now = 2_000_000
+    seeded.registerClient("pi-client", { pid: 101, projectRoot: "/repo/pi", sessionSource: "/tmp/pi.jsonl" }, now)
+    seeded.registerClient("opencode-client", { pid: 202, projectRoot: "/repo/open", sessionSource: "opencode" }, now)
+    seeded.registerSession({
+      clientId: "pi-client", sessionId: "pi-session", host: "pi", hostSessionId: "/tmp/pi.jsonl",
+      repo: "acme/repo", branch: "feature/pi", isPrimary: true, status: "active", busyState: "idle",
+    }, now)
+    seeded.registerSession({
+      clientId: "opencode-client", sessionId: "opencode-session", host: "opencode", hostSessionId: "opencode-host",
+      repo: "acme/repo", branch: "feature/open", isPrimary: true, status: "paused", busyState: "idle",
+    }, now)
+    seeded.upsertWorktreeBinding({
+      sessionId: "pi-session", root: "/repo/pi", gitDir: "/repo/.git/worktrees/pi",
+      repo: "acme/repo", branch: "feature/pi", headSha: "pi-sha", state: "active",
+    }, now)
+    seeded.upsertWorktreeBinding({
+      sessionId: "opencode-session", root: "/repo/open", gitDir: "/repo/.git/worktrees/open",
+      repo: "acme/repo", branch: "feature/open", headSha: "open-sha", state: "active",
+    }, now)
+    const piSubscription = seeded.upsertSubscription({
+      sessionId: "pi-session", repo: "acme/repo", prNumber: 7, source: "automatic",
+    }, now)
+    const opencodeSubscription = seeded.upsertSubscription({
+      sessionId: "opencode-session", repo: "acme/repo", prNumber: 8, source: "manual",
+      writePolicy: "user-authorized",
+    }, now)
+    seeded.reconcileSubscriptionPolicies("acme/repo", 7, "feature/pi", "jacob", "jacob", now)
+    seeded.reconcileSubscriptionPolicies("acme/repo", 8, "feature/open", "reviewer", "jacob", now)
+    seeded.recordAutomaticSubscriptionOptOut({
+      sessionId: "pi-session", gitDir: "/repo/.git/worktrees/pi", repo: "acme/repo",
+      branch: "feature/pi", prNumber: 9,
+    }, now)
+    const piSnapshot = snapshot()
+    seeded.saveSnapshot("acme/repo", 7, piSnapshot)
+    const opencodeSnapshot = snapshot()
+    opencodeSnapshot.core.number = 8
+    opencodeSnapshot.core.headRefName = "feature/open"
+    seeded.saveSnapshot("acme/repo", 8, opencodeSnapshot)
+    seeded.insertEvents("acme/repo", 7, [{
+      dedupeKey: "pi:event", kind: "check.failed", priority: "high",
+      summary: "Pi check failed", referenceLink: "https://example.test/pi", payload: { host: "pi" },
+    }], now)
+    seeded.insertEvents("acme/repo", 8, [{
+      dedupeKey: "open:event", kind: "review.submitted", priority: "medium",
+      summary: "OpenCode review", referenceLink: "https://example.test/open", payload: { host: "opencode" },
+    }], now)
+    const piBatch = seeded.createOrReplaceReminder(
+      "pi-session", piSubscription.subscriptionId, "Pi reminder", [], 1, now,
+    )
+    const opencodeBatch = seeded.createOrReplaceReminder(
+      "opencode-session", opencodeSubscription.subscriptionId, "OpenCode reminder", [], 2, now,
+    )
+    assert.equal(seeded.ackReminder({
+      batchId: opencodeBatch, sessionId: "opencode-session", state: "handed_off",
+    }, now), true)
+    seeded.close()
+
+    const rows = (db: DatabaseSync, sql: string) =>
+      (db.prepare(sql).all() as Array<Record<string, unknown>>).map((row) => ({ ...row }))
+    const captureGraph = (db: DatabaseSync) => ({
+      clients: rows(db, "SELECT * FROM client_leases ORDER BY client_id"),
+      sessions: rows(db, "SELECT * FROM sessions ORDER BY session_id"),
+      bindings: rows(db, "SELECT * FROM worktree_bindings ORDER BY session_id"),
+      subscriptions: rows(db, "SELECT * FROM session_subscriptions ORDER BY subscription_id"),
+      optOuts: rows(db, "SELECT * FROM automatic_subscription_opt_outs ORDER BY session_id, pr_number"),
+      batches: rows(db, `SELECT batch_id, session_id, subscription_id, reminder_text, events_json, state,
+        max_event_seq, handoff_id, handoff_size, canceled_at, created_at, updated_at
+        FROM reminder_batches ORDER BY batch_id`),
+      branchWatchers: rows(db, "SELECT * FROM branch_watchers ORDER BY repo, branch"),
+      prWatchers: rows(db, "SELECT * FROM pr_watchers ORDER BY repo, pr_number"),
+      snapshots: rows(db, "SELECT * FROM pr_snapshots ORDER BY repo, pr_number"),
+      events: rows(db, "SELECT * FROM pr_events ORDER BY seq"),
+    })
+
+    const legacy = new DatabaseSync(dbPath)
+    legacy.function("premind_expected_storage_epoch", () => 1)
+    legacy.exec("PRAGMA foreign_keys = OFF")
+    legacy.exec("BEGIN IMMEDIATE")
+    legacy.exec(`
+      CREATE TABLE sessions_before_codex (
+        session_id TEXT PRIMARY KEY,
+        host TEXT NOT NULL DEFAULT 'opencode' CHECK(host IN ('opencode', 'pi', 'claude')),
+        host_session_id TEXT NOT NULL, client_id TEXT NOT NULL, repo TEXT NOT NULL, branch TEXT NOT NULL,
+        pr_number INTEGER, is_primary INTEGER NOT NULL, status TEXT NOT NULL, busy_state TEXT NOT NULL,
+        last_delivered_event_seq INTEGER NOT NULL DEFAULT 0, last_activity_at INTEGER NOT NULL,
+        created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, UNIQUE(host, host_session_id)
+      );
+      INSERT INTO sessions_before_codex SELECT * FROM sessions;
+      DROP TABLE sessions;
+      ALTER TABLE sessions_before_codex RENAME TO sessions;
+      CREATE TABLE reminder_batches_before_codex (
+        batch_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, subscription_id TEXT UNIQUE,
+        reminder_text TEXT NOT NULL, events_json TEXT NOT NULL, state TEXT NOT NULL, max_event_seq INTEGER,
+        handoff_id TEXT, handoff_size INTEGER, canceled_at INTEGER, created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        FOREIGN KEY(session_id) REFERENCES sessions(session_id) ON DELETE CASCADE,
+        FOREIGN KEY(subscription_id) REFERENCES session_subscriptions(subscription_id) ON DELETE CASCADE
+      );
+      INSERT INTO reminder_batches_before_codex
+        SELECT batch_id, session_id, subscription_id, reminder_text, events_json, state, max_event_seq,
+               handoff_id, handoff_size, canceled_at, created_at, updated_at
+        FROM reminder_batches;
+      DROP TABLE reminder_batches;
+      ALTER TABLE reminder_batches_before_codex RENAME TO reminder_batches;
+      COMMIT;
+    `)
+    legacy.exec("PRAGMA foreign_keys = ON")
+    legacy.exec("UPDATE pr_watchers SET state = 'warming_up' WHERE active_session_count > 0")
+    const before = captureGraph(legacy)
+    legacy.close()
+
+    const migrated = new StateStore(dbPath)
+    const probe = new DatabaseSync(dbPath)
+    assert.deepEqual(captureGraph(probe), before)
+    assert.deepEqual(rows(probe, "PRAGMA foreign_key_check"), [])
+    assert.deepEqual(
+      rows(probe, "SELECT batch_id, lease_expires_at FROM reminder_batches ORDER BY batch_id"),
+      [{ batch_id: opencodeBatch, lease_expires_at: null }, { batch_id: piBatch, lease_expires_at: null }].sort(
+        (left, right) => left.batch_id.localeCompare(right.batch_id),
+      ),
+    )
+    const sessionSql = probe.prepare(
+      "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'sessions'",
+    ).get() as { sql: string }
+    assert.match(sessionSql.sql, /'codex'/)
+    probe.close()
+
+    migrated.registerClient("codex-client", { pid: 303, projectRoot: "/repo/codex" }, now + 1)
+    migrated.registerSession({
+      clientId: "codex-client", sessionId: "codex-session", host: "codex", hostSessionId: "codex-host",
+      repo: "acme/repo", branch: "feature/codex", isPrimary: true, status: "dormant", busyState: "idle",
+    }, now + 1)
+    migrated.close()
+
+    const reopened = new StateStore(dbPath)
+    assert.equal(reopened.getSession("pi-session")?.host, "pi")
+    assert.equal(reopened.getSession("opencode-session")?.status, "paused")
+    assert.equal(reopened.getSession("codex-session")?.host, "codex")
+    assert.equal(reopened.getWorktreeBinding("pi-session")?.headSha, "pi-sha")
+    assert.equal(reopened.getSubscriptionById(opencodeSubscription.subscriptionId)?.writePolicy, "user-authorized")
+    assert.equal(reopened.getReminderBatchRecord(piBatch, "pi-session")?.reminderText, "Pi reminder")
+    assert.equal(reopened.getReminderBatchRecord(opencodeBatch, "opencode-session")?.state, "handed_off")
+    reopened.close()
+  })
+
+describe("subscription authorization", () => {
+  test("keeps explicit authority while omitted policies await verification", () => {
+    const store = createStore()
+    store.registerClient("policy-client", { pid: 1, projectRoot: "/tmp/project" })
+    store.registerSession({
+      clientId: "policy-client", sessionId: "policy-session", repo: "acme/repo",
+      branch: "feature/policy", isPrimary: true, status: "active", busyState: "idle",
+    })
+    const automatic = store.upsertSubscription({
+      sessionId: "policy-session", repo: "acme/repo", prNumber: 7, source: "automatic",
+    })
+    assert.deepEqual([automatic.authorizationMode, automatic.writePolicy], ["infer-owner", "owned-active"])
+    const manual = store.upsertSubscription({
+      sessionId: "policy-session", repo: "acme/repo", prNumber: 8, source: "manual",
+    })
+    assert.deepEqual([manual.authorizationMode, manual.writePolicy], ["infer-owner", "observe-only"])
+    const authorized = store.upsertSubscription({
+      sessionId: "policy-session", repo: "acme/repo", prNumber: 8, source: "manual", writePolicy: "user-authorized",
+    })
+    assert.deepEqual([authorized.authorizationMode, authorized.writePolicy], ["explicit-user-authorized", "user-authorized"])
+    const rediscovered = store.upsertSubscription({
+      sessionId: "policy-session", repo: "acme/repo", prNumber: 8, source: "automatic",
+    })
+    assert.equal(rediscovered.source, "manual")
+    assert.deepEqual([rediscovered.authorizationMode, rediscovered.writePolicy], ["explicit-user-authorized", "user-authorized"])
+    const current = snapshot()
+    current.core.number = 8
+    current.core.headRefName = "feature/policy"
+    current.checks = [{ name: "lint", state: "FAILURE" }]
+    store.saveSnapshot("acme/repo", 8, current)
+    store.insertEvents("acme/repo", 8, [{
+      dedupeKey: "policy-lint", kind: "check.failed", priority: "high",
+      summary: "Check failed: lint", payload: { name: "lint", headSha: "sha-7" },
+    }])
+    const batch = store.buildReminderBatchForSubscription(authorized.subscriptionId)
+    assert.ok(batch)
+    assert.match(batch.reminderText, /User-authorized tracking/)
+    assert.match(batch.reminderText, /target worktree is not active/)
+    assert.doesNotMatch(batch.reminderText, /Action required for this authorized PR/)
+    store.close()
+  })
+
+  test("resets inferred authority without changing explicit authorization or losing pending reminders", () => {
+    const store = createStore()
+    store.registerClient("reset-client", { pid: 1, projectRoot: "/tmp/project" })
+    store.registerSession({
+      clientId: "reset-client", sessionId: "reset-session", repo: "acme/repo",
+      branch: "feature/reset", isPrimary: true, status: "active", busyState: "idle",
+    })
+    store.upsertWorktreeBinding({
+      sessionId: "reset-session", root: "/tmp/reset", gitDir: "/tmp/.git/worktrees/reset",
+      repo: "acme/repo", branch: "feature/reset", headSha: "head", state: "watching",
+    })
+    const inferred = store.upsertSubscription({
+      sessionId: "reset-session", repo: "acme/repo", prNumber: 7, source: "manual",
+    })
+    store.reconcileSubscriptionPolicies("acme/repo", 7, "feature/reset", "octocat", "octocat")
+    const current = snapshot()
+    current.core.headRefName = "feature/reset"
+    current.checks = [{ name: "lint", state: "FAILURE" }]
+    store.saveSnapshot("acme/repo", 7, current)
+    store.insertEvents("acme/repo", 7, [{
+      dedupeKey: "reset-lint", kind: "check.failed", priority: "high",
+      summary: "Check failed: lint", payload: { name: "lint", headSha: current.core.headRefOid },
+    }])
+    const initial = store.buildReminderBatchForSubscription(inferred.subscriptionId)
+    assert.match(initial?.reminderText ?? "", /Owned-active tracking/)
+    const explicit = store.upsertSubscription({
+      sessionId: "reset-session", repo: "acme/repo", prNumber: 8, source: "manual", writePolicy: "user-authorized",
+    })
+    assert.equal(store.resetInferredSubscriptionPolicies(), 1)
+    assert.equal(store.getSubscriptionById(inferred.subscriptionId)?.writePolicy, "observe-only")
+    assert.match(store.getPendingReminder("reset-session")?.reminderText ?? "", /observation-only/)
+    assert.equal(store.getSubscriptionById(explicit.subscriptionId)?.writePolicy, "user-authorized")
+    store.close()
+  })
+
+  test("immediately resets inferred authority when the active checkout changes", () => {
+    const store = createStore()
+    store.registerClient("checkout-client", { pid: 1, projectRoot: "/tmp/project" })
+    store.registerSession({
+      clientId: "checkout-client", sessionId: "checkout-session", repo: "acme/repo",
+      branch: "feature/one", isPrimary: true, status: "active", busyState: "idle",
+    })
+    store.upsertWorktreeBinding({
+      sessionId: "checkout-session", root: "/tmp/one", gitDir: "/tmp/.git/worktrees/one",
+      repo: "acme/repo", branch: "feature/one", headSha: "one", state: "watching",
+    })
+    const subscription = store.upsertSubscription({
+      sessionId: "checkout-session", repo: "acme/repo", prNumber: 7, source: "manual",
+    })
+    store.reconcileSubscriptionPolicies("acme/repo", 7, "feature/one", "octocat", "octocat")
+    assert.equal(store.getSubscriptionById(subscription.subscriptionId)?.writePolicy, "owned-active")
+    store.activateWorktree({
+      sessionId: "checkout-session", root: "/tmp/two", gitDir: "/tmp/.git/worktrees/two",
+      repo: "acme/repo", branch: "feature/two", headSha: "two", state: "waiting_for_pr",
+    })
+    assert.equal(store.getSubscriptionById(subscription.subscriptionId)?.writePolicy, "observe-only")
+    store.close()
+  })
+})
 })
 
 describe("session daemon leases", () => {

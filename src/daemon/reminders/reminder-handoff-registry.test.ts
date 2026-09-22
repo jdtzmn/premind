@@ -142,17 +142,22 @@ const failureEvent = (name = "lint"): NormalizedPrEvent => ({
   dedupeKey: `failure:${name}`, kind: "check.failed", priority: "high", summary: `Check failed: ${name}`,
   payload: { name, headSha: "head-old", workflow: "CI", event: "push" },
 })
-const setupLive = (source: "automatic" | "manual" = "automatic") => {
+const setupLive = (
+  source: "automatic" | "manual" = "automatic",
+  writePolicy?: "owned-active" | "user-authorized" | "observe-only",
+ ) => {
   const store = createStore()
   seed(store, source) // Also includes an unrelated comment which must survive reconciliation.
-  const subscription = store.upsertSubscription({ sessionId: "session", repo: "acme/repo", prNumber: 13, source })
+  const subscription = store.upsertSubscription({
+    sessionId: "session", repo: "acme/repo", prNumber: 13, source, writePolicy,
+  })
   const registry = new ReminderHandoffRegistry(store)
   const save = (snapshot: PullRequestSnapshot) => store.saveSnapshot("acme/repo", 13, snapshot)
   return { store, registry, subscription, save }
 }
 const assertAction = (text: string, actionable: boolean) => {
-  if (actionable) assert.match(text, /Action required: resolve .*on HEAD/)
-  else assert.doesNotMatch(text, /Action required:/)
+  if (actionable) assert.match(text, /Action required for this owned PR: investigate the current-HEAD CI failure\(s\)\/merge conflict\(s\)/)
+  else assert.doesNotMatch(text, /Action required for this owned PR:/)
 }
 
 describe("pending reminder live reconciliation", () => {
@@ -160,14 +165,14 @@ describe("pending reminder live reconciliation", () => {
     { name: "matching", switchBranch: false, instruction: /resolve .*on HEAD/ },
     { name: "switched", switchBranch: true, instruction: /target worktree is not active/ },
   ]) {
-    test(`claim-time refresh keeps self-owned manual policy with a ${scenario.name} worktree`, () => {
-      const { store, registry, subscription, save } = setupLive("manual")
+    test(`claim-time refresh keeps user-authorized manual policy with a ${scenario.name} worktree`, () => {
+      const { store, registry, subscription, save } = setupLive("manual", "user-authorized")
       try {
         save(liveSnapshot())
-        store.reconcileSubscriptionPolicies("acme/repo", 13, "octocat", "octocat")
+        store.reconcileSubscriptionPolicies("acme/repo", 13, "feature/x", "octocat", "octocat")
         store.insertEvents("acme/repo", 13, [failureEvent()])
         const built = store.buildReminderBatchForSubscription(subscription.subscriptionId)!
-        assert.match(built.reminderText, /verified as yours/)
+        assert.match(built.reminderText, /User-authorized tracking/)
         assert.match(built.reminderText, /resolve .*on HEAD/)
         if (scenario.switchBranch) {
           store.upsertWorktreeBinding({
@@ -177,7 +182,7 @@ describe("pending reminder live reconciliation", () => {
         }
         const claimed = registry.claimReminderBundle("session")?.batches[0]
         assert.ok(claimed)
-        assert.match(claimed.reminderText, /verified as yours/)
+        assert.match(claimed.reminderText, /User-authorized tracking/)
         assert.match(claimed.reminderText, scenario.instruction)
         assert.doesNotMatch(claimed.reminderText, /wait for authorization/)
       } finally { registry.close(); store.close() }
@@ -380,7 +385,7 @@ describe("pending reminder live reconciliation", () => {
       save(liveSnapshot())
       store.insertEvents("acme/repo", 13, [failureEvent()])
       const first = store.buildReminderBatchForSubscription(subscription.subscriptionId)!
-      assert.match(first.reminderText, /Action required: report .*wait for authorization/)
+      assert.match(first.reminderText, /Observation-only CI\/conflict update/)
       const external = store.upsertSubscription({ sessionId: "session", repo: "other/repo", prNumber: 99, source: "manual" })
       store.saveSnapshot("other/repo", 99, liveSnapshot([]))
       store.insertEvents("other/repo", 99, [{ ...failureEvent(), dedupeKey: "external" }])
@@ -389,11 +394,11 @@ describe("pending reminder live reconciliation", () => {
       assert.equal(other.prNumber, 99)
       assert.match(other.reminderText, /UNVERIFIED/)
       assertAction(other.reminderText, false)
-      assert.match(store.buildReminderBatchForSubscription(subscription.subscriptionId)!.reminderText, /Action required: report/)
+      assert.match(store.buildReminderBatchForSubscription(subscription.subscriptionId)!.reminderText, /Observation-only CI\/conflict update/)
       save(liveSnapshot([check("SUCCESS")]))
       const refreshed = registry.getPendingReminder("session")!
       assert.equal(refreshed.batchId, first.batchId)
-      assert.match(refreshed.reminderText, /Do not make changes unless the user explicitly asks/)
+      assert.match(refreshed.reminderText, /This PR is observation-only/)
       assertAction(refreshed.reminderText, false)
     } finally { registry.close(); store.close() }
   })

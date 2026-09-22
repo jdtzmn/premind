@@ -55,22 +55,30 @@ describe("plugin packaging", () => {
 	});
 
 	test("daemon entry file exists relative to plugin", () => {
-		const pluginDir = path.resolve(ROOT, "src", "plugin-opencode");
-		const daemonEntry = path.resolve(pluginDir, "..", "daemon", "index.ts");
+		const daemonEntry = path.resolve(ROOT, "src", "daemon", "index.ts");
 		assert.ok(
 			fs.existsSync(daemonEntry),
 			`daemon entry does not exist at ${daemonEntry}`,
 		);
 	});
 
-	test("package includes required runtime dependencies", () => {
+	test("package preserves the source daemon runtime", () => {
 		const pkgPath = path.join(ROOT, "package.json");
 		const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
 		const deps = pkg.dependencies ?? {};
 
 		assert.ok("@opencode-ai/plugin" in deps, "missing @opencode-ai/plugin");
 		assert.ok("zod" in deps, "missing zod");
-		assert.ok("tsx" in deps, "missing tsx (needed for daemon launcher)");
+		assert.ok(
+			"tsx" in deps,
+			"tsx must remain available to the source daemon launcher",
+		);
+		assert.equal(
+			pkg.files?.includes("generated"),
+			false,
+			"OpenCode and Pi should not depend on the Codex generated runtime",
+		);
+		assert.equal(pkg.engines, undefined);
 		assert.ok(
 			!("better-sqlite3" in deps),
 			"better-sqlite3 must not be a dependency (native addon, not usable in plugin installs)",

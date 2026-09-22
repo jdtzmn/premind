@@ -114,6 +114,10 @@ async function main() {
       suspendedAutomaticSubscriptions,
     })
   }
+  const resetInferredPolicies = server.store.resetInferredSubscriptionPolicies()
+  if (resetInferredPolicies > 0) {
+    logger.info("reset inferred subscription authority pending verification", { resetInferredPolicies })
+  }
   // Adaptive per-PR scheduling: active PRs poll every 20s; quiet PRs stretch to
   // 5 minutes. The registry reconstructs canonical actors from SQLite here.
   const prSchedule = new AdaptiveSchedule()

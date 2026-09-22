@@ -53,7 +53,7 @@ Install the self-contained Claude plugin from a checkout or released package roo
 claude plugin install /path/to/premind/plugin-claude
 ```
 
-The plugin requires **Node 22.13+** for `node:sqlite`. Its hooks start or reuse a shared local daemon from `plugin-claude/runtime/premind-daemon.mjs`; a Claude install does not need Bun, `tsx`, a repository checkout, or repository-root `node_modules` at runtime. The launcher probes the shared socket, coordinates startup with a state-directory lock, and fails open if the daemon cannot start.
+The plugin requires **Node 22.13+** for `node:sqlite`. Its hooks start or reuse a shared local daemon from `plugin-claude/generated/premind-daemon.mjs`; a Claude install does not need Bun, `tsx`, a repository checkout, or repository-root `node_modules` at runtime. The launcher probes the shared socket, coordinates startup with a state-directory lock, and fails open if the daemon cannot start.
 
 Claude reminders are delivered only at a `Stop` boundary. A delivered batch is confirmed on Claude's next continuation Stop hook; interrupted handoffs become retryable, so duplicates are preferred to lost reminders. Inactive Claude sessions are not woken in v0.2.
 
@@ -66,6 +66,24 @@ bun run test:claude:live-contract
 ```
 
 It creates a temporary plugin and verifies fresh and resumed hook/MCP session IDs. It reports a skip when the Claude CLI is unavailable or unauthenticated.
+
+## Codex plugin (v0.1)
+
+Install Premind from the repository-local marketplace or from the same layout in a released package:
+
+```sh
+codex plugin marketplace add /path/to/premind
+codex plugin add premind@premind
+```
+
+Review and trust Premind's lifecycle hooks before enabling them. The plugin uses `SessionStart`, `UserPromptSubmit`, `Stop`, `Interrupt`, and `SessionEnd`; it deliberately does **not** install `PostToolUse`. If hooks are not running, open Codex's hook-management UI, review the commands, and trust the current plugin definition.
+
+The installed plugin runs dependency-closed Node bundles from its own `generated/` directory. It requires **Node 22.13+**, `git`, and an authenticated GitHub CLI (`gh auth login`). Bun, `tsx`, a source checkout, and repository `node_modules` are not runtime prerequisites. Hooks and MCP use Codex-managed `PLUGIN_DATA` for local receipts and session handles; Premind only uses network access for GitHub polling.
+
+Codex cannot wake an already-idle stock CLI thread. Updates found while idle remain durable and arrive at the next available `SessionStart`, `UserPromptSubmit`, or `Stop` boundary. An interrupted delivery may be shown again rather than silently lost.
+
+After changing a local checkout, refresh the marketplace/plugin installation and re-review hooks. Remove the plugin with `codex plugin remove premind@premind`, then remove its marketplace source if it is no longer needed.
+For a source checkout modified locally, run `bun run build:runtime` before refreshing so the marketplace sees updated bundles.
 
 ## How it works
 
@@ -155,8 +173,8 @@ ls /var/folders/*/*/*/T/premind.sock 2>/dev/null
 
 - OpenCode
 - `gh` CLI authenticated with access to your repository
-- OpenCode: `bun` or `tsx` available in PATH (for the development daemon process)
-- Claude Code: Node 22.13+; the installed plugin uses its bundled daemon and does not require Bun or `tsx` at runtime
+- OpenCode/Pi: Node 22.5+ with the package's `tsx` dependency for the source daemon launcher
+- Claude Code/Codex: Node 22.13+; installed plugins use self-contained generated bundles and do not require Bun, `tsx`, or repository `node_modules` at runtime
 
 ## Architecture
 
