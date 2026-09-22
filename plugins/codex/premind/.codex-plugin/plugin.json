@@ -1,0 +1,27 @@
+{
+	"name": "premind",
+	"version": "0.1.0",
+	"description": "Bring new pull request context into Codex at safe turn boundaries.",
+	"author": {
+		"name": "Jacob Daitzman",
+		"url": "https://github.com/jdtzmn"
+	},
+	"repository": "https://github.com/jdtzmn/premind",
+	"license": "MIT",
+	"keywords": ["codex", "github", "pull-request", "notifications"],
+	"skills": "./skills/",
+	"mcpServers": "./.mcp.json",
+	"interface": {
+		"displayName": "premind",
+		"shortDescription": "Bring new PR context into Codex turns",
+		"longDescription": "Monitor pull requests and deliver new review, comment, check, and merge-conflict context at safe Codex turn boundaries.",
+		"developerName": "Jacob Daitzman",
+		"category": "Developer Tools",
+		"capabilities": ["Pull request monitoring", "Lifecycle reminders"],
+		"defaultPrompt": [
+			"Show my Premind status.",
+			"Watch this pull request for updates.",
+			"Stop watching this pull request."
+		]
+	}
+}

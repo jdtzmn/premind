@@ -11,6 +11,7 @@ import {
 	type CodexMcpDependencies,
 	handleCodexMcpLine,
 	handleCodexMcpRequest,
+	resolveCodexPluginData,
 } from "../mcp-server.ts";
 import { ensureCodexSessionBinding } from "../session-binding.ts";
 
@@ -25,24 +26,97 @@ const shortTempRoot = process.platform === "win32" ? os.tmpdir() : "/tmp";
 
 const createTempDir = () =>
 	fs.mkdtempSync(path.join(shortTempRoot, "premind-codex-mcp-"));
-test("discovers only the four supported Codex controls", async () => {
+
+const unusedDependencies = (): CodexMcpDependencies => {
 	const unused = async () => {
 		throw new Error("unused MCP dependency");
 	};
-	const client = {
-		activateWorktree: unused,
-		debugStatus: unused,
-		subscribe: unused,
-		unsubscribe: unused,
-	} satisfies CodexMcpDependencies["client"];
+	return {
+		client: {
+			activateWorktree: unused,
+			debugStatus: unused,
+			subscribe: unused,
+			unsubscribe: unused,
+		},
+		pluginData: "/unused",
+		cwd: "/unused",
+		ensureDaemon: async () => undefined,
+	};
+};
+
+test("resolves the hook-shared plugin data directory for legacy Codex MCPs", () => {
+	assert.equal(
+		resolveCodexPluginData(
+			{},
+			path.join(
+				"/codex-home",
+				"plugins",
+				"cache",
+				"premind",
+				"premind",
+				"0.1.0",
+				"generated",
+			),
+		),
+		path.join("/codex-home", "plugins", "data", "premind-premind"),
+	);
+	assert.equal(
+		resolveCodexPluginData(
+			{ CODEX_HOME: "/custom-codex-home" },
+			"/source/checkout/generated",
+		),
+		path.join(
+			"/custom-codex-home",
+			"plugins",
+			"data",
+			"premind-premind",
+		),
+	);
+	assert.equal(
+		resolveCodexPluginData(
+			{ PLUGIN_DATA: "/host-provided-plugin-data" },
+			"/unused",
+		),
+		"/host-provided-plugin-data",
+	);
+});
+
+test("negotiates current and legacy MCP protocol versions", async () => {
+	for (const protocolVersion of ["2024-11-05", "2025-06-18"]) {
+		const result = await handleCodexMcpRequest(
+			{
+				jsonrpc: "2.0",
+				id: 1,
+				method: "initialize",
+				params: { protocolVersion },
+			},
+			unusedDependencies(),
+		);
+		assert.equal(
+			JSON.parse(JSON.stringify(result)).protocolVersion,
+			protocolVersion,
+		);
+	}
+
+	const fallback = await handleCodexMcpRequest(
+		{
+			jsonrpc: "2.0",
+			id: 1,
+			method: "initialize",
+			params: { protocolVersion: "2099-01-01" },
+		},
+		unusedDependencies(),
+	);
+	assert.equal(
+		JSON.parse(JSON.stringify(fallback)).protocolVersion,
+		"2025-06-18",
+	);
+});
+
+test("discovers only the four supported Codex controls", async () => {
 	const result = await handleCodexMcpRequest(
 		{ jsonrpc: "2.0", id: 1, method: "tools/list" },
-		{
-			client,
-			pluginData: "/unused",
-			cwd: "/unused",
-			ensureDaemon: async () => undefined,
-		},
+		unusedDependencies(),
 	);
 	assert.deepEqual(
 		JSON.parse(JSON.stringify(result)).tools.map(

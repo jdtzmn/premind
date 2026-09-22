@@ -50,7 +50,10 @@ try {
   )
   assert.equal(installed.pluginId, "premind-contract@premind-contract")
   assert.equal(installed.version, "0.0.0")
-  assert.ok(fs.existsSync(path.join(installed.installedPath, "plugin.json")))
+  assert.equal(
+    fs.existsSync(path.join(installed.installedPath, "plugin.json")),
+    false,
+  )
   assert.ok(
     fs.existsSync(
       path.join(installed.installedPath, ".codex-plugin", "plugin.json"),

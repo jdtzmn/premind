@@ -4,8 +4,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  isVersionAtLeast,
+  parseCodexVersion,
+} from "./codex-version.mjs";
 
-const PINNED_CODEX_VERSION = "codex-cli 0.150.1";
+const MINIMUM_CODEX_VERSION = [0, 155, 1];
+const MINIMUM_CODEX_VERSION_LABEL = MINIMUM_CODEX_VERSION.join(".");
 const PLUGIN_ID = "premind-contract@premind-contract";
 const MARKETPLACE_NAME = "premind-contract";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -60,10 +65,9 @@ if (!process.stdin.isTTY || !process.stdout.isTTY) {
 }
 
 const version = runCodex(["--version"]).stdout.trim();
-assert.equal(
-  version,
-  PINNED_CODEX_VERSION,
-  `Codex contract fixture is pinned to ${PINNED_CODEX_VERSION}; found ${version}`,
+assert.ok(
+  isVersionAtLeast(parseCodexVersion(version), MINIMUM_CODEX_VERSION),
+  `Codex live contract requires codex-cli ${MINIMUM_CODEX_VERSION_LABEL} or newer; found ${version}`,
 );
 
 const marketplaces = parseJson(
@@ -88,16 +92,6 @@ assert.equal(
 const temporaryDir = fs.mkdtempSync(
   path.join(os.tmpdir(), "premind codex contract "),
 );
-const liveMarketplaceRoot = path.join(temporaryDir, "legacy marketplace")
-fs.cpSync(MARKETPLACE_ROOT, liveMarketplaceRoot, { recursive: true })
-fs.rmSync(
-  path.join(
-    liveMarketplaceRoot,
-    "plugins",
-    "premind-contract",
-    "plugin.json",
-  ),
-)
 const capturePath = path.join(temporaryDir, "events.jsonl");
 let marketplaceAdded = false;
 let pluginAdded = false;
@@ -105,13 +99,13 @@ const hookTrustBypassProvidedByWrapper =
   process.env.CMUX_CODEX_WRAPPER_SHIM !== undefined;
 
 try {
-  runCodex(["plugin", "marketplace", "add", liveMarketplaceRoot, "--json"]);
+  runCodex(["plugin", "marketplace", "add", MARKETPLACE_ROOT, "--json"]);
   marketplaceAdded = true;
   runCodex(["plugin", "add", PLUGIN_ID, "--json"]);
   pluginAdded = true;
 
   console.log(
-    "Codex 0.150.1 live hooks use the .codex-plugin compatibility manifest.",
+    `Codex ${version} live hooks use the .codex-plugin compatibility manifest.`,
   );
   console.log("Starting an interactive Codex contract session.");
   console.log("Review the injected fixture context, then use /exit when idle.");

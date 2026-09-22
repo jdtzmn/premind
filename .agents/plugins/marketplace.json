@@ -8,7 +8,7 @@
 			"name": "premind",
 			"source": {
 				"source": "local",
-				"path": "./plugins/premind"
+				"path": "./plugins/codex/premind"
 			},
 			"policy": {
 				"installation": "AVAILABLE",

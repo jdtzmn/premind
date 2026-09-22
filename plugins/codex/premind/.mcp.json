@@ -1,0 +1,10 @@
+{
+	"mcpServers": {
+		"premind": {
+			"type": "stdio",
+			"command": "node",
+			"args": ["generated/premind-mcp.mjs"],
+			"cwd": "."
+		}
+	}
+}

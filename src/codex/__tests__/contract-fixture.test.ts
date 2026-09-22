@@ -66,9 +66,6 @@ describe("Codex contract fixture", () => {
         "utf8",
       ),
     )
-    const plugin = JSON.parse(
-      await fs.readFile(path.join(PLUGIN_ROOT, "plugin.json"), "utf8"),
-    )
     const codexOverlay = JSON.parse(
       await fs.readFile(
         path.join(PLUGIN_ROOT, ".codex-plugin", "plugin.json"),
@@ -80,12 +77,12 @@ describe("Codex contract fixture", () => {
     )
 
     assert.equal(marketplace.name, "premind-contract")
-    assert.equal(marketplace.plugins[0].name, plugin.name)
+    assert.equal(marketplace.plugins[0].name, codexOverlay.name)
     assert.equal(
       marketplace.plugins[0].source.path,
       "./plugins/premind-contract",
     )
-    assert.equal("extensions" in plugin, false)
+    await assert.rejects(fs.access(path.join(PLUGIN_ROOT, "plugin.json")))
     assert.equal(codexOverlay.hooks, "./hooks/hooks.json")
     assert.deepEqual(Object.keys(hooks.hooks).sort(), [
       "SessionStart",
