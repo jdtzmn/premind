@@ -316,6 +316,43 @@ export const createPremindPiExtension = (
 
 		const getClient = () => sessionClient ?? createDaemonClient();
 
+		const attachPiSession = async (ctx: {
+			cwd: string;
+			sessionManager?: { getSessionFile?: () => string | undefined };
+		}) => {
+			const client = sessionClient ?? createDaemonClient();
+			const sessionId = currentSessionId ?? getPiSessionId(ctx);
+			const lease = await client.registerClient(ctx.cwd, SESSION_SOURCE);
+			const git = await detectGit(ctx.cwd);
+			await client.registerSession({
+				sessionId,
+				host: "pi",
+				repo: git.repo,
+				branch: git.branch,
+				isPrimary: true,
+				status: "active",
+				busyState: "idle",
+			});
+			sessionClient = client;
+			currentSessionId = sessionId;
+			clearHeartbeat();
+			const heartbeatMs = lease.heartbeatMs ?? DEFAULT_HEARTBEAT_MS;
+			heartbeatTimer = setInterval(() => {
+				void client.heartbeat().catch(() => {});
+			}, heartbeatMs);
+			heartbeatTimer.unref?.();
+			return { client, sessionId };
+		};
+		const ensurePiSessionAttached = async (ctx: {
+			cwd: string;
+			sessionManager?: { getSessionFile?: () => string | undefined };
+		}) => {
+			if (sessionClient && currentSessionId) {
+				return { client: sessionClient, sessionId: currentSessionId };
+			}
+			return attachPiSession(ctx);
+		};
+
 		const getStatusText = async () => {
 			const status = await createDaemonClient().debugStatus();
 			return renderPremindPiStatus(status);
@@ -568,30 +605,10 @@ export const createPremindPiExtension = (
 				setStatus(ctx, `${PR_ICON} disabled`);
 				return;
 			}
-			const client = createDaemonClient();
-			sessionClient = client;
-			currentSessionId = getPiSessionId(ctx);
-
 			try {
-				const lease = await client.registerClient(ctx.cwd, SESSION_SOURCE);
-				const heartbeatMs = lease.heartbeatMs ?? DEFAULT_HEARTBEAT_MS;
-				heartbeatTimer = setInterval(() => {
-					void client.heartbeat().catch(() => {});
-				}, heartbeatMs);
-				heartbeatTimer.unref?.();
-
-				const git = await detectGit(ctx.cwd);
-				await client.registerSession({
-					sessionId: currentSessionId,
-					host: "pi",
-					repo: git.repo,
-					branch: git.branch,
-					isPrimary: true,
-					status: "active",
-					busyState: "idle",
-				});
+				const { client, sessionId } = await attachPiSession(ctx);
 				await client.activateWorktree({
-					sessionId: currentSessionId,
+					sessionId,
 					path: ctx.cwd,
 				});
 				await refreshStatusbar(ctx, generation);
@@ -725,10 +742,8 @@ export const createPremindPiExtension = (
 					return;
 				}
 				try {
-					await getClient().activateWorktree({
-						sessionId: currentSessionId ?? getPiSessionId(ctx),
-						path,
-					});
+					const { client, sessionId } = await ensurePiSessionAttached(ctx);
+					await client.activateWorktree({ sessionId, path });
 					ctx.ui.notify(`premind set active checkout ${path}.`, "info");
 				} catch (error) {
 					ctx.ui.notify(
@@ -744,10 +759,8 @@ export const createPremindPiExtension = (
 			handler: async (args, ctx) => {
 				try {
 					const subscription = parseSubscriptionArguments(args);
-					await getClient().subscribe({
-						sessionId: currentSessionId ?? getPiSessionId(ctx),
-						...subscription,
-					});
+					const { client, sessionId } = await ensurePiSessionAttached(ctx);
+					await client.subscribe({ sessionId, ...subscription });
 					ctx.ui.notify(
 						`premind subscribed to ${subscription.repo ?? "active worktree"}#${subscription.prNumber}.`,
 						"info",
@@ -766,10 +779,8 @@ export const createPremindPiExtension = (
 			handler: async (args, ctx) => {
 				try {
 					const subscription = parseSubscriptionArguments(args);
-					await getClient().unsubscribe({
-						sessionId: currentSessionId ?? getPiSessionId(ctx),
-						...subscription,
-					});
+					const { client, sessionId } = await ensurePiSessionAttached(ctx);
+					await client.unsubscribe({ sessionId, ...subscription });
 					ctx.ui.notify(
 						`premind unsubscribed from ${subscription.repo ?? "active worktree"}#${subscription.prNumber}.`,
 						"info",
@@ -826,8 +837,8 @@ export const createPremindPiExtension = (
 			],
 			parameters: Type.Object({ path: Type.String({ minLength: 1 }) }),
 			async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-				const sessionId = currentSessionId ?? getPiSessionId(ctx);
-				await getClient().activateWorktree({ sessionId, path: params.path });
+				const { client, sessionId } = await ensurePiSessionAttached(ctx);
+				await client.activateWorktree({ sessionId, path: params.path });
 				return {
 					content: [
 						{
@@ -857,8 +868,8 @@ export const createPremindPiExtension = (
 				),
 			}),
 			async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-				const sessionId = currentSessionId ?? getPiSessionId(ctx);
-				const result = await getClient().subscribe({ sessionId, ...params });
+				const { client, sessionId } = await ensurePiSessionAttached(ctx);
+				const result = await client.subscribe({ sessionId, ...params });
 				const target = `${params.repo ?? "active worktree"}#${params.prNumber}`;
 				return {
 					content: [
@@ -881,8 +892,8 @@ export const createPremindPiExtension = (
 				repo: Type.Optional(Type.String({ minLength: 1 })),
 			}),
 			async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-				const sessionId = currentSessionId ?? getPiSessionId(ctx);
-				await getClient().unsubscribe({ sessionId, ...params });
+				const { client, sessionId } = await ensurePiSessionAttached(ctx);
+				await client.unsubscribe({ sessionId, ...params });
 				const target = `${params.repo ?? "active worktree"}#${params.prNumber}`;
 				return {
 					content: [
