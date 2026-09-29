@@ -5815,6 +5815,7 @@ var tools = [
 		},
 	},
 ];
+var codexMcpTools = tools;
 var text = (value) => ({
 	content: [{ type: "text", text: value }],
 });
@@ -6049,4 +6050,9 @@ if (isMainModule()) {
 `);
 	});
 }
-export { resolveCodexPluginData, handleCodexMcpRequest, handleCodexMcpLine };
+export {
+	resolveCodexPluginData,
+	handleCodexMcpRequest,
+	handleCodexMcpLine,
+	codexMcpTools,
+};
