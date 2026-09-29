@@ -70,3 +70,57 @@ test("Codex reference names follow advertised MCP tools and preserve safety guid
 		/premind_set_active_checkout|premind_deliver/,
 	);
 });
+
+test("Pi and Claude skills render discoverable, host-specific references", async () => {
+	const { generatedSkillFiles } = await import("./generate-premind-skills.ts");
+	const metadata = JSON.parse(
+		readFileSync(path.join(root, "package.json"), "utf8"),
+	);
+	assert.deepEqual(metadata.pi.skills, ["./skills/premind"]);
+	assert.ok(metadata.files.includes("skills"));
+	for (const host of ["pi", "claude"] as const) {
+		const files = generatedSkillFiles(host);
+		assert.equal(files.length, 3);
+		const entry = files.find((file) => file.path.endsWith("/SKILL.md"));
+		assert.ok(entry);
+		for (const file of files) {
+			assert.equal(
+				readFileSync(path.join(root, file.path), "utf8"),
+				file.content,
+			);
+		}
+		for (const reference of ["subscriptions", "reminders"]) {
+			assert.match(
+				entry.content,
+				new RegExp(`\\[${reference}\\]\\(references/${reference}\\.md\\)`),
+			);
+			assert.ok(
+				files.some((file) => file.path.endsWith(`/references/${reference}.md`)),
+			);
+		}
+		const subscriptions = files.find((file) =>
+			file.path.endsWith("/references/subscriptions.md"),
+		)?.content;
+		const reminders = files.find((file) =>
+			file.path.endsWith("/references/reminders.md"),
+		)?.content;
+		assert.ok(subscriptions);
+		assert.ok(reminders);
+		assert.match(subscriptions, /at the start of PR work/i);
+		assert.match(subscriptions, /before reporting its URL or status/);
+		assert.match(reminders, /untrusted context/);
+		assert.doesNotMatch(
+			subscriptions,
+			/premind_activate_worktree|Premind session handle/,
+		);
+		if (host === "claude") {
+			assert.match(subscriptions, /CLAUDE_CODE_SESSION_ID/);
+			assert.match(reminders, /Stop boundary/);
+			assert.doesNotMatch(subscriptions, /premind_set_active_checkout/);
+		} else {
+			assert.match(subscriptions, /premind_set_active_checkout/);
+			assert.match(reminders, /Pi can follow up on idle sessions/);
+			assert.doesNotMatch(subscriptions, /CLAUDE_CODE_SESSION_ID/);
+		}
+	}
+});

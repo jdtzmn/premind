@@ -13,7 +13,8 @@
     "docs",
     "extensions",
     "plugin-claude",
-    "plugins"
+    "plugins",
+    "skills"
   ],
   "scripts": {
     "build": "node scripts/build-runtime.mjs && tsc -p tsconfig.json",
@@ -62,6 +63,9 @@
   "pi": {
     "extensions": [
       "./extensions/premind.ts"
+    ],
+    "skills": [
+      "./skills/premind"
     ]
   },
   "peerDependencies": {
