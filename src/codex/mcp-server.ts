@@ -11,6 +11,8 @@ import {
 	PremindPrerequisiteError,
 } from "../client/prerequisites.ts";
 import { CODEX_REQUIRED_DAEMON_OPERATIONS } from "../shared/daemon-startup.ts";
+import { renderCurrentStatus } from "../shared/status-view.ts";
+import { renderPremindStatus } from "../plugin-opencode/commands.ts";
 import {
 	type CodexSessionBinding,
 	resolveCodexSessionBinding,
@@ -89,12 +91,17 @@ const tools = [
 	{
 		name: "premind_status",
 		description:
-			"Return redacted Premind status and, when resolvable, status for the current Codex session.",
+			"Return this Codex session's watched PR links and cached health signals when the session binding resolves.",
 		inputSchema: {
 			type: "object",
 			properties: { sessionHandle: { type: "string", format: "uuid" } },
 			additionalProperties: false,
 		},
+	},
+	{
+		name: "premind_debug_status",
+		description: "Return the full all-session premind daemon diagnostic inventory.",
+		inputSchema: { type: "object", properties: { sessionHandle: { type: "string", format: "uuid" } }, additionalProperties: false },
 	},
 	{
 		name: "premind_activate_worktree",
@@ -186,7 +193,7 @@ const resolveBinding = async (
 	binding: CodexSessionBinding | undefined;
 	status: Awaited<ReturnType<McpDaemonClient["debugStatus"]>>;
 }> => {
-	const status = await dependencies.client.debugStatus();
+	const status = await dependencies.client.debugStatus({ includeSnapshots: true });
 	const binding = resolveCodexSessionBinding({
 		pluginData: dependencies.pluginData,
 		sessions: status.sessions,
@@ -206,6 +213,7 @@ const requireBinding = async (
 
 type ParsedToolCall =
 	| { name: "premind_status"; args: z.infer<typeof statusArgumentsSchema> }
+	| { name: "premind_debug_status"; args: z.infer<typeof statusArgumentsSchema> }
 	| {
 			name: "premind_activate_worktree";
 			args: z.infer<typeof activateArgumentsSchema>;
@@ -222,7 +230,8 @@ const parseToolCall = (params: unknown): ParsedToolCall => {
 	}
 	const rawArguments = call.data.arguments ?? {};
 	switch (call.data.name) {
-		case "premind_status": {
+		case "premind_status":
+		case "premind_debug_status": {
 			const args = statusArgumentsSchema.safeParse(rawArguments);
 			if (!args.success) throw new JsonRpcError(-32602, "Invalid tool arguments");
 			return { name: call.data.name, args: args.data };
@@ -249,32 +258,12 @@ const callTool = async (
 ): Promise<ToolResult> => {
 	try {
 		await dependencies.ensureDaemon();
-		if (tool.name === "premind_status") {
-			const { binding, status } = await resolveBinding(
-				dependencies,
-				tool.args.sessionHandle,
-			);
-			const current = binding
-				? status.sessions.find((session) => session.sessionId === binding.sessionId)
-				: undefined;
-			return text(
-				JSON.stringify({
-					globallyDisabled: status.globallyDisabled,
-					activeSessions: status.activeSessions,
-					activeWatchers: status.activeWatchers,
-					...(current
-						? {
-								currentSession: {
-									repo: current.repo,
-									branch: current.branch,
-									status: current.status,
-									pendingReminderCount: current.pendingReminderCount,
-									subscriptions: current.subscriptions ?? [],
-								},
-							}
-						: {}),
-				}),
-			);
+		if (tool.name === "premind_status" || tool.name === "premind_debug_status") {
+			const { binding, status } = await resolveBinding(dependencies, tool.args.sessionHandle);
+			if (tool.name === "premind_debug_status") {
+				return text(renderPremindStatus(status, Date.now(), undefined, binding?.sessionId));
+			}
+			return text(renderCurrentStatus(status, binding?.sessionId));
 		}
 
 		const binding = await requireBinding(dependencies, tool.args.sessionHandle);

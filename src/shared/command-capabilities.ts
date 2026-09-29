@@ -28,8 +28,8 @@ export type CommandCapability = {
 export const commandCapabilities = {
 	status: {
 		classification: "common",
-		scope: "daemon",
-		description: "Inspect daemon state and pending reminder counts.",
+		scope: "session",
+		description: "Inspect the current session's watched PRs and premind health.",
 		canonical: { commands: ["premind:status"], tools: ["premind_status"] },
 		harnesses: {
 			pi: { commands: ["premind:status"], tools: ["premind_status"] },
@@ -44,9 +44,20 @@ export const commandCapabilities = {
 				commands: ["premind-status"],
 				tools: ["premind_status"],
 				exceptions: {
-					commands: "OpenCode retains its established hyphenated status command.",
+					commands: "The server plugin retains /premind-status as a plain fallback; OpenCode's separately installed TUI companion supplies the colored /premind:status command.",
 				},
 			},
+		},
+	},
+	"debug-status": {
+		classification: "adapter-specific",
+		scope: "daemon",
+		description: "Inspect every daemon session and watcher for troubleshooting.",
+		canonical: { commands: ["premind:debug-status"], tools: ["premind_debug_status"] },
+		harnesses: {
+			pi: { commands: ["premind:debug-status"], tools: ["premind_debug_status"] },
+			claude: { commands: [], tools: [], exceptions: { commands: "Claude status is aggregate/redacted; full session inventory is not exposed." } },
+			opencode: { commands: ["premind:debug-status"], tools: ["premind_debug_status"] },
 		},
 	},
 	doctor: {
@@ -302,7 +313,9 @@ export const renderCommandCapabilityDocumentation = (): string => {
 	}
 	lines.push(
 		"- `prune` is Pi-specific administrative maintenance and is not model-callable.",
-		"- Claude status remains aggregate and redacted; Pi and OpenCode may expose session detail.",
+		"- Claude status remains aggregate and redacted; it cannot show watched PR details or colored PR signals until session identity is safely available.",
+		"- OpenCode's separate TUI companion renders colored `/premind:status`; server `/premind-status` and tool output remain unstyled.",
+		"- Codex MCP exposes session-scoped `premind_status` and separate `premind_debug_status`; it has no interactive command surface here.",
 		"- Delivery mechanics remain harness-specific even though `/premind:deliver` is canonical.",
 		"",
 	);

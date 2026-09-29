@@ -4,7 +4,8 @@ This matrix is generated from `src/shared/command-capabilities.ts`. Harness-visi
 
 | Capability | Classification | Scope | Canonical | Pi | Claude Code | OpenCode |
 | --- | --- | --- | --- | --- | --- | --- |
-| `status` | common | daemon | commands `/premind:status`<br>tools `premind_status` | commands `/premind:status`<br>tools `premind_status` | commands `/premind:status`<br>tools `status` | commands `/premind-status`<br>tools `premind_status` |
+| `status` | common | session | commands `/premind:status`<br>tools `premind_status` | commands `/premind:status`<br>tools `premind_status` | commands `/premind:status`<br>tools `status` | commands `/premind-status`<br>tools `premind_status` |
+| `debug-status` | adapter-specific | daemon | commands `/premind:debug-status`<br>tools `premind_debug_status` | commands `/premind:debug-status`<br>tools `premind_debug_status` | — | commands `/premind:debug-status`<br>tools `premind_debug_status` |
 | `doctor` | common | daemon | commands `/premind:doctor`<br>tools `premind_doctor` | commands `/premind:doctor`<br>tools `premind_doctor` | commands `/premind:doctor`<br>tools `probe` | commands `/premind:doctor`<br>tools `premind_probe` |
 | `deliver` | common | session | commands `/premind:deliver`<br>tools `premind_deliver` | commands `/premind:deliver`<br>tools `premind_deliver`<br>deprecated command aliases `/premind:flush` | commands `/premind:deliver` | commands `/premind:deliver`<br>tools `premind_deliver`<br>deprecated command aliases `/premind-send-now`<br>deprecated tool aliases `premind_send_now` |
 | `enable` | common | daemon | commands `/premind:enable`<br>tools `premind_enable` | commands `/premind:enable`<br>tools `premind_enable` | commands `/premind:enable`<br>tools `enable` | commands `/premind-enable`<br>tools `premind_enable` |
@@ -17,7 +18,8 @@ This matrix is generated from `src/shared/command-capabilities.ts`. Harness-visi
 ## Intentional exceptions
 
 - `status` / claude / tools: Claude MCP tools omit the premind_ prefix.
-- `status` / opencode / commands: OpenCode retains its established hyphenated status command.
+- `status` / opencode / commands: The server plugin retains /premind-status as a plain fallback; OpenCode's separately installed TUI companion supplies the colored /premind:status command.
+- `debug-status` / claude / commands: Claude status is aggregate/redacted; full session inventory is not exposed.
 - `doctor` / claude / tools: Claude retains the existing probe MCP tool name.
 - `doctor` / opencode / tools: OpenCode retains the existing premind_probe tool name.
 - `deliver` / claude / tools: Claude delivery remains owned by the Stop hook.
@@ -33,5 +35,7 @@ This matrix is generated from `src/shared/command-capabilities.ts`. Harness-visi
 - `unsubscribe` / claude / tools: Claude MCP tools omit the premind_ prefix.
 - `unsubscribe` / opencode / commands: OpenCode currently exposes this as a model tool.
 - `prune` is Pi-specific administrative maintenance and is not model-callable.
-- Claude status remains aggregate and redacted; Pi and OpenCode may expose session detail.
+- Claude status remains aggregate and redacted; it cannot show watched PR details or colored PR signals until session identity is safely available.
+- OpenCode's separate TUI companion renders colored `/premind:status`; server `/premind-status` and tool output remain unstyled.
+- Codex MCP exposes session-scoped `premind_status` and separate `premind_debug_status`; it has no interactive command surface here.
 - Delivery mechanics remain harness-specific even though `/premind:deliver` is canonical.
