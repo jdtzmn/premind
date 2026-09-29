@@ -192,6 +192,7 @@ const formatSessionId = (sessionId: string) => {
 export const renderPremindPiStatus = (
 	status: DebugStatusResponse,
 	versionLabel = PREMIND_VERSION_LABEL,
+	currentSessionId?: string,
 ) => {
 	const activeLabel = `${status.activeSessions} active session${status.activeSessions === 1 ? "" : "s"}`;
 	const header = `premind: ${versionLabel} · ${activeLabel}`;
@@ -209,7 +210,7 @@ export const renderPremindPiStatus = (
 		const subscriptionSummary = subscriptions
 			? ` | subscriptions ${subscriptions}`
 			: "";
-		return `- ${session.repo} @ ${session.branch}${pr} | ${session.status}/${session.busyState} | pending ${session.pendingReminderCount}${worktree}${subscriptionSummary} | session ${formatSessionId(session.sessionId)}`;
+		return `- ${session.repo} @ ${session.branch}${pr} | ${session.status}/${session.busyState} | pending ${session.pendingReminderCount}${worktree}${subscriptionSummary} | session ${formatSessionId(session.sessionId)}${session.sessionId === currentSessionId ? " (current)" : ""}`;
 	});
 	return [
 		header,
@@ -358,7 +359,8 @@ export const createPremindPiExtension = (
 			const status = await createDaemonClient().debugStatus();
 			return renderCurrentStatus(status, currentSessionId ?? getPiSessionId(ctx));
 		};
-		const getDebugStatusText = async () => renderPremindPiStatus(await createDaemonClient().debugStatus());
+		const getDebugStatusText = async (ctx: { cwd: string; sessionManager?: { getSessionFile?: () => string | undefined } }) =>
+			renderPremindPiStatus(await createDaemonClient().debugStatus(), PREMIND_VERSION_LABEL, currentSessionId ?? getPiSessionId(ctx));
 
 		const getDoctorText = async () => {
 			const lines = [
@@ -698,8 +700,8 @@ export const createPremindPiExtension = (
 							return {
 								render(width: number) {
 									const colors = { error: "error", warning: "warning", success: "success", merged: "accent", muted: "muted", unknown: "muted" } as const;
-									display.setText(renderCurrentStatus(status, sessionId, { style: (text, signal) => theme.fg(colors[signal], text) }));
-									return [...display.render(width), "", ...hint.render(width).map((line) => theme.fg("dim", line))];
+									display.setText(renderCurrentStatus(status, sessionId, { style: (text, signal) => "NO_COLOR" in process.env ? text : theme.fg(colors[signal], text) }));
+									return [...display.render(width), "", ...hint.render(width).map((line) => "NO_COLOR" in process.env ? line : theme.fg("dim", line))];
 								},
 								invalidate() { display.invalidate(); hint.invalidate(); },
 								handleInput(data: string) { if (matchesKey(data, Key.escape) || matchesKey(data, Key.enter)) done(); },
@@ -721,7 +723,7 @@ export const createPremindPiExtension = (
 			description: "Show the full premind daemon and all-session diagnostic inventory",
 			handler: async (_args, ctx) => {
 				try {
-					ctx.ui.notify(await getDebugStatusText(), "info");
+					ctx.ui.notify(await getDebugStatusText(ctx), "info");
 				} catch (error) {
 					ctx.ui.notify(`${STATUS_ERROR_PREFIX}: ${error instanceof Error ? error.message : String(error)}`, "error");
 				}
@@ -1033,8 +1035,8 @@ export const createPremindPiExtension = (
 			label: "Premind Debug Status",
 			description: "Inspect the full daemon and all premind sessions for troubleshooting.",
 			parameters: Type.Object({}),
-			async execute() {
-				return { content: [{ type: "text" as const, text: await getDebugStatusText() }], details: {} };
+			async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+				return { content: [{ type: "text" as const, text: await getDebugStatusText(ctx) }], details: {} };
 			},
 		});
 

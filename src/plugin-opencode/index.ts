@@ -766,7 +766,7 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
 
 
   const handleDebugStatusCommand = async (sessionID: string, inputRef?: { agent?: string; model?: { providerID: string; modelID: string } }) => {
-    await injectResponse(sessionID, renderPremindStatus(await daemon.debugStatus()), inputRef)
+    await injectResponse(sessionID, renderPremindStatus(await daemon.debugStatus(), Date.now(), PREMIND_VERSION_LABEL, sessionID), inputRef)
   }
 
   const deliverPendingNow = async (sessionID: string) => {
@@ -901,8 +901,8 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
       premind_debug_status: tool({
         description: "Show the full premind daemon and all-session diagnostic inventory",
         args: {},
-        async execute() {
-          return renderPremindStatus(await daemon.debugStatus())
+        async execute(_args, ctx) {
+          return renderPremindStatus(await daemon.debugStatus(), Date.now(), PREMIND_VERSION_LABEL, ctx.sessionID)
         },
       }),
       premind_set_active_checkout: tool({

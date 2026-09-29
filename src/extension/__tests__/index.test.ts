@@ -451,6 +451,7 @@ describe("premind Pi extension", () => {
 				"- owner/repo @ feature/pi (PR #123) | active/idle | pending 2 | session …a096cda8ea14",
 			].join("\n"),
 		);
+		assert.match(renderPremindPiStatus(status, "v0.1.0", "session-1"), /session session-1 \(current\)/);
 	});
 
 	test("renders Pi status worktree and qualified subscriptions", () => {
