@@ -66,6 +66,52 @@ test("ships a version-synchronized portable Codex plugin", () => {
 	);
 });
 
+test("keeps shared portable and Codex compatibility metadata aligned", () => {
+	const portable = readJson<{
+		description: string;
+		repository: string;
+		license: string;
+		extensions: {
+			"com.openai": {
+				interface: {
+					displayName: string;
+					shortDescription: string;
+					category: string;
+				};
+			};
+		};
+	}>(path.join(PLUGIN_ROOT, "plugin.json"));
+	const codex = readJson<{
+		description: string;
+		repository: string;
+		license: string;
+		interface: {
+			displayName: string;
+			shortDescription: string;
+			category: string;
+		};
+	}>(path.join(CODEX_COMPATIBILITY_ROOT, ".codex-plugin", "plugin.json"));
+
+	for (const field of ["description", "repository", "license"] as const) {
+		assert.equal(
+			codex[field],
+			portable[field],
+			`${field} differs between plugin packages`,
+		);
+	}
+	for (const field of [
+		"displayName",
+		"shortDescription",
+		"category",
+	] as const) {
+		assert.equal(
+			codex.interface[field],
+			portable.extensions["com.openai"].interface[field],
+			`${field} differs between plugin packages`,
+		);
+	}
+});
+
 test("exposes only the required lifecycle hooks and Codex MCP bridge", () => {
 	const hooks = readJson<{
 		hooks: Record<
