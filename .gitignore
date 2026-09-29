@@ -10,3 +10,6 @@ dist/
 .pi/fusion/
 **/generated.tmp-*/
 **/generated.previous-*/
+plugin-claude/generated/
+plugins/premind/generated/
+plugins/codex/premind/generated/
