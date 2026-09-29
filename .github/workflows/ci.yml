@@ -91,4 +91,5 @@ jobs:
           name: premind-install-${{ github.sha }}
           path: ${{ runner.temp }}/premind-install-artifact/
           if-no-files-found: error
+          include-hidden-files: true # preserve .agents, .codex-plugin, .claude-plugin and .mcp.json
           retention-days: 7
