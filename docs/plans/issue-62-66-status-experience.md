@@ -14,7 +14,7 @@ This plan resolves [#62](https://github.com/jdtzmn/premind/issues/62) and [#66](
 2. **The default view contains both session state and the user's open PRs in the current repository.** “Watching” and “my open PRs” are separate concepts and must remain visibly separate:
    - watching is the set of subscriptions that can deliver reminders to this session;
    - open PRs is a live, author-filtered GitHub query and is useful for recovering a stack even when every PR is not subscribed.
-3. **`premind:status --all` is the debugger escape hatch.** It preserves the existing aggregate/session inventory, including internal maintenance fields, and is the only normal command path that enumerates other sessions.
+3. **`premind:debug-status` is the debugger escape hatch.** It preserves the existing aggregate/session inventory, including internal maintenance fields, and is the only normal command that enumerates other sessions.
 4. **Status remains useful when GitHub is unavailable.** Daemon/session health is rendered from local state; the open-PR section degrades independently with a short, actionable explanation.
 5. **No special clickable UI in the first implementation.** Render stable `owner/repo#number` labels and URLs in plain text/Markdown where the host already supports it. Host-native affordances (for example, a Pi modal with selectable links) are a later enhancement and do not shape the first data contract.
 6. **No hidden cross-repository search by default.** The default PR list is the authenticated viewer's open PRs in the current session's repository. A future dedicated PR-list command can add an explicit all-repositories scope after its rate-limit and privacy behavior are designed.
@@ -34,7 +34,7 @@ my open PRs in jdtzmn/premind: 3
   - #67 Improve status output — https://github.com/jdtzmn/premind/pull/67
   - #65 Recover Pi sessions — https://github.com/jdtzmn/premind/pull/65
   - #61 …
-2 other sessions hidden; use /premind:status --all for daemon diagnostics.
+2 other sessions hidden; use /premind:debug-status for daemon diagnostics.
 ```
 
 Rules for the overview:
@@ -50,7 +50,7 @@ Rules for the overview:
 
 ## Full Diagnostic Experience
 
-`/premind:status --all` is for debugging. It includes:
+`/premind:debug-status` is for debugging. It includes:
 
 - the concise health synopsis;
 - active clients, active/closed sessions, watchers, protocol, and last-reap information;
@@ -58,18 +58,18 @@ Rules for the overview:
 - an explicit marker for the current session;
 - the same current-repository open-PR list, so the normal and diagnostic paths do not disagree about the user's work.
 
-`--all` is an output-scope flag, not a different daemon ownership model. It should not create, attach, reactivate, or prune sessions.
+`debug-status` is a separate, explicitly diagnostic command, not a flag on ordinary status. It must not create, attach, reactivate, or prune sessions.
 
 ## Data and Adapter Design
 
 ### 1. Add a typed status presentation model
 
-Keep `debugStatus` as the raw daemon diagnostic response. Introduce a small shared projection/helper that accepts the raw response plus a resolved current session ID and produces:
+Keep `debugStatus` as the raw daemon diagnostic response. Introduce a small shared projection/helper that accepts the raw response plus a resolved current session ID; adapters request either the current overview or the full diagnostic projection through separate user-facing commands/tools. It produces:
 
 - daemon synopsis fields;
 - the selected current-session summary or an explicit missing-session result;
 - count of hidden sessions;
-- all session summaries only when `scope: "all"` is requested.
+- all session summaries only for the explicit diagnostic projection.
 
 This prevents Pi and OpenCode from independently deciding which daemon session is “current,” while preserving host-owned rendering and lifecycle behavior. The projection must not expose a session belonging to another host/session in default output.
 
@@ -105,7 +105,7 @@ Each adapter supplies its already-authoritative current-session identity to the 
 - **Pi:** the active `currentSessionId`, falling back to `getPiSessionId(ctx)` (the session JSONL path/cwd fallback) without attaching a new session just to inspect status.
 - **OpenCode:** the command or tool's `ctx.sessionID`; never `lastPrimarySessionId` when the caller supplied an ID.
 - **Codex:** its existing `resolveCodexSessionBinding` result, which already binds plugin data/session handle or cwd to a daemon session.
-- **Claude:** retain its intentional aggregate/redacted constraints until it has a safe current-session binding. It may show daemon health and its own session state, but it must never receive the unredacted `--all` inventory by accident.
+- **Claude:** retain its intentional aggregate/redacted constraints until it has a safe current-session binding. It may show daemon health and its own session state, but it must never receive the unredacted `premind:debug-status` inventory by accident.
 
 The command-capability registry and generated capability documentation must describe any host-specific exception explicitly. If the feature is not available in a host, do not silently present the old all-sessions output as equivalent.
 
@@ -113,9 +113,10 @@ The command-capability registry and generated capability documentation must desc
 
 Use a shared semantic model but preserve host rendering conventions:
 
-- Pi command notification and `premind_status` tool use the current-session overview by default; the command accepts `--all`.
-- OpenCode's slash command and `premind_status` tool use the invoking `sessionID`; command marker parsing accepts `--all`.
-- Codex's `premind_status` tool gains the same scope argument and replaces its hand-rolled partial JSON with the shared projection (machine-readable JSON is fine for the MCP result).
+- Pi: `/premind:status` and `premind_status` show the current session; `/premind:debug-status` and `premind_debug_status` show the full diagnostic inventory.
+- OpenCode: `/premind-status` and `premind_status` use the invoking `sessionID`; `/premind:debug-status` and `premind_debug_status` explicitly show all sessions.
+- Codex: `premind_status` uses the current binding and `premind_debug_status` requests the full projection (machine-readable JSON is fine for MCP results); no scope argument is needed on either tool.
+- Agents should call `premind_status` for ordinary questions and `premind_debug_status` only when the user asks to inspect all sessions or troubleshoot daemon-wide state. Claude's redacted diagnostic surface must remain redacted; do not register an unredacted debug tool there until its access model is resolved.
 - Existing doctor commands remain the place for adapter process/configuration diagnostics. Status must link users to doctor for an unreachable daemon rather than duplicating host process state.
 
 For the first implementation, links should be emitted as the GitHub URL alongside the PR label. A follow-up can use host-native rendering where it is genuinely clickable/selectable:
@@ -128,12 +129,12 @@ For the first implementation, links should be emitted as the GitHub URL alongsid
 
 ### Phase 1: Contract and current-session overview
 
-1. Define the `scope: "current" | "all"` presentation types and a pure projection/formatter API.
+1. Define separate current-overview and full-diagnostic presentation types with a pure projection/formatter API.
 2. Update Pi and OpenCode status handlers/tools to pass their current session identities and render the current overview by default.
-3. Add `--all` parsing and render the full diagnostic inventory only for that explicit request.
+3. Register `/premind:debug-status` and `premind_debug_status` as explicit diagnostic surfaces and render the full inventory only for those calls.
 4. Update command descriptions, capability registry/docs, and focused rendering tests.
 
-**Checkpoint:** a user with several daemon sessions sees only their session from a normal status call; `--all` intentionally reproduces the actionable complete inventory.
+**Checkpoint:** a user with several daemon sessions sees only their session from a normal status call; `/premind:debug-status` or `premind_debug_status` intentionally shows the actionable complete inventory.
 
 ### Phase 2: Viewer-owned open PRs
 
@@ -145,7 +146,7 @@ For the first implementation, links should be emitted as the GitHub URL alongsid
 
 ### Phase 3: Cross-host parity and diagnostics hardening
 
-1. Port the shared projection to Codex's MCP status path and explicitly decide/document Claude's safe session detail level.
+1. Port the shared projection and separate `premind_debug_status` MCP tool to Codex; explicitly decide/document Claude's safe session detail level.
 2. Update generated plugin artifacts only through the repository's normal packaging/build workflow.
 3. Confirm `premind:doctor` remains the adapter/config/process diagnostic command and status does not regress into a process dump.
 
@@ -160,7 +161,7 @@ Prototype host-native clickable PR lists without changing the underlying IPC mod
 - A normal status call never lists unrelated daemon sessions.
 - It clearly identifies the current repository/branch, associated branch PR (when known), current session lifecycle/busy state, pending reminder count, watcher state, and global polling/daemon health.
 - It separately lists active subscriptions and the authenticated user's open PRs for the current repository, so “watched” is never confused with “owned.”
-- `--all` is sufficient for an operator to diagnose every daemon session and preserves the existing detailed state that is omitted from the overview.
+- Where host privacy rules permit, `/premind:debug-status` and `premind_debug_status` let an operator or agent diagnose every daemon session and preserve the existing detail omitted from ordinary status; Claude remains intentionally redacted.
 - A missing current-session binding and a failed GitHub PR lookup have concise, actionable, non-fatal output.
 - Default status does not mutate daemon/session state or make a GitHub request when no current repository can be resolved.
 - Tests cover selection/isolation, full-scope rendering, no watcher/no PR/paused/global-disabled cases, viewer filtering and URL/title display, GitHub failure degradation, and adapter command/tool wiring.
