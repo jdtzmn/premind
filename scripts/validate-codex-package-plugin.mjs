@@ -50,15 +50,29 @@ const portableArtifactNames = [
 	"premind-mcp.mjs",
 ];
 const codexGeneratedPath = path.join(ROOT, "plugins", "premind", "generated");
+const codexCompatibilityGeneratedPath = path.join(
+	ROOT,
+	"plugins",
+	"codex",
+	"premind",
+	"generated",
+);
 const trackedPluginArtifacts = new Set(
-	run("git", ["ls-files", "--", "plugins/premind/generated"])
+	run("git", [
+		"ls-files",
+		"--",
+		"plugins/premind/generated",
+		"plugins/codex/premind/generated",
+	])
 		.split("\n")
 		.filter(Boolean),
 );
-for (const name of portableArtifactNames) {
-	const artifact = `plugins/premind/generated/${name}`;
-	assert.ok(trackedPluginArtifacts.has(artifact), `${artifact} is not tracked`);
-	assert.ok(fs.existsSync(path.join(ROOT, artifact)), `${artifact} is missing`);
+for (const directory of ["plugins/premind", "plugins/codex/premind"]) {
+	for (const name of portableArtifactNames) {
+		const artifact = `${directory}/generated/${name}`;
+		assert.ok(trackedPluginArtifacts.has(artifact), `${artifact} is not tracked`);
+		assert.ok(fs.existsSync(path.join(ROOT, artifact)), `${artifact} is missing`);
+	}
 }
 
 const runCodex = (args) =>
@@ -67,6 +81,7 @@ const runCodex = (args) =>
 const generatedDirectories = [
 	path.join(ROOT, "generated"),
 	codexGeneratedPath,
+	codexCompatibilityGeneratedPath,
 	path.join(ROOT, "plugin-claude", "generated"),
 ];
 
@@ -87,20 +102,33 @@ try {
 		"plugins/premind/generated/premind-daemon.mjs",
 		"plugins/premind/generated/premind-hook.mjs",
 		"plugins/premind/generated/premind-mcp.mjs",
+		"plugins/codex/premind/.codex-plugin/plugin.json",
+		"plugins/codex/premind/.mcp.json",
+		"plugins/codex/premind/hooks/hooks.json",
+		"plugins/codex/premind/skills/premind/SKILL.md",
+		"plugins/codex/premind/generated/premind-daemon.mjs",
+		"plugins/codex/premind/generated/premind-hook.mjs",
+		"plugins/codex/premind/generated/premind-mcp.mjs",
 	]) {
 		assert.ok(files.has(file), `npm package is missing ${file}`);
 	}
-	process.stdout.write("PASS: npm package includes portable Codex plugin artifacts\n");
+	process.stdout.write(
+		"PASS: npm package includes portable and Codex compatibility artifacts\n",
+	);
 
 	const artifactNames = [
 		"premind-daemon.mjs",
 		"premind-hook.mjs",
 		"premind-mcp.mjs",
 	];
+	const artifactPaths = [codexGeneratedPath, codexCompatibilityGeneratedPath]
+		.flatMap((directory) =>
+			artifactNames.map((name) => path.join(directory, name)),
+		);
 	const artifactsBeforeFailedBuild = new Map(
-		artifactNames.map((name) => [
-			name,
-			fs.readFileSync(path.join(codexGeneratedPath, name), "utf8"),
+		artifactPaths.map((artifactPath) => [
+			artifactPath,
+			fs.readFileSync(artifactPath, "utf8"),
 		]),
 	);
 	const failedBuild = spawnSync(
@@ -117,14 +145,14 @@ try {
 		0,
 		"failure injection unexpectedly succeeded",
 	);
-	for (const name of artifactNames) {
+	for (const artifactPath of artifactPaths) {
 		assert.equal(
-			fs.readFileSync(path.join(codexGeneratedPath, name), "utf8"),
-			artifactsBeforeFailedBuild.get(name),
+			fs.readFileSync(artifactPath, "utf8"),
+			artifactsBeforeFailedBuild.get(artifactPath),
 		);
 	}
 	process.stdout.write(
-		"PASS: failed runtime rebuild leaves the portable plugin artifact set intact\n",
+		"PASS: failed runtime rebuild leaves both Codex artifact sets intact\n",
 	);
 
 	const marketplace = parseJson(
@@ -140,11 +168,15 @@ try {
 	);
 	assert.equal(installed.pluginId, "premind@premind");
 	assert.equal(installed.version, packageJson.version);
+	assert.equal(
+		fs.existsSync(path.join(installed.installedPath, "plugin.json")),
+		false,
+		"Codex marketplace install must select the compatibility manifest",
+	);
 	for (const file of [
-		"plugin.json",
 		".codex-plugin/plugin.json",
+		".mcp.json",
 		"hooks/hooks.json",
-		"mcp.json",
 		"generated/premind-daemon.mjs",
 		"generated/premind-hook.mjs",
 		"generated/premind-mcp.mjs",
@@ -154,6 +186,19 @@ try {
 			`installed plugin is missing ${file}`,
 		);
 	}
+	const contributedMcp = parseJson(
+		runCodex(["mcp", "get", "premind", "--json"]),
+		"codex mcp get premind",
+	);
+	assert.equal(contributedMcp.transport.command, "node");
+	assert.deepEqual(contributedMcp.transport.args, [
+		"generated/premind-mcp.mjs",
+	]);
+	assert.equal(
+		path.resolve(contributedMcp.transport.cwd),
+		path.resolve(installed.installedPath),
+		"Codex must resolve the compatibility MCP cwd to the installed plugin root",
+	);
 
 	const installedPluginData = fs.mkdtempSync(
 		path.join(codexHome, "premind-plugin-data-"),
@@ -164,7 +209,6 @@ try {
 	const isolatedEnvironment = {
 		...process.env,
 		PATH: "",
-		PLUGIN_DATA: installedPluginData,
 		PREMIND_SOCKET_PATH: path.join(installedPluginData, "premind.sock"),
 		PREMIND_STATE_DIR: path.join(installedPluginData, "state"),
 	};
@@ -179,7 +223,7 @@ try {
 				jsonrpc: "2.0",
 				id: 1,
 				method: "initialize",
-				params: { protocolVersion: "2024-11-05" },
+				params: { protocolVersion: "2025-06-18" },
 			})}\n`,
 		},
 	);
@@ -187,7 +231,7 @@ try {
 	assert.equal(
 		parseJson(mcpExecution.stdout.trim(), "installed MCP response").result
 			?.protocolVersion,
-		"2024-11-05",
+		"2025-06-18",
 	);
 	const hookExecution = spawnSync(
 		process.execPath,
@@ -214,7 +258,9 @@ try {
 	process.stdout.write(
 		"PASS: installed hook and MCP execute without source dependencies\n",
 	);
-	process.stdout.write("PASS: portable plugin installed into isolated Codex cache\n");
+	process.stdout.write(
+		"PASS: Codex compatibility plugin installed into isolated cache\n",
+	);
 } finally {
 	fs.rmSync(codexHome, { recursive: true, force: true });
 }

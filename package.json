@@ -27,7 +27,7 @@
     "test:compat": "node --import tsx --test src/plugin-opencode/__tests__/compatibility.test.ts",
     "test:claude": "node --test plugin-claude/test/*.test.mjs",
     "test:claude:live-contract": "node plugin-claude/live/session-id-contract.mjs",
-    "test:codex:contract": "node --import tsx --test --test-concurrency=1 src/codex/__tests__/*.test.ts",
+    "test:codex:contract": "node --import tsx --test --test-concurrency=1 scripts/codex-version.test.mjs src/codex/__tests__/*.test.ts",
     "test:codex:install": "node scripts/validate-codex-contract-fixture.mjs",
     "test:codex:package": "node scripts/validate-codex-package-plugin.mjs",
     "test:codex:live": "node scripts/validate-codex-live-contract.mjs",

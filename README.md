@@ -76,9 +76,11 @@ codex plugin marketplace add /path/to/premind
 codex plugin add premind@premind
 ```
 
+The marketplace installs the Codex compatibility package from `plugins/codex/premind`. It supports **Codex CLI 0.155.1 or newer**. The portable Agent Plugins package remains available at `plugins/premind`; keeping the two entrypoints separate lets current Codex releases load lifecycle hooks through `.codex-plugin/plugin.json` while preserving the universal package for hosts that support it.
+
 Review and trust Premind's lifecycle hooks before enabling them. The plugin uses `SessionStart`, `UserPromptSubmit`, `Stop`, `Interrupt`, and `SessionEnd`; it deliberately does **not** install `PostToolUse`. If hooks are not running, open Codex's hook-management UI, review the commands, and trust the current plugin definition.
 
-The installed plugin runs dependency-closed Node bundles from its own `generated/` directory. It requires **Node 22.13+**, `git`, and an authenticated GitHub CLI (`gh auth login`). Bun, `tsx`, a source checkout, and repository `node_modules` are not runtime prerequisites. Hooks and MCP use Codex-managed `PLUGIN_DATA` for local receipts and session handles; Premind only uses network access for GitHub polling.
+The installed plugin runs dependency-closed Node bundles from its own `generated/` directory. It requires **Node 22.13+**, `git`, and an authenticated GitHub CLI (`gh auth login`). Bun, `tsx`, a source checkout, and repository `node_modules` are not runtime prerequisites. Hooks use Codex-managed `PLUGIN_DATA` for local receipts and session handles; on Codex versions that do not inject it into plugin MCP processes, Premind resolves the same Codex-managed data directory from the installed plugin path. Premind only uses network access for GitHub polling.
 
 Codex cannot wake an already-idle stock CLI thread. Updates found while idle remain durable and arrive at the next available `SessionStart`, `UserPromptSubmit`, or `Stop` boundary. An interrupted delivery may be shown again rather than silently lost.
 
@@ -174,7 +176,7 @@ ls /var/folders/*/*/*/T/premind.sock 2>/dev/null
 - OpenCode
 - `gh` CLI authenticated with access to your repository
 - OpenCode/Pi: Node 22.5+ with the package's `tsx` dependency for the source daemon launcher
-- Claude Code/Codex: Node 22.13+; installed plugins use self-contained generated bundles and do not require Bun, `tsx`, or repository `node_modules` at runtime
+- Claude Code/Codex: Node 22.13+; Codex CLI 0.155.1+; installed plugins use self-contained generated bundles and do not require Bun, `tsx`, or repository `node_modules` at runtime
 
 ## Architecture
 

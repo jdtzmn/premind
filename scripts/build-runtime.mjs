@@ -11,6 +11,7 @@ import path from "node:path";
 const generatedDirectories = {
 	claude: "plugin-claude/generated",
 	codex: "plugins/premind/generated",
+	codexCompatibility: "plugins/codex/premind/generated",
 };
 
 const publications = Object.entries(generatedDirectories).map(([name, output]) => ({
@@ -31,21 +32,24 @@ const targets = [
 		name: "daemon",
 		entrypoint: "src/daemon/index.ts",
 		output: stagedPath("codex", "premind-daemon.mjs"),
-		copies: [stagedPath("claude", "premind-daemon.mjs")],
+		copies: [
+			stagedPath("claude", "premind-daemon.mjs"),
+			stagedPath("codexCompatibility", "premind-daemon.mjs"),
+		],
 		external: ["node:sqlite"],
 	},
 	{
 		name: "codex-hook",
 		entrypoint: "src/codex/hook-runner.ts",
 		output: stagedPath("codex", "premind-hook.mjs"),
-		copies: [],
+		copies: [stagedPath("codexCompatibility", "premind-hook.mjs")],
 		external: [],
 	},
 	{
 		name: "codex-mcp",
 		entrypoint: "src/codex/mcp-server.ts",
 		output: stagedPath("codex", "premind-mcp.mjs"),
-		copies: [],
+		copies: [stagedPath("codexCompatibility", "premind-mcp.mjs")],
 		external: [],
 	},
 	{

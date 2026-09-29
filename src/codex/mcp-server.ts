@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
@@ -17,7 +18,37 @@ import {
 
 const RUNTIME_DIRECTORY = path.dirname(fileURLToPath(import.meta.url));
 const DAEMON_ENTRY = path.join(RUNTIME_DIRECTORY, "premind-daemon.mjs");
-const MCP_PROTOCOL_VERSION = "2024-11-05";
+const MCP_PROTOCOL_VERSION = "2025-06-18";
+const SUPPORTED_MCP_PROTOCOL_VERSIONS = new Set([
+	"2024-11-05",
+	MCP_PROTOCOL_VERSION,
+]);
+const CODEX_PLUGIN_DATA_DIRECTORY = "premind-premind";
+
+export const resolveCodexPluginData = (
+	environment: NodeJS.ProcessEnv,
+	runtimeDirectory: string,
+): string => {
+	const explicit = environment.PLUGIN_DATA?.trim();
+	if (explicit) return explicit;
+
+	const cacheRoot = path.resolve(runtimeDirectory, "../../../..");
+	const pluginsRoot = path.dirname(cacheRoot);
+	if (
+		path.basename(cacheRoot) === "cache" &&
+		path.basename(pluginsRoot) === "plugins"
+	) {
+		return path.join(pluginsRoot, "data", CODEX_PLUGIN_DATA_DIRECTORY);
+	}
+
+	const codexHome = environment.CODEX_HOME?.trim() || path.join(os.homedir(), ".codex");
+	return path.join(
+		codexHome,
+		"plugins",
+		"data",
+		CODEX_PLUGIN_DATA_DIRECTORY,
+	);
+};
 
 const jsonRpcIdSchema = z.union([z.string(), z.number(), z.null()]);
 const requestSchema = z
@@ -294,7 +325,11 @@ export const handleCodexMcpRequest = async (
 			throw new JsonRpcError(-32602, "Invalid initialize parameters");
 		}
 		return {
-			protocolVersion: MCP_PROTOCOL_VERSION,
+			protocolVersion: SUPPORTED_MCP_PROTOCOL_VERSIONS.has(
+				params.data.protocolVersion,
+			)
+				? params.data.protocolVersion
+				: MCP_PROTOCOL_VERSION,
 			capabilities: { tools: {} },
 			serverInfo: { name: "premind", version: "0.1.0" },
 		};
@@ -373,8 +408,7 @@ const isMainModule = () => {
 };
 
 if (isMainModule()) {
-	const pluginData = process.env.PLUGIN_DATA;
-	if (!pluginData) throw new Error("PLUGIN_DATA is required for Premind MCP");
+	const pluginData = resolveCodexPluginData(process.env, RUNTIME_DIRECTORY);
 	const launchDaemon = createDaemonLauncher({
 		daemonEntry: DAEMON_ENTRY,
 		requiredOperations: CODEX_REQUIRED_DAEMON_OPERATIONS,
