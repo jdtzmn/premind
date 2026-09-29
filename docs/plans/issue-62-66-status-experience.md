@@ -11,43 +11,50 @@ This plan resolves [#62](https://github.com/jdtzmn/premind/issues/62) and [#66](
 ## Product Decisions
 
 1. **`premind:status` is current-session first.** It must not dump every daemon session in the ordinary case.
-2. **The default view contains both session state and the user's open PRs in the current repository.** “Watching” and “my open PRs” are separate concepts and must remain visibly separate:
+2. **The default view contains both session state and the user's open PRs in the current repository.** “Watching” and “mine open” are distinct facts even when displayed on one PR row:
    - watching is the set of subscriptions that can deliver reminders to this session;
    - open PRs is a live, author-filtered GitHub query and is useful for recovering a stack even when every PR is not subscribed.
 3. **`premind:debug-status` is the debugger escape hatch.** It preserves the existing aggregate/session inventory, including internal maintenance fields, and is the only normal command that enumerates other sessions.
-4. **Status remains useful when GitHub is unavailable.** Daemon/session health is rendered from local state; the open-PR section degrades independently with a short, actionable explanation.
+4. **Status remains useful when GitHub is unavailable.** Daemon/session health and watched PRs are rendered from local state; only the owned-open PR portion degrades, with a short explanation.
 5. **No special clickable UI in the first implementation.** Render stable `owner/repo#number` labels and URLs in plain text/Markdown where the host already supports it. Host-native affordances (for example, a Pi modal with selectable links) are a later enhancement and do not shape the first data contract.
 6. **No hidden cross-repository search by default.** The default PR list is the authenticated viewer's open PRs in the current session's repository. A future dedicated PR-list command can add an explicit all-repositories scope after its rate-limit and privacy behavior are designed.
+7. **Compact by grouping, not deleting facts.** The default view preserves daemon health, polling, watcher count, repo/branch, session state, pending count, branch PR, watched subscriptions, owned open PRs, links, and hidden-session count. Shared PRs appear once with explicit `[branch]` and `[watched]` annotations; exceptions are listed separately.
+8. **Words are the compatibility baseline.** Optional host-specific colors/icons may decorate status, but never convey meaning alone. Plain-text command notifications and agent-tool output must retain labels and raw URLs; avoid emoji-dependent glyph widths, ANSI escapes, and table alignment.
 
 ## Default Experience
 
 `/premind:status` should read as a compact overview, not a log.
 
 ```text
-premind: running · polling enabled · 1 watcher
-current: jdtzmn/premind @ jacob/better-status · active/idle · 0 pending
-branch PR: jdtzmn/premind#67 — Improve status output
-watching: 2 PRs
-  - jdtzmn/premind#67 — Improve status output
-  - jdtzmn/premind#65 — Recover Pi sessions
-my open PRs in jdtzmn/premind: 3
-  - #67 Improve status output — https://github.com/jdtzmn/premind/pull/67
-  - #65 Recover Pi sessions — https://github.com/jdtzmn/premind/pull/65
-  - #61 …
-2 other sessions hidden; use /premind:debug-status for daemon diagnostics.
+premind · running · polling on · 1 watcher
+jdtzmn/premind @ jacob/better-status · active/idle · 0 pending
+
+PRs · 3 mine open · 2 watched
+  #67 Improve status output [branch, watched] — https://github.com/jdtzmn/premind/pull/67
+  #65 Recover Pi sessions [watched] — https://github.com/jdtzmn/premind/pull/65
+  #61 Another change — https://github.com/jdtzmn/premind/pull/61
+
+2 other sessions · /premind:debug-status
 ```
 
 Rules for the overview:
 
-- The first line reports daemon reachability/running state, global polling state, and watcher count. A disabled daemon must say that no GitHub polling is occurring and point to the enable command.
-- The current row always shows repository, branch, session state/busy state, and pending reminder count.
-- `branch PR` appears only when a PR is associated with the active worktree/branch.
-- `watching` contains active subscriptions for the current session, including manually subscribed PRs; it explicitly says `none` when there are no active subscriptions.
-- `my open PRs` is ordered by most recently updated and has a bounded initial display (for example, 10 items) with a count. It is not a statement that every listed PR is being watched.
-- If the current session cannot be resolved, show the daemon synopsis and `no premind session is attached to this agent`; do not guess from a different session. Omit the repository-scoped PR query.
-- If GitHub lookup fails, retain all local sections and replace only the PR section with `my open PRs: unavailable (<concise cause>)`.
-- Avoid protocol versions, client counts, reaping timestamps, long session identifiers, subscription write policies, and per-subscription pending-event counts in this view unless they directly explain a problem.
+- First line: daemon reachability, global polling state, and watcher count. When polling is disabled, say `polling off` and include `/premind:enable`; when unreachable, say so and point to `/premind:doctor`. Do not mistake zero watchers for an unhealthy daemon.
+- Second line: current repository, branch, session lifecycle/busy state, and pending reminder count. The PR section uses that repository as its default context; qualify `owner/repo#number` whenever a subscription belongs to another repository.
+- Group PRs by identity, not by source. The heading gives separate counts for **mine open** (viewer-authored GitHub results in this repo) and **watched** (active subscriptions for this session). Each listed PR has its title when known, a full raw URL (clickable where the host supports links), and independent `[branch]` and `[watched]` tags as applicable. A branch PR not in the open/owned set and an external or foreign watched PR still get their own row. Deduplicate shared PRs without hiding either relationship.
+- Order my open PRs by most recently updated. Keep the initial display bounded (for example, 10 results); if more exist, show a truthful `+N more` count or `showing first 10` when the total is unknown. Do not imply that every owned PR is being watched. When the PR is draft, label it `draft`. A watched or branch PR must never disappear solely because the owned-PR display is capped.
+- Show `0 watched` or `0 mine open` in the heading for empty categories; avoid redundant `none` lines. Show the hidden-session count and diagnostic command only when other sessions exist.
+- If the current session cannot be resolved, show daemon health and `no premind session is attached to this agent`; do not guess from a different session or make a repository-scoped PR query.
+- If GitHub lookup fails, retain the local context, branch PR, and watched entries. Replace only the owned-open count/list with `mine open unavailable (<concise cause>)` rather than hiding or mislabeling watched PRs.
+- Preserve all product-level facts, but keep protocol versions, client counts, reaping timestamps, long session IDs, subscription write policies, and per-subscription pending-event counts in `/premind:debug-status` unless a specific problem needs surfacing.
 
+## Reference Patterns and Presentation Choice
+
+- [`gh pr status`](https://cli.github.com/manual/gh_pr_status) leads with the current branch, then groups PRs created by the viewer and review requests. Its number/title lines carry compact status hints; detailed checks are a separate `gh pr checks` action. Borrow the **current-context-first hierarchy**, not additional CI/review claims we do not yet fetch.
+- [`gh-dash` PR sections](https://gh-dash.dev/configuration/pr-section/) separate viewer-focused PR lists into named, bounded sections; its [theme](https://gh-dash.dev/configuration/theme/) can make rows compact and color states. But [its icons require a Nerd Font](https://gh-dash.dev/getting-started). Borrow semantic labels and bounded density, not font-dependent glyphs or an interactive dashboard for a one-shot status response.
+- [Graphite's `gt log`](https://graphite.com/docs/visualize-stack) offers a scoped stack view and includes PR links/status for submitted branches. A dependency tree would be useful for stack recovery, but premind's current open-PR query does not establish parent/child relationships. Do **not** draw a tree or call the list a stack until that topology is available.
+
+**Recommendation:** Ship a two-line health/context header and one deduplicated PR list with compact word tags. Keep full URLs visible for link detection, and keep the same plain-text fallback in notifications and agent-tool responses. If a host offers a reliable, accessible theming API, it may color existing text (`running`, `polling off`, `pending`) as a secondary cue; never emit raw ANSI sequences or rely on emoji/Nerd Font icons. Follow established CLI practice of honoring `NO_COLOR`/non-TTY behavior for any future terminal-specific color output ([GitHub CLI environment variables](https://cli.github.com/manual/gh_help_environment)).
 ## Full Diagnostic Experience
 
 `/premind:debug-status` is for debugging. It includes:
@@ -56,7 +63,7 @@ Rules for the overview:
 - active clients, active/closed sessions, watchers, protocol, and last-reap information;
 - a complete per-session table/list with host, shortened ID, repository/branch, PR association, lifecycle/busy state, pending count, worktree binding, and subscriptions including write policy/state;
 - an explicit marker for the current session;
-- the same current-repository open-PR list, so the normal and diagnostic paths do not disagree about the user's work.
+- the same deduplicated PR overview for the current repository (plus external/foreign watched PRs), so normal and diagnostic paths do not disagree about the user's work.
 
 `debug-status` is a separate, explicitly diagnostic command, not a flag on ordinary status. It must not create, attach, reactivate, or prune sessions.
 
@@ -139,7 +146,7 @@ For the first implementation, links should be emitted as the GitHub URL alongsid
 ### Phase 2: Viewer-owned open PRs
 
 1. Add the GitHub client query, IPC request/response schemas, daemon router handler, client method, and focused tests for viewer filtering, empty results, ordering, and bounded results.
-2. Call it only after resolving the current session and repository; render the separate `my open PRs` block in default and full views.
+2. Call it only after resolving the current session and repository; merge viewer-owned PRs, branch association, and active subscriptions by `repo#number` into the compact PR list in default and full views without losing separate counts or tags.
 3. Treat PR-list failure independently from local status failure and verify the concise degraded copy.
 
 **Checkpoint:** returning to a repository shows the user's current open stack even if only one of those PRs is subscribed; status still works when GitHub lookup is unavailable.
@@ -160,11 +167,11 @@ Prototype host-native clickable PR lists without changing the underlying IPC mod
 
 - A normal status call never lists unrelated daemon sessions.
 - It clearly identifies the current repository/branch, associated branch PR (when known), current session lifecycle/busy state, pending reminder count, watcher state, and global polling/daemon health.
-- It separately lists active subscriptions and the authenticated user's open PRs for the current repository, so “watched” is never confused with “owned.”
+- A compact, deduplicated PR list retains distinct owned-open, branch-PR, and actively watched meanings via counts and annotations; foreign/external and non-open PRs remain visible when associated or watched.
 - Where host privacy rules permit, `/premind:debug-status` and `premind_debug_status` let an operator or agent diagnose every daemon session and preserve the existing detail omitted from ordinary status; Claude remains intentionally redacted.
 - A missing current-session binding and a failed GitHub PR lookup have concise, actionable, non-fatal output.
 - Default status does not mutate daemon/session state or make a GitHub request when no current repository can be resolved.
-- Tests cover selection/isolation, full-scope rendering, no watcher/no PR/paused/global-disabled cases, viewer filtering and URL/title display, GitHub failure degradation, and adapter command/tool wiring.
+- Tests cover selection/isolation; deduplication of an owned, branch-associated, watched PR; external and foreign subscriptions; capped owned results without dropping watched PRs; plain-text/URL compatibility; disabled polling; no watcher/no PR/paused states; GitHub failure degradation; and adapter command/tool wiring.
 - Capability documentation and generated artifacts stay in sync with registrations.
 
 ## Non-Goals
