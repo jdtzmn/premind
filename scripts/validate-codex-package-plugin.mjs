@@ -113,6 +113,12 @@ try {
 		"plugins/codex/premind/generated/premind-daemon.mjs",
 		"plugins/codex/premind/generated/premind-hook.mjs",
 		"plugins/codex/premind/generated/premind-mcp.mjs",
+		"skills/premind/SKILL.md",
+		"skills/premind/references/subscriptions.md",
+		"skills/premind/references/reminders.md",
+		"plugin-claude/skills/premind/SKILL.md",
+		"plugin-claude/skills/premind/references/subscriptions.md",
+		"plugin-claude/skills/premind/references/reminders.md",
 	]) {
 		assert.ok(files.has(file), `npm package is missing ${file}`);
 	}
