@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { requiredInstallFiles, validateInstallArtifact } from "./install-artifact-layout.mjs";
+import { verifyInstallArtifact } from "./verify-install-artifact.mjs";
 
 const makeFixture = () => {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), "premind-artifact-layout-"));
@@ -53,4 +56,34 @@ test("rejects diverging generated bundles", (t) => {
 	t.after(() => fs.rmSync(root, { recursive: true, force: true }));
 	fs.writeFileSync(path.join(root, "plugins/codex/premind/generated/premind-mcp.mjs"), "stale");
 	assert.throws(() => validateInstallArtifact(root), /premind-mcp\.mjs differs/);
+});
+
+test("verifies archive checksum and extracted contents", (t) => {
+  const { root } = makeFixture();
+  const bundle = fs.mkdtempSync(path.join(os.tmpdir(), "premind-install-bundle-"));
+  t.after(() => fs.rmSync(bundle, { recursive: true, force: true }));
+  fs.renameSync(root, path.join(bundle, "package"));
+  const filename = "premind-0.1.0.tgz";
+  const packed = spawnSync("tar", ["-czf", filename, "package"], { cwd: bundle });
+  assert.equal(packed.status, 0, packed.stderr?.toString());
+  const archive = path.join(bundle, filename);
+  const original = fs.readFileSync(archive);
+  const sha256 = createHash("sha256").update(original).digest("hex");
+  fs.writeFileSync(
+    path.join(bundle, "artifact.json"),
+    JSON.stringify({
+      schemaVersion: 1,
+      sourceCommit: "a".repeat(40),
+      packageName: "premind",
+      packageVersion: "0.1.0",
+      archive: { file: filename, sha256 },
+      extractedRoot: "package",
+    }),
+  );
+  assert.equal(verifyInstallArtifact(bundle).archive.sha256, sha256);
+  fs.appendFileSync(archive, "corrupt");
+  assert.throws(() => verifyInstallArtifact(bundle), /archive checksum differs/);
+  fs.writeFileSync(archive, original);
+  fs.writeFileSync(path.join(bundle, "package/extensions/premind.ts"), "different");
+  assert.throws(() => verifyInstallArtifact(bundle), /extracted extensions\/premind\.ts differs/);
 });
