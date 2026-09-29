@@ -19,8 +19,7 @@ jobs:
         with:
           node-version: "22.13"
       - run: bun install --frozen-lockfile
-      - run: bun run build:runtime
-      - run: git diff --exit-code -- plugin-claude/generated plugins/premind/generated plugins/codex/premind/generated
+      - run: bun run validate:package-runtime
       - run: bun run check
 
   unit:

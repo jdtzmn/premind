@@ -57,23 +57,6 @@ const codexCompatibilityGeneratedPath = path.join(
 	"premind",
 	"generated",
 );
-const trackedPluginArtifacts = new Set(
-	run("git", [
-		"ls-files",
-		"--",
-		"plugins/premind/generated",
-		"plugins/codex/premind/generated",
-	])
-		.split("\n")
-		.filter(Boolean),
-);
-for (const directory of ["plugins/premind", "plugins/codex/premind"]) {
-	for (const name of portableArtifactNames) {
-		const artifact = `${directory}/generated/${name}`;
-		assert.ok(trackedPluginArtifacts.has(artifact), `${artifact} is not tracked`);
-		assert.ok(fs.existsSync(path.join(ROOT, artifact)), `${artifact} is missing`);
-	}
-}
 
 const runCodex = (args) =>
 	run("codex", args, { env: { ...process.env, CODEX_HOME: codexHome } });
@@ -94,6 +77,8 @@ try {
 	);
 	const files = new Set(packed[0]?.files?.map((file) => file.path));
 	for (const file of [
+		"plugin-claude/generated/daemon-startup.mjs",
+		"plugin-claude/generated/premind-daemon.mjs",
 		"plugins/premind/plugin.json",
 		"plugins/premind/.codex-plugin/plugin.json",
 		"plugins/premind/hooks/hooks.json",
