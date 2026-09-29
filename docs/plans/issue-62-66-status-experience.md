@@ -8,7 +8,7 @@ Resolve [#62](https://github.com/jdtzmn/premind/issues/62) and [#66](https://git
 
 ## Normal Status: One Session, Only Its Watched PRs
 
-Illustrative plain-text output (the glyphs can be colored where the host supports it):
+Illustrative output (interactive hosts color the signal glyph and its label; unstyled text remains readable):
 
 ```text
 premind · running · polling on · 3 watchers
@@ -33,7 +33,7 @@ The header keeps daemon reachability, global polling state, and watcher count. T
 
 Use **one primary glyph per PR** (the most important applicable state) followed by short, explicit text. Additional simultaneous problems remain visible as words: `✗ CI failing, conflicts`, not two undecipherable symbols. Put the signal beside the PR title; do not add a separate legend to every status call. Order watched PRs with the branch PR first, then actionable blockers, then other active PRs, then terminal PRs; keep the ordering deterministic and do not cap away watched PRs silently.
 
-| Signal | Meaning / source | Optional color |
+| Signal | Meaning / source | Required interactive color |
 | --- | --- | --- |
 | `✗ conflicts` | Open PR with confirmed current merge conflict (`mergeStateStatus: DIRTY`). | Red |
 | `✗ CI failing` | At least one current-head check has a failing conclusion; retain `conflicts` too if both apply. | Red |
@@ -42,7 +42,7 @@ Use **one primary glyph per PR** (the most important applicable state) followed 
 | `… checks pending` | Current checks still running/pending; not a failure. | Amber |
 | `! blocked` / `! review needed` | GitHub says blocked/behind or review required; show the verified cause if known. | Amber |
 | `✓ ready to merge` | Open, non-draft, recent verified `CLEAN` merge state, passing/complete checks, no blocking review; never inferred just from an absence of known failures. | Green |
-| `◆ merged` | Verified terminal `MERGED` state; historical CI/review problems must not masquerade as current blockers. | Purple or muted |
+| `◆ merged` | Verified terminal `MERGED` state; historical CI/review problems must not masquerade as current blockers. | Purple |
 | `○ closed` | Verified closed without merge; different from merged. | Muted |
 | `? status unknown` | Missing/stale snapshot or GitHub `UNKNOWN`/insufficient evidence; never green by default. | Neutral |
 
@@ -52,7 +52,7 @@ GitHub's [`MergeStateStatus` definitions](https://docs.github.com/en/graphql/ref
 
 ### Color, Unicode, and accessibility
 
-Common text glyphs `✗ ✓ ○ ◆ ! ? …` are acceptable; no emoji or Nerd Font dependency. Always include words (`CI failing`, `merged`, `draft`, etc.), so a monochrome screen reader transcript or agent tool result retains the meaning. Color is an optional *second* channel, using the host's theme/accessibility API when available. Do not put raw ANSI escapes into Pi/OpenCode notifications, MCP/tool responses, logs, redirected output, or links; for any future native terminal renderer, honor `NO_COLOR`/non-TTY behavior and a plain-text fallback. Test that unstyled output reads correctly and URLs remain intact.
+Common text glyphs `✗ ✓ ○ ◆ ! ? …` and their semantic colors are **required in interactive host rendering**; no emoji or Nerd Font dependency. Always include words (`CI failing`, `merged`, `draft`, etc.), so a monochrome screen reader transcript or agent tool result retains meaning. Render glyph and state words in red/amber/green/purple/muted/neutral using each host's supported theme or text-styling API, with an explicit accessible palette/fallback for hosts without a theme API. The unstyled tool/JSON/non-TTY representation remains a necessary transport fallback, not a product choice to omit colors from the interactive status UI. Never leak raw ANSI escapes into MCP/tool responses, logs, redirected output, or links; a terminal renderer must honor `NO_COLOR`/non-TTY behavior. Test both colored interactive rendering and unstyled output with intact URLs.
 
 ## Full Diagnostics: A Separate Command
 
@@ -63,7 +63,7 @@ Common text glyphs `✗ ✓ ○ ◆ ! ? …` are acceptable; no emoji or Nerd Fo
 - Keep the existing `debugStatus` operation as cheap local diagnostic state. Extend it with optional cached PR summaries for watched entries, or add a separate read-only local operation if retaining the exact schema is preferable; never add network fetches to it. Build a pure projection/renderer with current-session ID and explicit overview/diagnostic views.
 - Pi resolves the active session using `currentSessionId` or `getPiSessionId(ctx)` without attaching just to inspect. OpenCode uses the invoking `ctx.sessionID`, not `lastPrimarySessionId` when an ID is supplied. Codex uses its existing session binding. Claude retains its intentional aggregate/redacted privacy boundary until its own safe session identity is available; never expose an unredacted all-sessions view there by accident.
 - Register the two status capabilities in the command-capability registry, update generated docs/host names, and give model tools matching descriptions: `premind_status` for watched current-session PRs and `premind_debug_status` for daemon-wide inspection. Document host-specific privacy or surface exceptions explicitly.
-- Preserve a readable plain-text renderer for every host. If a host supports safe styled text, color the **glyph and state words** through its own theme rather than inventing terminal escapes. First implementation remains text-based; an interactive Pi PR modal is a later, optional enhancement.
+- Preserve a readable unstyled renderer for tools/non-interactive modes and add a **colored interactive renderer** for each host that supports status UI; Pi uses its theme, and other hosts use their native styling path or accessible terminal palette where applicable. If a host cannot render colored status within its current surface, choose a supported interactive surface rather than silently dropping the requirement. First implementation remains text-based; an interactive PR picker is a later, optional enhancement.
 
 ## Reference Patterns
 
@@ -75,14 +75,14 @@ Common text glyphs `✗ ✓ ○ ◆ ! ? …` are acceptable; no emoji or Nerd Fo
 ## Delivery Phases
 
 1. **Current session and diagnostics.** Implement the read-only current-session projection, watched-only overview, separate debug command/tool, plain-text PR rows, current/other-session selection, and focused tests. Initially unknown PR details must render honestly. Validate and commit this slice.
-2. **Verified PR signals.** Expose cached snapshot summaries, derive glyph/word states from current evidence, apply conservative `ready` and freshness rules, and test merged/closed/draft/conflict/failing/pending/review/stale combinations across hosts. Add theme colors only where host APIs safely support them. Validate and commit this slice.
+2. **Verified PR signals and required colors.** Expose cached snapshot summaries, derive glyph/word states from current evidence, apply conservative `ready` and freshness rules, and test merged/closed/draft/conflict/failing/pending/review/stale combinations. Render semantic colors in interactive hosts, retaining a readable unstyled transport fallback. Validate and commit this slice.
 3. **Adapter parity and polish.** Align Codex and Claude with their documented capabilities/privacy boundaries, update generated plugin artifacts using normal packaging, and check command-capability documentation. Optional clickable modal work is explicitly out of scope. Validate and commit this slice.
 
 ## Acceptance Criteria
 
 - Normal status lists **only active subscriptions of the current session**, not all of the viewer's open PRs or another daemon session's PRs. It still reports the current branch PR association even when that PR is not watched.
 - The compact header retains daemon/polling/watcher state, repo/branch, session state, pending count, and a truthful count of other sessions. Each watched PR has one row, a URL, and a word-labeled signal; foreign/cross-repo subscriptions remain visible.
-- Confirmed CI failures, conflicts, merged, closed, draft, review blockers, pending checks, ready, and unknown states render distinctly, with deterministic precedence and no false `ready` from incomplete or stale data. Unstyled/monochrome output remains intelligible.
+- Confirmed CI failures, conflicts, merged, closed, draft, review blockers, pending checks, ready, and unknown states render with their specified glyph, word label, and **required interactive semantic color**, deterministic precedence, and no false `ready` from incomplete or stale data. Unstyled/monochrome tool output remains intelligible.
 - Issue #66 is satisfied by the linked, session-associated PR list in ordinary status; no authored-PR inventory, viewer search, or new PR-list command is added.
 - `/premind:debug-status` preserves all-session diagnostic detail without making ordinary status noisy. Missing session binding, missing/stale snapshots, and disabled polling each have honest, actionable output; GitHub outages do not suppress cached watched-PR links.
 - Tests cover current-session isolation, deduplication, terminal-vs-historical blockers, dual blockers, status freshness, render fallback, URL integrity, host command/tool wiring, and capability-doc drift.
