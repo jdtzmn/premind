@@ -287,10 +287,14 @@ describe("Router worktree subscription operations", () => {
       reviews: [], issueComments: [{ id: 1, body: "private content" }], reviewComments: [], fetchedAt: 123,
     });
     const router = new Router(store);
+    const legacy = await router.handle({ type: "debugStatus", protocolVersion: 1, payload: {} });
+    assert.equal(legacy.ok, true);
+    if (!legacy.ok) throw new Error("legacy debugStatus failed");
+    assert.equal("snapshot" in (legacy.result as { sessions: Array<{ subscriptions: Array<object> }> }).sessions[0]!.subscriptions[0]!, false);
     const response = await router.handle({
       type: "debugStatus",
       protocolVersion: 1,
-      payload: {},
+      payload: { includeSnapshots: true },
     });
     assert.equal(response.ok, true);
     if (!response.ok) throw new Error("debugStatus failed");
@@ -341,6 +345,14 @@ describe("Router worktree subscription operations", () => {
         snapshot: null,
       },
     ]);
+    const saved = store.getSnapshot("acme/repo", 42)!;
+    store.saveSnapshot("acme/repo", 42, { ...saved, core: { ...saved.core, title: 123 } } as never);
+    const malformed = await router.handle({ type: "debugStatus", protocolVersion: 1, payload: { includeSnapshots: true } });
+    assert.equal(malformed.ok, true);
+    if (malformed.ok) {
+      const sessions = (malformed.result as { sessions: Array<{ subscriptions: Array<{ snapshot: unknown }> }> }).sessions;
+      assert.equal(sessions[0]!.subscriptions[0]!.snapshot, null);
+    }
     store.close();
   });
 });

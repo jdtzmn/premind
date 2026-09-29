@@ -193,7 +193,7 @@ const resolveBinding = async (
 	binding: CodexSessionBinding | undefined;
 	status: Awaited<ReturnType<McpDaemonClient["debugStatus"]>>;
 }> => {
-	const status = await dependencies.client.debugStatus();
+	const status = await dependencies.client.debugStatus({ includeSnapshots: true });
 	const binding = resolveCodexSessionBinding({
 		pluginData: dependencies.pluginData,
 		sessions: status.sessions,

@@ -46,7 +46,7 @@ const plugin: TuiPluginModule & { id: string } = {
         const current = api.route.current;
         const sessionId = current.name === "session" && "params" in current && typeof current.params?.sessionID === "string"
           ? current.params.sessionID : undefined;
-        void daemon.debugStatus().then((status) => {
+        void daemon.debugStatus({ includeSnapshots: true }).then((status) => {
           const summary = renderCurrentStatus(status, sessionId);
           api.ui.dialog.replace(() => api.ui.Dialog({
             size: "large", onClose: () => api.ui.dialog.clear(),

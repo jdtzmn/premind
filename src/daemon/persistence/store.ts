@@ -25,6 +25,7 @@ import type {
 	UpdateSessionStatePayload,
 	SubscriptionWritePolicy as SharedSubscriptionWritePolicy,
 } from "../../shared/schema.ts";
+import { cachedPrStatusSnapshotSchema } from "../../shared/schema.ts";
 import type {
 	NormalizedPrEvent,
 	PullRequestSnapshot,
@@ -1290,7 +1291,7 @@ export class StateStore {
 			.get(sessionId) as SessionRow | undefined;
 	}
 
-	listSessionSummaries() {
+	listSessionSummaries(includeSnapshots = false) {
 		const sessions = this.db
 			.prepare(
 				`SELECT session_id, host, repo, branch, pr_number, status, busy_state, last_delivered_event_seq FROM sessions WHERE status != 'closed' ORDER BY updated_at DESC`,
@@ -1322,7 +1323,7 @@ export class StateStore {
 									subscription.lastDeliveredEventSeq,
 								)
 							: 0,
-					snapshot: subscription.state === "active" ? this.getStatusSnapshot(subscription.repo, subscription.prNumber) : null,
+					...(includeSnapshots ? { snapshot: subscription.state === "active" ? this.getStatusSnapshot(subscription.repo, subscription.prNumber) : null } : {}),
 				}),
 			);
 			const pendingReminderCount =
@@ -1598,16 +1599,17 @@ export class StateStore {
 	private getStatusSnapshot(repo: string, prNumber: number) {
 		const snapshot = this.getSnapshot(repo, prNumber);
 		if (!snapshot?.core || !Array.isArray(snapshot.checks)) return null;
-		return {
+		const projected = {
 			title: snapshot.core.title,
 			url: snapshot.core.url,
 			state: snapshot.core.state,
 			isDraft: snapshot.core.isDraft,
 			mergeStateStatus: snapshot.core.mergeStateStatus,
 			...(snapshot.core.reviewDecision !== undefined ? { reviewDecision: snapshot.core.reviewDecision } : {}),
-			checks: snapshot.checks.map((check) => ({ state: check.state })),
+			checks: snapshot.checks.map((check) => ({ state: check?.state })),
 			fetchedAt: snapshot.fetchedAt,
 		};
+		return cachedPrStatusSnapshotSchema.safeParse(projected).data ?? null;
 	}
 
 	getSnapshot(repo: string, prNumber: number) {

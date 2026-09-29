@@ -71,7 +71,7 @@ type DaemonClientLike = {
 		sessionId: string,
 	) => Promise<{ batch: ReminderBatch | null }>;
 	ackReminder: (payload: AckReminderPayload) => Promise<unknown>;
-	debugStatus: () => Promise<DebugStatusResponse>;
+	debugStatus: (options?: { includeSnapshots?: boolean }) => Promise<DebugStatusResponse>;
 	pruneClosedSessions: () => Promise<unknown>;
 };
 
@@ -356,7 +356,7 @@ export const createPremindPiExtension = (
 		};
 
 		const getStatusText = async (ctx: { cwd: string; sessionManager?: { getSessionFile?: () => string | undefined } }) => {
-			const status = await createDaemonClient().debugStatus();
+			const status = await createDaemonClient().debugStatus({ includeSnapshots: true });
 			return renderCurrentStatus(status, currentSessionId ?? getPiSessionId(ctx));
 		};
 		const getDebugStatusText = async (ctx: { cwd: string; sessionManager?: { getSessionFile?: () => string | undefined } }) =>
@@ -691,7 +691,7 @@ export const createPremindPiExtension = (
 				"Show the current session's watched PRs and premind health",
 			handler: async (_args, ctx) => {
 				try {
-					const status = await createDaemonClient().debugStatus();
+					const status = await createDaemonClient().debugStatus({ includeSnapshots: true });
 					const sessionId = currentSessionId ?? getPiSessionId(ctx);
 					if (ctx.hasUI && typeof ctx.ui.custom === "function") {
 						await ctx.ui.custom<void>((_tui, theme, _keys, done) => {

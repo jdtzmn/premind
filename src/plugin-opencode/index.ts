@@ -48,7 +48,7 @@ type DaemonClientLike = {
   ackReminder: (payload: import("../shared/schema.ts").AckReminderPayload) => Promise<unknown>
   setGlobalDisabled: (disabled: boolean) => Promise<{ disabled: boolean }>
   getGlobalDisabled: () => Promise<{ disabled: boolean }>
-  debugStatus: () => Promise<any>
+  debugStatus: (options?: { includeSnapshots?: boolean }) => Promise<any>
 }
 
 type PromptInput = {
@@ -760,7 +760,7 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
   }
 
   const handleStatusCommand = async (sessionID: string, inputRef?: { agent?: string; model?: { providerID: string; modelID: string } }) => {
-    const status = await daemon.debugStatus()
+    const status = await daemon.debugStatus({ includeSnapshots: true })
     await injectResponse(sessionID, renderCurrentStatus(status, sessionID), inputRef)
   }
 
@@ -894,7 +894,7 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
         description: "Show the current session's watched PR links, pending reminders, and premind health",
         args: {},
         async execute(_args, ctx) {
-          const status = await daemon.debugStatus()
+          const status = await daemon.debugStatus({ includeSnapshots: true })
           return renderCurrentStatus(status, ctx.sessionID)
         },
       }),
