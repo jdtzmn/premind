@@ -139,6 +139,9 @@ const tools = [
 	},
 ] as const;
 
+/** The same tool catalog advertised by tools/list; used by skill generation. */
+export const codexMcpTools = tools;
+
 type ToolResult = {
 	content: Array<{ type: "text"; text: string }>;
 	isError?: true;
