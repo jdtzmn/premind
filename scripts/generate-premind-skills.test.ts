@@ -31,7 +31,7 @@ test("Codex entry point routes only the relevant task to each reference", () => 
 	const entry = generatePremindSkillMarkdown();
 	assert.match(
 		entry,
-		/^---\nname: premind\ndescription: Use when .*Premind.*\n---\n/,
+		/^---\nname: premind\ndescription: Premind pull-request tracking.*\n---\n/,
 	);
 	assert.match(
 		entry,
@@ -122,5 +122,22 @@ test("Pi and Claude skills render discoverable, host-specific references", async
 			assert.match(reminders, /Pi can follow up on idle sessions/);
 			assert.doesNotMatch(subscriptions, /CLAUDE_CODE_SESSION_ID/);
 		}
+	}
+});
+
+test("live skill evaluations cover positive triggers, selective references, and near misses", () => {
+	const cases = JSON.parse(
+		readFileSync(path.join(root, "scripts/premind-skill-evals.json"), "utf8"),
+	) as Array<{ name: string; prompt: string; reference: string | null }>;
+	assert.equal(new Set(cases.map((item) => item.name)).size, cases.length);
+	assert.ok(cases.some((item) => item.reference === null));
+	for (const reference of ["subscriptions.md", "reminders.md"]) {
+		assert.ok(cases.some((item) => item.reference === reference));
+	}
+	for (const item of cases) {
+		assert.ok(
+			item.prompt.length > 60,
+			`Expected a realistic prompt: ${item.name}`,
+		);
 	}
 });

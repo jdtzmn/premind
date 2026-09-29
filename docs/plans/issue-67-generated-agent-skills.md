@@ -81,6 +81,22 @@ OpenCode needs its own **verified installation path**; do not assume that a skil
 - A root-level, always-loaded skills table of contents or one skill per agent that must be selected manually from a universal router.
 - Claiming support for a host whose installation/discovery contract has not been demonstrated.
 
+## Discovery decisions from implementation
+
+- Pi: publish `skills/premind` via explicit `pi.skills` and include `skills` in npm files. This avoids accidentally selecting either Codex leaf.
+- Claude Code: use the plugin's conventional `plugin-claude/skills/premind` directory; npm packaging checks include both referenced files. The Claude CLI is unavailable in this checkout, so native invocation remains a follow-up smoke check.
+- OpenCode: the npm plugin is loaded from its exported module, whereas OpenCode searches project/global `.opencode/skills`, `.claude/skills`, or `.agents/skills`. Shipping a skill somewhere in this npm package alone would not install it to a discoverable location. Defer an OpenCode skill until there is an explicit installation path.
+- Codex: marketplace selects `plugins/codex/premind`; retain the identical portable plugin leaf. Local Codex 0.146 is below the supported 0.155.1 minimum, so rely on focused packaging tests and CI rather than claiming local discovery verification.
+
+## Behavioral evaluation record
+
+The opt-in `bun run test:skills:live [pi|codex|claude]` runner uses five realistic/near-miss prompts from `scripts/premind-skill-evals.json`. It launches Pi with only `read` enabled, checks that the entry skill and **only the relevant** reference were read, and checks for host-mismatched control names and untrusted-reminder handling. The Codex/Claude variants run through a Pi proxy with an explicit host-role prompt, not through native CLIs.
+
+- Pi: 5/5 final cases passed (start PR, cross-repo PR, switch worktree, reminder safety, unrelated GitHub Actions). Positive cases loaded exactly the relevant reference; the negative case loaded no Premind skill.
+- Codex through Pi proxy: 5/5 routing and explanation cases passed. Claude through Pi proxy: positive cases passed and the unrelated GitHub case passed twice after removing the proxy host hint from negative cases. These are guidance checks, **not** evidence of native plugin discovery.
+- A no-skill/no-tools Pi baseline on the worktree case invented `premind_update_session.checkout_path` and `premind_prepare_pr_report`; the skill-enabled case used `premind_set_active_checkout.path` and `premind_subscribe`. The baseline intentionally had no file-read access, so this is qualitative rather than a controlled performance benchmark.
+- Initial live runs exposed under-triggering on short, generic questions and occasional host-name substitution in the Pi proxy. The final prompts request the exact API fields, the description now includes PR/worktree/reminder triggers, and the entry point directs the agent to use this host's controls. Model invocation remains probabilistic: re-run the cases if skill wording or host tooling changes.
+
 ## Acceptance criteria
 
 - Premind's installed Codex skill is generated, preserves the existing behavioral/safety contract, and works in each relevant Codex plugin leaf.

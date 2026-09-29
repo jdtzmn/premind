@@ -23,6 +23,7 @@
     "check": "tsc -p tsconfig.json --noEmit",
     "generate:skill": "node --import tsx scripts/generate-premind-skills.ts",
     "test:skills": "node --import tsx --test scripts/generate-premind-skills.test.ts",
+    "test:skills:live": "node scripts/evaluate-premind-skill.mjs",
     "daemon": "tsx src/daemon/index.ts",
     "prepack": "node scripts/generate-version.mjs && node scripts/build-runtime.mjs",
     "postpack": "node scripts/generate-version.mjs --restore",

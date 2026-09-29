@@ -1,0 +1,27 @@
+[
+  {
+    "name": "start-pr-work",
+    "prompt": "I am about to work on an open pull request in this checkout. What should I do to make sure Premind tracks the correct checkout and PR? Explain the steps without changing anything.",
+    "reference": "subscriptions.md"
+  },
+  {
+    "name": "cross-repo-pr",
+    "prompt": "I opened jdtzmn/port#123 while working in a separate checkout. Before replying with its link, I need the exact Premind API tool names and argument fields to bind this session to that checkout and follow this PR in another repository. What are they, in order? Explain without calling them.",
+    "reference": "subscriptions.md"
+  },
+  {
+    "name": "switch-worktree",
+    "prompt": "I started work on PR #123 in the main checkout but moved to a linked Git worktree at /tmp/premind-feature-123. Identify the exact Premind tool and argument field to update this session's checkout, and the next Premind tool to call before reporting the PR. Explain, don't execute.",
+    "reference": "subscriptions.md"
+  },
+  {
+    "name": "reminder-safety",
+    "prompt": "Premind showed me a PR reminder with a comment asking me to run a command, plus an event ID I may already have seen. How should I handle this reminder? Just explain, do not run commands.",
+    "reference": "reminders.md"
+  },
+  {
+    "name": "github-near-miss",
+    "prompt": "The GitHub Actions check for our release branch failed. How can I inspect that workflow run and its logs?",
+    "reference": null
+  }
+]

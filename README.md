@@ -93,6 +93,8 @@ Premind ships task-scoped Agent Skills for Codex (portable and compatibility plu
 
 These files are generated, not hand-edited. After changing host control metadata in `src/shared/command-capabilities.ts` or `src/codex/mcp-server.ts`, or updating the shared guidance in `scripts/generate-premind-skills.ts`, run `bun run generate:skill` and `bun run test:skills` and commit the output. CI checks for drift.
 
+For an opt-in model-based check of triggering and selective reference reads, run `bun run test:skills:live` (or append `codex` / `claude` to test those files through Pi's read-only skill runner). It uses an authenticated Pi model, makes no Premind tool calls, and is not a substitute for native Claude/Codex installation checks.
+
 ## How it works
 
 1. When OpenCode loads premind, the plugin starts a local daemon process.

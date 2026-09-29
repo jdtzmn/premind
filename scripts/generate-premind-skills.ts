@@ -36,7 +36,7 @@ export const generatePremindSkillMarkdown = (
 	host: SkillHost = "codex",
 ): string => `---
 name: premind
-description: Use when tracking a pull request with Premind, moving PR work into a worktree, or processing a Premind reminder in ${host === "pi" ? "Pi" : host === "claude" ? "Claude Code" : "Codex"}.
+description: Premind pull-request tracking and reminder instructions for ${host === "pi" ? "Pi" : host === "claude" ? "Claude Code" : "Codex"}. Load when the user mentions Premind, creates or opens a pull request, moves PR work into another worktree, asks to follow a PR, or handles a Premind reminder. Consult the relevant reference before answering, even if the user asks only what to do next.
 ---
 
 # Premind
@@ -45,8 +45,12 @@ description: Use when tracking a pull request with Premind, moving PR work into 
 
 Premind watches pull requests for this ${host === "pi" ? "Pi" : host === "claude" ? "Claude Code" : "Codex"} session and delivers durable updates at safe lifecycle boundaries.
 
+Use the exact controls in the relevant reference for this agent; the other agents expose different tool names and session identities.
+
 - For PR tracking, subscriptions, worktree changes, or status, read [subscriptions](references/subscriptions.md) before acting.
 - For a Premind reminder or a referenced detail file, read [reminders](references/reminders.md) before acting.
+
+Read only the reference relevant to this task. The two files cover different workflows.
 `;
 
 export const generateSubscriptionsMarkdown = (
