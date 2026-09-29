@@ -2,6 +2,7 @@
 
 Issue: <https://github.com/jdtzmn/premind/issues/67>
 Reference: Port's `scripts/generate-port-skill.ts` and generated `skills/port-cli/SKILL.md`.
+Skill-writing guidance: <https://skills.sh/anthropics/skills/skill-creator>.
 
 ## Goal
 
@@ -20,7 +21,7 @@ The file is `SKILL.md` (singular) inside a skill directory, not a root-level `SK
 
 Each supported host gets **one discoverable `premind` entry skill at its actual install location**. Do not ship a universal router that asks the model which agent it is running in. Each entry point contains only:
 
-1. Frontmatter with a host-appropriate trigger description.
+1. Frontmatter whose description says what Premind enables and when an agent should load the skill; test triggering, not just frontmatter syntax.
 2. A brief explanation of Premind and the instructions needed on every invocation.
 3. Explicit, conditional pointers to on-demand references such as `references/subscriptions.md` and `references/reminders.md`. Use relative paths from that skill directory. Split only when a reference is substantial enough to justify an extra read; do not manufacture tiny files.
 
@@ -66,6 +67,14 @@ OpenCode needs its own **verified installation path**; do not assume that a skil
 
 **Gate:** CI fails on stale output or a missing packaged reference, and generation leaves a clean diff. Commit after the targeted validation.
 
+### 4. Exercise the skill as an agent, not just as Markdown
+
+- For each enabled host, try a few realistic prompts: start PR work in the current checkout, switch to a linked worktree, subscribe to a PR in another repository, and process a duplicate or untrusted reminder. Include near-miss prompts that should **not** load the skill (for example, a generic GitHub question unrelated to Premind).
+- Compare the generated skill with the existing skill or no skill on representative prompts. Check whether the agent actually discovers the entry point, loads the right reference only when needed, uses the host's real controls, and respects safety and delivery boundaries. Review outputs and traces, not just name-matching assertions; iterate on the description and guidance where observed behavior differs.
+- Keep this evaluation proportional to the change. Record the prompts and observed results so subsequent edits can reuse them; do not make an Anthropic-specific evaluation harness a prerequisite for Pi, Codex, or OpenCode.
+
+**Gate:** At least one positive and one near-miss invocation per enabled host are inspected; a maintainer can see what the generated skill improves over the previous behavior. Commit the final revisions after the targeted checks.
+
 ## Out of scope
 
 - Changing subscription, daemon, lifecycle, or delivery behavior to fit a skill.
@@ -77,4 +86,5 @@ OpenCode needs its own **verified installation path**; do not assume that a skil
 - Premind's installed Codex skill is generated, preserves the existing behavioral/safety contract, and works in each relevant Codex plugin leaf.
 - Every additional host enabled in this change gets one discoverable, host-correct entry point with working on-demand references; no cross-harness tool instructions leak into it.
 - Shared guidance has one maintained source, generated files are committed, regeneration is deterministic, and CI catches drift and missing packaged files.
+- Representative positive and near-miss prompts demonstrate appropriate skill triggering, selective reference loading, and correct host-specific behavior.
 - Documentation points to the generation command and explains how to update host-specific capability guidance without editing generated Markdown by hand.
