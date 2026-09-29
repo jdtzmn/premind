@@ -28,8 +28,8 @@ export type CommandCapability = {
 export const commandCapabilities = {
 	status: {
 		classification: "common",
-		scope: "daemon",
-		description: "Inspect daemon state and pending reminder counts.",
+		scope: "session",
+		description: "Inspect the current session's watched PRs and premind health.",
 		canonical: { commands: ["premind:status"], tools: ["premind_status"] },
 		harnesses: {
 			pi: { commands: ["premind:status"], tools: ["premind_status"] },
@@ -47,6 +47,17 @@ export const commandCapabilities = {
 					commands: "OpenCode retains its established hyphenated status command.",
 				},
 			},
+		},
+	},
+	"debug-status": {
+		classification: "adapter-specific",
+		scope: "daemon",
+		description: "Inspect every daemon session and watcher for troubleshooting.",
+		canonical: { commands: ["premind:debug-status"], tools: ["premind_debug_status"] },
+		harnesses: {
+			pi: { commands: ["premind:debug-status"], tools: ["premind_debug_status"] },
+			claude: { commands: [], tools: [], exceptions: { commands: "Claude status is aggregate/redacted; full session inventory is not exposed." } },
+			opencode: { commands: ["premind:debug-status"], tools: ["premind_debug_status"] },
 		},
 	},
 	doctor: {

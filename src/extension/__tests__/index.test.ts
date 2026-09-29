@@ -884,9 +884,9 @@ describe("premind Pi extension", () => {
 		});
 	});
 
-	test("/premind:status renders daemon status", async () => {
+	test("/premind:status renders only the current session", async () => {
 		const mock = createMockPi();
-		const client = createClient();
+		const client = createClient({ statusResult: { ...status, sessions: [{ ...status.sessions[0]!, sessionId: "/tmp/session.jsonl" }] } });
 		const notifications: Array<{ message: string; level: string }> = [];
 		createPremindPiExtension({
 			createDaemonClient: () => client.client,
@@ -899,14 +899,19 @@ describe("premind Pi extension", () => {
 
 		assert.equal(notifications.length, 1);
 		assert.equal(notifications[0]?.level, "info");
-		assert.match(
-			notifications[0]?.message ?? "",
-			/premind: v\d+\.\d+\.\d+ \([0-9a-f]{6}\) · 1 active session/,
-		);
-		assert.match(
-			notifications[0]?.message ?? "",
-			/owner\/repo @ feature\/pi \(PR #123\)/,
-		);
+		assert.match(notifications[0]?.message ?? "", /owner\/repo @ feature\/pi · active\/idle · 2 pending/);
+		assert.match(notifications[0]?.message ?? "", /Watching 0 PRs · branch PR #123 \(not watched\)/);
+		assert.doesNotMatch(notifications[0]?.message ?? "", /session-1/);
+	});
+
+	test("/premind:debug-status preserves the daemon inventory", async () => {
+		const mock = createMockPi();
+		const client = createClient();
+		const notifications: Array<{ message: string; level: string }> = [];
+		createPremindPiExtension({ createDaemonClient: () => client.client, config: { statusPollIntervalMs: 0 } })(mock.pi as never);
+		await mock.commands.get("premind:debug-status")!.handler("", createCommandContext(notifications));
+		assert.match(notifications[0]?.message ?? "", /premind: v\d+\.\d+\.\d+/);
+		assert.match(notifications[0]?.message ?? "", /owner\/repo @ feature\/pi/);
 	});
 
 	test("/premind:doctor reports Pi runtime and delivery health", async () => {
@@ -1166,9 +1171,9 @@ describe("premind Pi extension", () => {
 	});
 
 
-	test("premind_status tool returns daemon status", async () => {
+	test("premind_status tool returns current-session status", async () => {
 		const mock = createMockPi();
-		const client = createClient();
+		const client = createClient({ statusResult: { ...status, sessions: [{ ...status.sessions[0]!, sessionId: "/tmp/session.jsonl" }] } });
 		createPremindPiExtension({
 			createDaemonClient: () => client.client,
 			config: { statusPollIntervalMs: 0 },
@@ -1181,12 +1186,17 @@ describe("premind Pi extension", () => {
 			{},
 			undefined,
 			undefined,
-			{},
+			createCommandContext(),
 		);
-		assert.match(
-			result.content[0].text,
-			/premind: v\d+\.\d+\.\d+ \([0-9a-f]{6}\) · 1 active session/,
-		);
-		assert.match(result.content[0].text, /pending 2/);
+		assert.match(result.content[0].text, /owner\/repo @ feature\/pi/);
+		assert.match(result.content[0].text, /2 pending/);
+	});
+
+	test("premind_debug_status tool returns all-session diagnostics", async () => {
+		const mock = createMockPi();
+		const client = createClient();
+		createPremindPiExtension({ createDaemonClient: () => client.client, config: { statusPollIntervalMs: 0 } })(mock.pi as never);
+		const result = await mock.tools.get("premind_debug_status")!.execute("tool-1", {}, undefined, undefined, createCommandContext());
+		assert.match(result.content[0].text, /premind: v\d+\.\d+\.\d+/);
 	});
 });

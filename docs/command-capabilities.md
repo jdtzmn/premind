@@ -4,7 +4,8 @@ This matrix is generated from `src/shared/command-capabilities.ts`. Harness-visi
 
 | Capability | Classification | Scope | Canonical | Pi | Claude Code | OpenCode |
 | --- | --- | --- | --- | --- | --- | --- |
-| `status` | common | daemon | commands `/premind:status`<br>tools `premind_status` | commands `/premind:status`<br>tools `premind_status` | commands `/premind:status`<br>tools `status` | commands `/premind-status`<br>tools `premind_status` |
+| `status` | common | session | commands `/premind:status`<br>tools `premind_status` | commands `/premind:status`<br>tools `premind_status` | commands `/premind:status`<br>tools `status` | commands `/premind-status`<br>tools `premind_status` |
+| `debug-status` | adapter-specific | daemon | commands `/premind:debug-status`<br>tools `premind_debug_status` | commands `/premind:debug-status`<br>tools `premind_debug_status` | — | commands `/premind:debug-status`<br>tools `premind_debug_status` |
 | `doctor` | common | daemon | commands `/premind:doctor`<br>tools `premind_doctor` | commands `/premind:doctor`<br>tools `premind_doctor` | commands `/premind:doctor`<br>tools `probe` | commands `/premind:doctor`<br>tools `premind_probe` |
 | `deliver` | common | session | commands `/premind:deliver`<br>tools `premind_deliver` | commands `/premind:deliver`<br>tools `premind_deliver`<br>deprecated command aliases `/premind:flush` | commands `/premind:deliver` | commands `/premind:deliver`<br>tools `premind_deliver`<br>deprecated command aliases `/premind-send-now`<br>deprecated tool aliases `premind_send_now` |
 | `enable` | common | daemon | commands `/premind:enable`<br>tools `premind_enable` | commands `/premind:enable`<br>tools `premind_enable` | commands `/premind:enable`<br>tools `enable` | commands `/premind-enable`<br>tools `premind_enable` |
@@ -18,6 +19,7 @@ This matrix is generated from `src/shared/command-capabilities.ts`. Harness-visi
 
 - `status` / claude / tools: Claude MCP tools omit the premind_ prefix.
 - `status` / opencode / commands: OpenCode retains its established hyphenated status command.
+- `debug-status` / claude / commands: Claude status is aggregate/redacted; full session inventory is not exposed.
 - `doctor` / claude / tools: Claude retains the existing probe MCP tool name.
 - `doctor` / opencode / tools: OpenCode retains the existing premind_probe tool name.
 - `deliver` / claude / tools: Claude delivery remains owned by the Stop hook.

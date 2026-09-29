@@ -1,4 +1,5 @@
 import { PREMIND_VERSION_LABEL } from "../shared/version.ts";
+import { renderCurrentStatus } from "../shared/status-view.ts";
 import {
 	CONFIG_DIR_NAME,
 	type ExtensionAPI,
@@ -353,10 +354,11 @@ export const createPremindPiExtension = (
 			return attachPiSession(ctx);
 		};
 
-		const getStatusText = async () => {
+		const getStatusText = async (ctx: { cwd: string; sessionManager?: { getSessionFile?: () => string | undefined } }) => {
 			const status = await createDaemonClient().debugStatus();
-			return renderPremindPiStatus(status);
+			return renderCurrentStatus(status, currentSessionId ?? getPiSessionId(ctx));
 		};
+		const getDebugStatusText = async () => renderPremindPiStatus(await createDaemonClient().debugStatus());
 
 		const getDoctorText = async () => {
 			const lines = [
@@ -684,15 +686,26 @@ export const createPremindPiExtension = (
 
 		pi.registerCommand("premind:status", {
 			description:
-				"Show premind daemon status, attached sessions, and pending reminders",
+				"Show the current session's watched PRs and premind health",
 			handler: async (_args, ctx) => {
 				try {
-					ctx.ui.notify(await getStatusText(), "info");
+					ctx.ui.notify(await getStatusText(ctx), "info");
 				} catch (error) {
 					ctx.ui.notify(
 						`${STATUS_ERROR_PREFIX}: ${error instanceof Error ? error.message : String(error)}`,
 						"error",
 					);
+				}
+			},
+		});
+
+		pi.registerCommand("premind:debug-status", {
+			description: "Show the full premind daemon and all-session diagnostic inventory",
+			handler: async (_args, ctx) => {
+				try {
+					ctx.ui.notify(await getDebugStatusText(), "info");
+				} catch (error) {
+					ctx.ui.notify(`${STATUS_ERROR_PREFIX}: ${error instanceof Error ? error.message : String(error)}`, "error");
 				}
 			},
 		});
@@ -972,16 +985,16 @@ export const createPremindPiExtension = (
 			name: "premind_status",
 			label: "Premind Status",
 			description:
-				"Show premind daemon status including active sessions, watchers, and pending reminder counts.",
+				"Show the current premind session's branch, watched PR links, health, and pending reminders.",
 			promptSnippet: "Inspect premind PR reminder daemon status.",
 			promptGuidelines: [
-				"Use premind_status when the user asks about premind daemon state, PR reminder attachment, pending reminders, or watcher status.",
+				"Use premind_status for the current session's watched PRs or health; use premind_debug_status to inspect all sessions.",
 			],
 			parameters: Type.Object({}),
-			async execute() {
+			async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
 				try {
 					return {
-						content: [{ type: "text" as const, text: await getStatusText() }],
+						content: [{ type: "text" as const, text: await getStatusText(ctx) }],
 						details: {},
 					};
 				} catch (error) {
@@ -997,6 +1010,16 @@ export const createPremindPiExtension = (
 				}
 			},
 		});
+		pi.registerTool({
+			name: "premind_debug_status",
+			label: "Premind Debug Status",
+			description: "Inspect the full daemon and all premind sessions for troubleshooting.",
+			parameters: Type.Object({}),
+			async execute() {
+				return { content: [{ type: "text" as const, text: await getDebugStatusText() }], details: {} };
+			},
+		});
+
 	};
 };
 
