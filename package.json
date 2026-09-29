@@ -13,7 +13,8 @@
     "docs",
     "extensions",
     "plugin-claude",
-    "plugins"
+    "plugins",
+    ".agents"
   ],
   "scripts": {
     "build": "bun run build:runtime && tsc -p tsconfig.json",
