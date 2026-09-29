@@ -281,6 +281,11 @@ describe("Router worktree subscription operations", () => {
       ],
       3,
     );
+    store.saveSnapshot("acme/repo", 42, {
+      core: { number: 42, title: "Watch this PR", url: "https://github.com/acme/repo/pull/42", state: "OPEN", isDraft: false, headRefName: "feature", baseRefName: "main", headRefOid: "abc", mergeStateStatus: "DIRTY" },
+      checks: [{ name: "build", state: "fail", link: "https://example.com/log" }],
+      reviews: [], issueComments: [{ id: 1, body: "private content" }], reviewComments: [], fetchedAt: 123,
+    });
     const router = new Router(store);
     const response = await router.handle({
       type: "debugStatus",
@@ -324,6 +329,7 @@ describe("Router worktree subscription operations", () => {
         writePolicy: "owned-active",
         state: "active",
         pendingEventCount: 1,
+        snapshot: { title: "Watch this PR", url: "https://github.com/acme/repo/pull/42", state: "OPEN", isDraft: false, mergeStateStatus: "DIRTY", checks: [{ state: "fail" }], fetchedAt: 123 },
       },
       {
         repo: "other/repo",
@@ -332,6 +338,7 @@ describe("Router worktree subscription operations", () => {
         writePolicy: "observe-only",
         state: "unsubscribed",
         pendingEventCount: 0,
+        snapshot: null,
       },
     ]);
     store.close();

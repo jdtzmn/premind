@@ -55,3 +55,24 @@ test("disabled polling and unsubscribed branch PR remain explicit", () => {
   assert.match(rendered, /Watching 0 PRs · branch PR #42 \(not watched\)/);
   assert.doesNotMatch(rendered, /\/pull\/42/);
 });
+
+test("cached signals are ordered, styled only through the interactive hook, with safe raw links", () => {
+  const fixture = structuredClone(status);
+  const [session] = fixture.sessions;
+  const [other, branch, foreign] = session!.subscriptions!;
+  const now = 1_000_000;
+  const base = { state: "OPEN", isDraft: false, reviewDecision: "APPROVED", fetchedAt: now, checks: [{ state: "pass" }] };
+  branch!.snapshot = { ...base, title: "Branch\nPR", url: "https://github.com/acme/repo/pull/42", mergeStateStatus: "CLEAN" };
+  other!.snapshot = { ...base, title: "Broken", url: "https://github.com/acme/repo/pull/99", mergeStateStatus: "DIRTY", checks: [{ state: "fail" }] };
+  foreign!.snapshot = { ...base, title: "Other", url: "https://evil.example/pull/5", mergeStateStatus: "CLEAN" };
+  const plain = renderCurrentStatus(fixture, "this-session", { now });
+  assert.ok(plain.indexOf("#42 Branch") < plain.indexOf("#99 Broken"));
+  assert.match(plain, /#42 Branch PR · ✓ ready to merge — https:\/\/github.com\/acme\/repo\/pull\/42/);
+  assert.match(plain, /#99 Broken · ✗ conflicts, CI failing/);
+  assert.match(plain, /elsewhere\/other#5 Other · ✓ ready to merge — https:\/\/github.com\/elsewhere\/other\/pull\/5/);
+  assert.doesNotMatch(plain, /evil\.example|\u001b/);
+  const styled = renderCurrentStatus(fixture, "this-session", { now, style: (text, kind) => `<${kind}>${text}</${kind}>` });
+  assert.match(styled, /<error>✗ conflicts, CI failing<\/error>/);
+  assert.match(styled, /<success>✓ ready to merge<\/success>/);
+  assert.match(styled, /<success>✓ ready to merge<\/success> — https:\/\/github.com\/acme\/repo\/pull\/42/);
+});

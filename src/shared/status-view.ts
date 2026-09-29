@@ -1,6 +1,7 @@
 import type { DebugStatusResponse } from "./schema.ts";
+import { getPrSignal, type StatusSignal } from "./status-signal.ts";
 
-export type StatusSignal = "error" | "warning" | "success" | "merged" | "muted" | "unknown";
+export type { StatusSignal } from "./status-signal.ts";
 export type StatusStyler = (text: string, signal: StatusSignal) => string;
 
 const prLink = (repo: string, number: number) =>
@@ -8,10 +9,19 @@ const prLink = (repo: string, number: number) =>
     ? `https://github.com/${repo}/pull/${number}`
     : "link unavailable";
 
+const snapshotLink = (repo: string, number: number, url: string | undefined) => {
+  if (!url) return prLink(repo, number);
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol === "https:" && parsed.hostname === "github.com" && !parsed.username && !parsed.password &&
+        parsed.pathname.toLowerCase() === `/${repo}/pull/${number}`.toLowerCase() && !parsed.search && !parsed.hash) return url;
+  } catch { /* Ignore malformed cached URLs. */ }
+  return prLink(repo, number);
+};
 export const renderCurrentStatus = (
   status: DebugStatusResponse,
   sessionId: string | undefined,
-  options: { style?: StatusStyler; debugCommand?: string } = {},
+  options: { style?: StatusStyler; debugCommand?: string; now?: number } = {},
 ): string => {
   const session = status.sessions.find((item) => item.sessionId === sessionId);
   const otherCount = status.sessions.length - (session ? 1 : 0);
@@ -37,14 +47,19 @@ export const renderCurrentStatus = (
     const sorted = [...watched.values()].sort((left, right) =>
       Number(`${right.repo.toLowerCase()}#${right.prNumber}` === branchKey) -
         Number(`${left.repo.toLowerCase()}#${left.prNumber}` === branchKey) ||
+      getPrSignal(left.snapshot, options.now, status.globallyDisabled).priority -
+        getPrSignal(right.snapshot, options.now, status.globallyDisabled).priority ||
       left.repo.localeCompare(right.repo) || left.prNumber - right.prNumber,
     );
     for (const subscription of sorted) {
       const label = subscription.repo.toLowerCase() === repo.toLowerCase()
         ? `#${subscription.prNumber}`
         : `${subscription.repo}#${subscription.prNumber}`;
-      const signal = options.style?.("? status unknown", "unknown") ?? "? status unknown";
-      lines.push(`  ${label} · ${signal} — ${prLink(subscription.repo, subscription.prNumber)}`);
+      const { text, kind } = getPrSignal(subscription.snapshot, options.now, status.globallyDisabled);
+      const signal = options.style?.(text, kind) ?? text;
+      const title = subscription.snapshot?.title.replace(/[\x00-\x1f\x7f]/g, " ").trim();
+      const link = snapshotLink(subscription.repo, subscription.prNumber, subscription.snapshot?.url);
+      lines.push(`  ${label}${title ? ` ${title}` : ""} · ${signal} — ${link}`);
     }
   }
   if (otherCount > 0) {

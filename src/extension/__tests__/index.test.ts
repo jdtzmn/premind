@@ -914,6 +914,31 @@ describe("premind Pi extension", () => {
 		assert.match(notifications[0]?.message ?? "", /owner\/repo @ feature\/pi/);
 	});
 
+test("Pi interactive status colors Unicode signals without styling tool text", async () => {
+  const mock = createMockPi();
+  const now = Date.now();
+  const snapshot = (number: number, state: string) => ({ title: `PR ${number}`, url: `https://github.com/owner/repo/pull/${number}`, state: "OPEN", isDraft: false, mergeStateStatus: state, reviewDecision: "APPROVED", checks: [{ state: state === "DIRTY" ? "fail" : "pass" }], fetchedAt: now });
+  const client = createClient({ statusResult: { ...status, sessions: [{ ...status.sessions[0]!, sessionId: "/tmp/session.jsonl", subscriptions: [
+    { repo: "owner/repo", prNumber: 123, source: "automatic", writePolicy: "owned-active", state: "active", pendingEventCount: 0, snapshot: snapshot(123, "CLEAN") },
+    { repo: "owner/repo", prNumber: 124, source: "manual", writePolicy: "observe-only", state: "active", pendingEventCount: 0, snapshot: snapshot(124, "DIRTY") },
+  ] }] } as DebugStatusResponse });
+  createPremindPiExtension({ createDaemonClient: () => client.client, config: { statusPollIntervalMs: 0 } })(mock.pi as never);
+  const ctx = createCommandContext() as CommandContext & { hasUI: boolean; ui: CommandContext["ui"] & { custom: (factory: (...args: never[]) => { render: (width: number) => string[] }) => Promise<void> } };
+  ctx.hasUI = true;
+  let rendered = "";
+  ctx.ui.custom = async (factory) => {
+    const component = factory(null as never, { fg: (color: string, text: string) => `<${color}>${text}</${color}>` } as never, null as never, (() => {}) as never);
+    rendered = component.render(120).join("\n");
+  };
+  await mock.commands.get("premind:status")!.handler("", ctx);
+  assert.match(rendered, /<success>✓ ready to merge<\/success>/);
+  assert.match(rendered, /<error>✗ conflicts, CI failing<\/error>/);
+  assert.match(rendered, /https:\/\/github.com\/owner\/repo\/pull\/123/);
+  const plain = await mock.tools.get("premind_status")!.execute("call", {}, undefined, undefined, createCommandContext());
+  assert.match(plain.content[0].text, /✓ ready to merge/);
+  assert.doesNotMatch(plain.content[0].text, /<success>|\u001b/);
+});
+
 	test("/premind:doctor reports Pi runtime and delivery health", async () => {
 		const mock = createMockPi();
 		const client = createClient();

@@ -1322,6 +1322,7 @@ export class StateStore {
 									subscription.lastDeliveredEventSeq,
 								)
 							: 0,
+					snapshot: subscription.state === "active" ? this.getStatusSnapshot(subscription.repo, subscription.prNumber) : null,
 				}),
 			);
 			const pendingReminderCount =
@@ -1592,6 +1593,21 @@ export class StateStore {
 		if (prNumber !== null) {
 			this.touchPrWatcher(repo, prNumber, checkedAt);
 		}
+	}
+
+	private getStatusSnapshot(repo: string, prNumber: number) {
+		const snapshot = this.getSnapshot(repo, prNumber);
+		if (!snapshot?.core || !Array.isArray(snapshot.checks)) return null;
+		return {
+			title: snapshot.core.title,
+			url: snapshot.core.url,
+			state: snapshot.core.state,
+			isDraft: snapshot.core.isDraft,
+			mergeStateStatus: snapshot.core.mergeStateStatus,
+			...(snapshot.core.reviewDecision !== undefined ? { reviewDecision: snapshot.core.reviewDecision } : {}),
+			checks: snapshot.checks.map((check) => ({ state: check.state })),
+			fetchedAt: snapshot.fetchedAt,
+		};
 	}
 
 	getSnapshot(repo: string, prNumber: number) {

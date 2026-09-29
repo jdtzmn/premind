@@ -307,6 +307,16 @@ export const debugStatusResponseSchema = z
                   writePolicy: subscriptionWritePolicySchema,
                   state: z.enum(["active", "unsubscribed"]),
                   pendingEventCount: z.number().int().nonnegative(),
+                  snapshot: z.object({
+                    title: z.string(),
+                    url: z.string().url(),
+                    state: z.string(),
+                    isDraft: z.boolean(),
+                    mergeStateStatus: z.string().optional(),
+                    reviewDecision: z.string().nullable().optional(),
+                    checks: z.array(z.object({ state: z.string().optional() }).strict()),
+                    fetchedAt: z.number().int(),
+                  }).strict().nullable().optional(),
                 })
                 .strict(),
             )

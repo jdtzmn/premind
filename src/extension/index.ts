@@ -7,7 +7,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { Text } from "@earendil-works/pi-tui";
+import { Text, Key, matchesKey } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { PremindDaemonClient } from "../client/daemon-client.ts";
 import { detectGitContext } from "../client/git-context.ts";
@@ -689,7 +689,25 @@ export const createPremindPiExtension = (
 				"Show the current session's watched PRs and premind health",
 			handler: async (_args, ctx) => {
 				try {
-					ctx.ui.notify(await getStatusText(ctx), "info");
+					const status = await createDaemonClient().debugStatus();
+					const sessionId = currentSessionId ?? getPiSessionId(ctx);
+					if (ctx.hasUI && typeof ctx.ui.custom === "function") {
+						await ctx.ui.custom<void>((_tui, theme, _keys, done) => {
+							const display = new Text();
+							const hint = new Text("Esc or Enter to close");
+							return {
+								render(width: number) {
+									const colors = { error: "error", warning: "warning", success: "success", merged: "accent", muted: "muted", unknown: "muted" } as const;
+									display.setText(renderCurrentStatus(status, sessionId, { style: (text, signal) => theme.fg(colors[signal], text) }));
+									return [...display.render(width), "", ...hint.render(width).map((line) => theme.fg("dim", line))];
+								},
+								invalidate() { display.invalidate(); hint.invalidate(); },
+								handleInput(data: string) { if (matchesKey(data, Key.escape) || matchesKey(data, Key.enter)) done(); },
+							};
+						});
+					} else {
+						ctx.ui.notify(renderCurrentStatus(status, sessionId), "info");
+					}
 				} catch (error) {
 					ctx.ui.notify(
 						`${STATUS_ERROR_PREFIX}: ${error instanceof Error ? error.message : String(error)}`,
