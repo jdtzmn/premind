@@ -114,6 +114,17 @@ export const acquireDaemonStartLock = ({
   return undefined;
 };
 
+// A launcher holds the start lock while its daemon boots, so it hands the
+// lock token to that daemon. Startup steps that must exclude every other
+// launcher accept a lock held under the inherited token as their own.
+export const DAEMON_START_LOCK_TOKEN_ENV = "PREMIND_DAEMON_START_LOCK_TOKEN";
+
+export const isDaemonStartLockHeldBy = (
+  token: string,
+  { stateDir = PREMIND_STATE_DIR }: { stateDir?: string } = {},
+): boolean =>
+  readLockOwner(path.join(stateDir, "daemon-start.lock"))?.token === token;
+
 export const releaseDaemonStartLock = (lock: DaemonStartLock) => {
   try {
     fs.closeSync(lock.fd);

@@ -6,6 +6,10 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, test } from "node:test";
 import {
+  acquireDaemonStartLock,
+  releaseDaemonStartLock,
+} from "../daemon-startup.ts";
+import {
   bridgeLegacyStorage,
   LEGACY_STORAGE_QUARANTINE_BYTES,
 } from "./storage-bridge.ts";
@@ -46,6 +50,31 @@ const readModernValue = (dbPath: string) => {
 };
 
 describe("legacy storage bridge", () => {
+  test("accepts only the start lock handed down by its launcher", async () => {
+    const options = createOptions();
+    const launcherLock = acquireDaemonStartLock({ stateDir: options.stateDir });
+    assert.ok(launcherLock);
+    try {
+      await assert.rejects(
+        bridgeLegacyStorage({ ...options, inheritedStartLockToken: "another-launcher" }),
+        /LEGACY_STARTUP_BUSY/,
+      );
+      assert.equal(
+        await bridgeLegacyStorage({
+          ...options,
+          inheritedStartLockToken: launcherLock.token,
+        }),
+        "migrated",
+      );
+      assert.equal(
+        fs.readFileSync(launcherLock.path, "utf8").endsWith(launcherLock.token),
+        true,
+      );
+    } finally {
+      releaseDaemonStartLock(launcherLock);
+    }
+  });
+
   test("backs up retained state and permanently quarantines the historical path", async () => {
     const options = createOptions();
     let guardBound = false;

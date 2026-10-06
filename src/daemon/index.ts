@@ -14,7 +14,7 @@ import {
   PREMIND_REMINDER_HANDOFF_STALE_MS,
   PREMIND_SESSION_STALE_MS,
 } from "../shared/constants.ts"
-import { isSocketReachable } from "../shared/daemon-startup.ts"
+import { DAEMON_START_LOCK_TOKEN_ENV, isSocketReachable } from "../shared/daemon-startup.ts"
 import { reconcileCompatibilityMarker } from "../shared/protocol/compatibility-marker-reconciler.ts"
 import { LegacyV1GuardServer } from "../shared/protocol/legacy-v1-guard-server.ts"
 import { LegacyV1ProxyRouter } from "../shared/protocol/legacy-v1-proxy.ts"
@@ -64,6 +64,7 @@ async function main() {
     modernDbPath: PREMIND_DB_PATH,
     historicalSocketPath: PREMIND_SOCKET_PATH,
     compatibilityLockPath: PREMIND_COMPATIBILITY_LOCK_PATH,
+    inheritedStartLockToken: process.env[DAEMON_START_LOCK_TOKEN_ENV],
     bindGuard: async () => {
       const store = new StateStore(PREMIND_DB_PATH)
       const databaseStorageEpoch = store.getStorageEpoch()

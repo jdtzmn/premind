@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { PREMIND_SOCKET_PATH } from "../shared/constants.ts";
 import {
   acquireDaemonStartLock,
+  DAEMON_START_LOCK_TOKEN_ENV,
   probeDaemon,
   releaseDaemonStartLock,
   waitForDaemon,
@@ -101,7 +102,7 @@ export async function ensureDaemonRunning(socketPath = PREMIND_SOCKET_PATH) {
     const child = spawn(runner.command, [...runner.args, DAEMON_ENTRY], {
       detached: true,
       stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env },
+      env: { ...process.env, [DAEMON_START_LOCK_TOKEN_ENV]: lock.token },
       cwd: spawnCwd,
     });
 

@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import {
   CLAUDE_REQUIRED_DAEMON_OPERATIONS,
+  DAEMON_START_LOCK_TOKEN_ENV,
   acquireDaemonStartLock,
   probeDaemon,
   releaseDaemonStartLock,
@@ -41,7 +42,7 @@ export const ensureDaemonRunning = async () => {
     const child = spawn(process.execPath, [runtimePath], {
       detached: true,
       stdio: "ignore",
-      env: process.env,
+      env: { ...process.env, [DAEMON_START_LOCK_TOKEN_ENV]: lock.token },
     });
     child.unref();
     return await waitForDaemon(

@@ -4,6 +4,7 @@ import path from "node:path";
 import { backup, DatabaseSync } from "node:sqlite";
 import {
   acquireDaemonStartLock,
+  isDaemonStartLockHeldBy,
   isSocketReachable,
   releaseDaemonStartLock,
 } from "../daemon-startup.ts";
@@ -20,6 +21,8 @@ export type StorageBridgeOptions = {
   modernDbPath: string;
   historicalSocketPath: string;
   compatibilityLockPath: string;
+  /** Start-lock token handed down by the launcher that spawned this daemon. */
+  inheritedStartLockToken?: string;
   bindGuard?: () => Promise<void>;
   afterModernPublish?: () => void;
 };
@@ -63,7 +66,17 @@ export const bridgeLegacyStorage = async (
   options: StorageBridgeOptions,
 ): Promise<"migrated" | "already-bridged"> => {
   const daemonLock = acquireDaemonStartLock({ stateDir: options.stateDir });
-  if (!daemonLock) throw new Error("LEGACY_STARTUP_BUSY: daemon start lock is held");
+  if (
+    !daemonLock &&
+    !(
+      options.inheritedStartLockToken &&
+      isDaemonStartLockHeldBy(options.inheritedStartLockToken, {
+        stateDir: options.stateDir,
+      })
+    )
+  ) {
+    throw new Error("LEGACY_STARTUP_BUSY: daemon start lock is held");
+  }
   try {
     return await withCompatibilityMarkerLockAsync(
       options.compatibilityLockPath,
@@ -121,6 +134,6 @@ export const bridgeLegacyStorage = async (
       },
     );
   } finally {
-    releaseDaemonStartLock(daemonLock);
+    if (daemonLock) releaseDaemonStartLock(daemonLock);
   }
 };

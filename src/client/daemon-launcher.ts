@@ -4,6 +4,7 @@ import path from "node:path";
 import { PREMIND_SOCKET_PATH, PREMIND_STATE_DIR } from "../shared/constants.ts";
 import {
   acquireDaemonStartLock,
+  DAEMON_START_LOCK_TOKEN_ENV,
   inspectDaemon,
   releaseDaemonStartLock,
   type DaemonProbeResult,
@@ -173,6 +174,7 @@ export const createDaemonLauncher = (options: DaemonLauncherOptions) => {
               ...options.env,
               PREMIND_SOCKET_PATH: socketPath,
               PREMIND_STATE_DIR: stateDir,
+              ...(lock ? { [DAEMON_START_LOCK_TOKEN_ENV]: lock.token } : {}),
             },
           });
         } finally {
