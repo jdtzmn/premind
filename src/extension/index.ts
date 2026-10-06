@@ -697,14 +697,35 @@ export const createPremindPiExtension = (
 						await ctx.ui.custom<void>((_tui, theme, _keys, done) => {
 							const display = new Text();
 							const hint = new Text("Esc or Enter to close");
+							const colors = {
+								error: "error",
+								warning: "warning",
+								success: "success",
+								merged: "accent",
+								muted: "muted",
+								unknown: "muted",
+							} as const;
 							return {
 								render(width: number) {
-									const colors = { error: "error", warning: "warning", success: "success", merged: "accent", muted: "muted", unknown: "muted" } as const;
-									display.setText(renderCurrentStatus(status, sessionId, { style: (text, signal) => "NO_COLOR" in process.env ? text : theme.fg(colors[signal], text) }));
-									return [...display.render(width), "", ...hint.render(width).map((line) => "NO_COLOR" in process.env ? line : theme.fg("dim", line))];
+									const useColor = !("NO_COLOR" in process.env);
+									const text = renderCurrentStatus(status, sessionId, {
+										style: (signalText, signal) =>
+											useColor ? theme.fg(colors[signal], signalText) : signalText,
+									});
+									display.setText(text);
+									const hintLines = hint.render(width);
+									const styledHint = useColor
+										? hintLines.map((line) => theme.fg("dim", line))
+										: hintLines;
+									return [...display.render(width), "", ...styledHint];
 								},
-								invalidate() { display.invalidate(); hint.invalidate(); },
-								handleInput(data: string) { if (matchesKey(data, Key.escape) || matchesKey(data, Key.enter)) done(); },
+								invalidate() {
+									display.invalidate();
+									hint.invalidate();
+								},
+								handleInput(data: string) {
+									if (matchesKey(data, Key.escape) || matchesKey(data, Key.enter)) done();
+								},
 							};
 						});
 					} else {
