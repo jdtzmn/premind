@@ -12,6 +12,8 @@ This matrix is generated from `src/shared/command-capabilities.ts`. Harness-visi
 | `set-active-checkout` | common | session | commands `/premind:set-active-checkout`<br>tools `premind_set_active_checkout` | commands `/premind:set-active-checkout`<br>tools `premind_set_active_checkout` | tools `set_active_checkout` | tools `premind_set_active_checkout` |
 | `subscribe` | common | session | commands `/premind:subscribe`<br>tools `premind_subscribe` | commands `/premind:subscribe`<br>tools `premind_subscribe` | commands `/premind:subscribe`<br>tools `subscribe` | tools `premind_subscribe` |
 | `unsubscribe` | common | session | commands `/premind:unsubscribe`<br>tools `premind_unsubscribe` | commands `/premind:unsubscribe`<br>tools `premind_unsubscribe` | commands `/premind:unsubscribe`<br>tools `unsubscribe` | tools `premind_unsubscribe` |
+| `pause` | adapter-specific | session | commands `/premind:pause`<br>tools `premind_pause` | commands `/premind:pause`<br>tools `premind_pause` | — | — |
+| `resume` | adapter-specific | session | commands `/premind:resume`<br>tools `premind_resume` | commands `/premind:resume`<br>tools `premind_resume` | — | — |
 | `prune` | adapter-specific | daemon | commands `/premind:prune` | commands `/premind:prune` | — | — |
 
 ## Intentional exceptions
@@ -33,5 +35,6 @@ This matrix is generated from `src/shared/command-capabilities.ts`. Harness-visi
 - `unsubscribe` / claude / tools: Claude MCP tools omit the premind_ prefix.
 - `unsubscribe` / opencode / commands: OpenCode currently exposes this as a model tool.
 - `prune` is Pi-specific administrative maintenance and is not model-callable.
+- `pause` and `resume` are Pi session-delivery controls; they never change subscriptions and are distinct from global `disable` / `enable`.
 - Claude status remains aggregate and redacted; Pi and OpenCode may expose session detail.
 - Delivery mechanics remain harness-specific even though `/premind:deliver` is canonical.

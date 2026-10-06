@@ -222,6 +222,30 @@ export const commandCapabilities = {
 			},
 		},
 	},
+	pause: {
+		classification: "adapter-specific",
+		scope: "session",
+		description:
+			"Pause reminder delivery for one session while preserving its subscriptions.",
+		canonical: { commands: ["premind:pause"], tools: ["premind_pause"] },
+		harnesses: {
+			pi: { commands: ["premind:pause"], tools: ["premind_pause"] },
+			claude: { commands: [], tools: [] },
+			opencode: { commands: [], tools: [] },
+		},
+	},
+	resume: {
+		classification: "adapter-specific",
+		scope: "session",
+		description:
+			"Resume reminder delivery for a paused session without changing subscriptions.",
+		canonical: { commands: ["premind:resume"], tools: ["premind_resume"] },
+		harnesses: {
+			pi: { commands: ["premind:resume"], tools: ["premind_resume"] },
+			claude: { commands: [], tools: [] },
+			opencode: { commands: [], tools: [] },
+		},
+	},
 	prune: {
 		classification: "adapter-specific",
 		scope: "daemon",
@@ -302,6 +326,7 @@ export const renderCommandCapabilityDocumentation = (): string => {
 	}
 	lines.push(
 		"- `prune` is Pi-specific administrative maintenance and is not model-callable.",
+		"- `pause` and `resume` are Pi session-delivery controls; they never change subscriptions and are distinct from global `disable` / `enable`.",
 		"- Claude status remains aggregate and redacted; Pi and OpenCode may expose session detail.",
 		"- Delivery mechanics remain harness-specific even though `/premind:deliver` is canonical.",
 		"",

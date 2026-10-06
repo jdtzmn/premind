@@ -97,6 +97,11 @@ const PRUNE_ERROR_PREFIX = "premind prune failed";
 const DELIVER_ERROR_PREFIX = "premind deliver failed";
 const CHECKOUT_ERROR_PREFIX = "premind active checkout update failed";
 const SUBSCRIPTION_ERROR_PREFIX = "premind subscription update failed";
+const SESSION_CONTROL_ERROR_PREFIX = "premind session control failed";
+const PAUSED_MESSAGE =
+	"premind paused reminders for this session only. Subscriptions are unchanged and PR updates keep accumulating; run /premind:resume to deliver them.";
+const RESUMED_MESSAGE =
+	"premind resumed reminders for this session. Subscriptions are unchanged; queued PR updates deliver at the next safe point.";
 const SESSION_SOURCE = "pi-extension";
 const DEFAULT_HEARTBEAT_MS = 10_000;
 const DEFAULT_STATUS_POLL_INTERVAL_MS = 15_000;
@@ -385,6 +390,33 @@ export const createPremindPiExtension = (
 			const result = await createDaemonClient().pruneClosedSessions();
 			return result as PruneClosedSessionsResult;
 		};
+
+		const setCurrentSessionPaused = async (
+			ctx: {
+				cwd: string;
+				sessionManager?: { getSessionFile?: () => string | undefined };
+			},
+			paused: boolean,
+		) => {
+			const { client, sessionId } = await ensurePiSessionAttached(ctx);
+			if (paused) await client.pauseSession(sessionId);
+			else await client.resumeSession(sessionId);
+			return paused ? PAUSED_MESSAGE : RESUMED_MESSAGE;
+		};
+
+		const isCurrentSessionPaused = async () => {
+			if (!currentSessionId) return false;
+			const status = await getClient().debugStatus();
+			return status.sessions.some(
+				(session) =>
+					session.sessionId === currentSessionId && session.status === "paused",
+			);
+		};
+
+		const describeUndelivered = async () =>
+			(await isCurrentSessionPaused().catch(() => false))
+				? "premind is paused for this session; run /premind:resume before delivering reminders."
+				: "premind has no pending reminders for this session.";
 
 		const setGlobalPolling = async (disabled: boolean) => {
 			const result = await createDaemonClient().setGlobalDisabled(disabled);
@@ -794,6 +826,30 @@ export const createPremindPiExtension = (
 			},
 		});
 
+		for (const [name, paused] of [
+			["premind:pause", true],
+			["premind:resume", false],
+		] as const) {
+			pi.registerCommand(name, {
+				description: paused
+					? "Pause premind reminders for this session only; subscriptions keep being watched"
+					: "Resume premind reminders for this session without changing subscriptions",
+				handler: async (_args, ctx) => {
+					try {
+						const message = await setCurrentSessionPaused(ctx, paused);
+						if (paused) setStatus(ctx, `${PR_ICON} paused`);
+						else await refreshStatusbar(ctx);
+						ctx.ui.notify(message, "info");
+					} catch (error) {
+						ctx.ui.notify(
+							`${SESSION_CONTROL_ERROR_PREFIX}: ${error instanceof Error ? error.message : String(error)}`,
+							"error",
+						);
+					}
+				},
+			});
+		}
+
 		const deliverCommand = {
 			description:
 				"Deliver all pending premind reminders for the current session, if any",
@@ -810,7 +866,7 @@ export const createPremindPiExtension = (
 					ctx.ui.notify(
 						result.delivered
 							? `premind delivered ${result.batches.length} reminder batch${result.batches.length === 1 ? "" : "es"}.`
-							: "premind has no pending reminders for this session.",
+							: await describeUndelivered(),
 						"info",
 					);
 				} catch (error) {
@@ -904,6 +960,37 @@ export const createPremindPiExtension = (
 			},
 		});
 
+		for (const [name, label, paused, description] of [
+			[
+				"premind_pause",
+				"Premind Pause",
+				true,
+				"Pause premind reminder delivery for the current session only. Every subscription, watcher, and accumulating PR update is preserved. Use this, never premind_disable, when asked to pause, mute, or quiet premind.",
+			],
+			[
+				"premind_resume",
+				"Premind Resume",
+				false,
+				"Resume premind reminder delivery for the current session without changing subscriptions. Queued PR updates deliver at the next safe point. Use this, never premind_enable, to undo premind_pause.",
+			],
+		] as const) {
+			pi.registerTool({
+				name,
+				label,
+				description,
+				parameters: Type.Object({}),
+				async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+					const text = await setCurrentSessionPaused(ctx, paused);
+					if (paused) setStatus(ctx, `${PR_ICON} paused`);
+					else await refreshStatusbar(ctx);
+					return {
+						content: [{ type: "text" as const, text }],
+						details: {},
+					};
+				},
+			});
+		}
+
 		pi.registerTool({
 			name: "premind_deliver",
 			label: "Premind Deliver",
@@ -921,7 +1008,7 @@ export const createPremindPiExtension = (
 				else await refreshStatusbar(ctx);
 				const text = result.delivered
 					? `premind delivered ${result.batches.length} reminder batch${result.batches.length === 1 ? "" : "es"}.`
-					: "premind has no pending reminders for this session.";
+					: await describeUndelivered();
 				return {
 					content: [{ type: "text" as const, text }],
 					details: {},

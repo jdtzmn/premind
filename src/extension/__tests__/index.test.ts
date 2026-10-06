@@ -341,12 +341,12 @@ describe("premind Pi extension", () => {
 		assert.equal(mock.commands.has("premind:activate-worktree"), false);
 		assert.ok(mock.commands.has("premind:subscribe"));
 		assert.ok(mock.commands.has("premind:unsubscribe"));
-		assert.equal(mock.commands.has("premind:pause"), false);
-		assert.equal(mock.commands.has("premind:resume"), false);
+		assert.ok(mock.commands.has("premind:pause"));
+		assert.ok(mock.commands.has("premind:resume"));
 		assert.ok(mock.commands.has("premind:deliver"));
 		assert.ok(mock.commands.has("premind:flush"));
-		assert.equal(mock.tools.has("premind_pause"), false);
-		assert.equal(mock.tools.has("premind_resume"), false);
+		assert.ok(mock.tools.has("premind_pause"));
+		assert.ok(mock.tools.has("premind_resume"));
 		assert.ok(mock.tools.has("premind_deliver"));
 		assert.ok(mock.tools.has("premind_doctor"));
 		assert.ok(mock.tools.has("premind_enable"));
@@ -1055,6 +1055,83 @@ describe("premind Pi extension", () => {
 				"premind subscribed to owner/repo#42.",
 				"premind unsubscribed from owner/repo#42.",
 			],
+		);
+	});
+
+	test("pause and resume control only the current session's delivery", async () => {
+		const mock = createMockPi();
+		const client = createClient();
+		const notifications: Array<{ message: string; level: string }> = [];
+		createPremindPiExtension({
+			createDaemonClient: () => client.client,
+			config: { statusPollIntervalMs: 0 },
+			detectGit: async () => ({ repo: "owner/repo", branch: "feature/pi" }),
+		})(mock.pi as never);
+
+		const pause = mock.commands.get("premind:pause");
+		const resume = mock.commands.get("premind:resume");
+		const pauseTool = mock.tools.get("premind_pause");
+		const resumeTool = mock.tools.get("premind_resume");
+		assert.ok(pause);
+		assert.ok(resume);
+		assert.ok(pauseTool);
+		assert.ok(resumeTool);
+		assert.match(pauseTool.description ?? "", /never premind_disable/);
+		assert.match(resumeTool.description ?? "", /never premind_enable/);
+
+		const ctx = createCommandContext(notifications);
+		await pause.handler("", ctx);
+		await pause.handler("", ctx);
+		await resume.handler("", ctx);
+		const paused = await pauseTool.execute("tool-1", {}, undefined, undefined, ctx);
+		const resumed = await resumeTool.execute("tool-2", {}, undefined, undefined, ctx);
+
+		assert.deepEqual(client.operations, [
+			"registerClient:/tmp/project:pi-extension",
+			"registerSession:/tmp/session.jsonl:owner/repo:feature/pi",
+			"pauseSession:/tmp/session.jsonl",
+			"pauseSession:/tmp/session.jsonl",
+			"resumeSession:/tmp/session.jsonl",
+			"pauseSession:/tmp/session.jsonl",
+			"resumeSession:/tmp/session.jsonl",
+		]);
+		const pausedMessage =
+			"premind paused reminders for this session only. Subscriptions are unchanged and PR updates keep accumulating; run /premind:resume to deliver them.";
+		const resumedMessage =
+			"premind resumed reminders for this session. Subscriptions are unchanged; queued PR updates deliver at the next safe point.";
+		assert.deepEqual(
+			notifications.map(({ message }) => message),
+			[pausedMessage, pausedMessage, resumedMessage],
+		);
+		assert.equal(paused.content[0]?.text, pausedMessage);
+		assert.equal(resumed.content[0]?.text, resumedMessage);
+	});
+
+	test("/premind:deliver explains that a paused session withholds reminders", async () => {
+		const mock = createMockPi();
+		const client = createClient({
+			statusResult: {
+				...status,
+				sessions: [
+					{ ...status.sessions[0], sessionId: "/tmp/session.jsonl", status: "paused" },
+				],
+			},
+		});
+		const notifications: Array<{ message: string; level: string }> = [];
+		createPremindPiExtension({
+			createDaemonClient: () => client.client,
+			config: { statusPollIntervalMs: 0 },
+			detectGit: async () => ({ repo: "owner/repo", branch: "feature/pi" }),
+		})(mock.pi as never);
+
+		const ctx = createCommandContext(notifications);
+		await mock.commands.get("premind:pause")?.handler("", ctx);
+		await mock.commands.get("premind:deliver")?.handler("", ctx);
+
+		assert.deepEqual(mock.sentMessages, []);
+		assert.equal(
+			notifications.at(-1)?.message,
+			"premind is paused for this session; run /premind:resume before delivering reminders.",
 		);
 	});
 
