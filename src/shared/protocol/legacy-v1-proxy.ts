@@ -14,6 +14,11 @@ export const SAFE_V1_PROXY_OPERATIONS = new Set([
   "claimClaudeReminder",
   "confirmClaudeHandoff",
   "suspendClaudeSession",
+  // Released Codex plugins speak protocol v1 on the historical socket.
+  "registerCodexSession",
+  "claimReminder",
+  "settleReminderClaim",
+  "releaseSessionOwner",
   "updateSessionState",
   "unregisterSession",
   "pauseSession",
@@ -93,13 +98,19 @@ export class LegacyV1ProxyRouter {
       "sessionId" in request.payload && typeof request.payload.sessionId === "string"
         ? request.payload.sessionId
         : undefined;
-    const isClaudeOperation =
+    // Claude and Codex hooks own sessions by host session id rather than a
+    // client lease, so they never had a durable proxy lease to map.
+    const isHostOwnedOperation =
       request.type === "registerClaudeSession" ||
       request.type === "touchClaudeSession" ||
       request.type === "claimClaudeReminder" ||
       request.type === "confirmClaudeHandoff" ||
-      request.type === "suspendClaudeSession";
-    if (sessionId && !isClaudeOperation) {
+      request.type === "suspendClaudeSession" ||
+      request.type === "registerCodexSession" ||
+      request.type === "claimReminder" ||
+      request.type === "settleReminderClaim" ||
+      request.type === "releaseSessionOwner";
+    if (sessionId && !isHostOwnedOperation) {
       const mapping = this.store.getLegacyProxyLease(sessionId);
       if (!mapping) return failure("SESSION_MOVED", "Legacy session must re-register");
       return projectV1ProxyResponse(

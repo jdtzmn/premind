@@ -47,6 +47,43 @@ describe("safe protocol-v1 proxy", () => {
     store.close();
   });
 
+  test("serves released Codex hooks without a proxy lease mapping", async () => {
+    const store = createStore();
+    const router = new Router(store);
+    const proxy = new LegacyV1ProxyRouter(store, "daemon-a", (request) =>
+      router.handle(request),
+    );
+    const session = {
+      sessionId: "codex:released",
+      repo: "acme/repo",
+      branch: "feature/codex",
+      busyState: "idle",
+    };
+    const registered = await proxy.handle({
+      type: "registerCodexSession",
+      protocolVersion: 1,
+      payload: session,
+    });
+    assert.equal(registered.ok, true);
+    assert.equal(registered.protocolVersion, 1);
+    assert.deepEqual(
+      await proxy.handle({
+        type: "claimReminder",
+        protocolVersion: 1,
+        payload: { sessionId: session.sessionId, boundary: "stop" },
+      }),
+      { ok: true, protocolVersion: 1, result: { claim: null } },
+    );
+    const released = await proxy.handle({
+      type: "releaseSessionOwner",
+      protocolVersion: 1,
+      payload: { sessionId: session.sessionId },
+    });
+    assert.equal(released.ok, true);
+    assert.equal(store.getSession(session.sessionId)?.status, "dormant");
+    store.close();
+  });
+
   test("projects bundle claims for both captured protocol-v1 decoders", () => {
     const projected = projectV1ProxyResponse("claimReminderBundle", {
       ok: true,
