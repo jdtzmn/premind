@@ -1,4 +1,3 @@
-import { parseTree, type Node as JsonNode, type ParseError } from "jsonc-parser";
 import semver from "semver";
 import { z } from "zod";
 
@@ -27,20 +26,35 @@ export const compatibilityMarkerV1Schema = z.object({
 
 export type CompatibilityMarkerV1 = z.infer<typeof compatibilityMarkerV1Schema>;
 
-const assertNoDuplicateKeys = (node: JsonNode): void => {
-  if (node.type === "object") {
-    const keys = new Set<string>();
-    for (const property of node.children ?? []) {
-      const key = property.children?.[0]?.value;
-      if (typeof key !== "string") throw new Error("Invalid compatibility marker property");
-      if (keys.has(key)) throw new Error(`Duplicate compatibility marker key: ${key}`);
-      keys.add(key);
-      const value = property.children?.[1];
-      if (value) assertNoDuplicateKeys(value);
+// JSON.parse silently keeps the last duplicate key, so scan the (already
+// validated) JSON text for duplicate object keys. Kept dependency-free so the
+// bundled daemon stays self-contained.
+const assertNoDuplicateKeys = (json: string): void => {
+  const scopes: Array<Set<string> | null> = [];
+  let previous = "";
+  for (let index = 0; index < json.length; index += 1) {
+    const character = json[index];
+    if (character === '"') {
+      let end = index + 1;
+      while (json[end] !== '"') end += json[end] === "\\" ? 2 : 1;
+      const keys = scopes.at(-1);
+      if (keys && (previous === "{" || previous === ",")) {
+        const key = JSON.parse(json.slice(index, end + 1)) as string;
+        if (keys.has(key)) throw new Error(`Duplicate compatibility marker key: ${key}`);
+        keys.add(key);
+      }
+      previous = "string";
+      index = end;
+    } else if (character === "{" || character === "[") {
+      scopes.push(character === "{" ? new Set() : null);
+      previous = character;
+    } else if (character === "}" || character === "]") {
+      scopes.pop();
+      previous = character;
+    } else if (!/\s/.test(character)) {
+      previous = character === "," || character === ":" ? character : "value";
     }
-    return;
   }
-  for (const child of node.children ?? []) assertNoDuplicateKeys(child);
 };
 
 export const parseCompatibilityMarker = (
@@ -61,19 +75,20 @@ export const parseCompatibilityMarker = (
     throw new Error("Compatibility marker contains trailing data");
   }
 
-  const errors: ParseError[] = [];
-  const root = parseTree(body, errors, {
-    allowTrailingComma: false,
-    disallowComments: true,
-  });
-  if (!root || root.type !== "object" || errors.length > 0) {
-    throw new Error("Compatibility marker is not one valid JSON object");
-  }
-  if (root.offset !== 0 || root.length !== body.length) {
+  if (body.trim() !== body) {
     throw new Error("Compatibility marker contains trailing data");
   }
-  assertNoDuplicateKeys(root);
-  return compatibilityMarkerV1Schema.parse(JSON.parse(body));
+  let value: unknown;
+  try {
+    value = JSON.parse(body);
+  } catch {
+    throw new Error("Compatibility marker is not one valid JSON object");
+  }
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Compatibility marker is not one valid JSON object");
+  }
+  assertNoDuplicateKeys(body);
+  return compatibilityMarkerV1Schema.parse(value);
 };
 
 export const serializeCompatibilityMarker = (

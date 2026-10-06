@@ -41,6 +41,22 @@ describe("compatibility marker v1", () => {
     );
   });
 
+  test("detects nested duplicate keys without misreading escaped strings", () => {
+    const valid = fixture("valid.json").toString("utf8").trimEnd();
+    const withField = (field: string) =>
+      Buffer.from(valid.replace(/}$/, `,"futureField":${field}}\n`));
+    assert.equal(
+      parseCompatibilityMarker(
+        withField('{"a\\"b":"x,\\"a\\"b\\":","list":["a","a"]}'),
+      ).generation,
+      7,
+    );
+    assert.throws(
+      () => parseCompatibilityMarker(withField('{"inner":1,"inner":2}')),
+      /Duplicate compatibility marker key: inner/,
+    );
+  });
+
   test("merges ordered fields monotonically and advances generation", () => {
     const base = parseCompatibilityMarker(fixture("valid.json"));
     const merged = mergeCompatibilityMarkers(base, {
