@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { DebugStatusResponse } from "./schema.ts";
-import { renderCurrentStatus } from "./status-view.ts";
+import { getCurrentStatusLines, renderCurrentStatus } from "./status-view.ts";
 
 const status: DebugStatusResponse = {
   daemon: { protocolVersion: 1, heartbeatMs: 10_000, leaseTtlMs: 30_000, idleShutdownGraceMs: 15_000 },
@@ -40,6 +40,16 @@ test("status shows only the current session's active watched PRs with links", ()
   assert.match(rendered, /elsewhere\/other#5 · \? status unknown — https:\/\/github.com\/elsewhere\/other\/pull\/5/);
   assert.match(rendered, /1 other session: \/premind:debug-status/);
   assert.doesNotMatch(rendered, /secret|private|#17/);
+});
+
+test("status exposes structured PR lines for interactive renderers", () => {
+  const lines = getCurrentStatusLines(status, "this-session");
+  const prLines = lines.filter((line) => typeof line !== "string");
+  assert.deepEqual(prLines.map(({ prefix, signal, link }) => ({ prefix, signal: signal.text, link })), [
+    { prefix: "  #42 · ", signal: "? status unknown", link: "https://github.com/acme/repo/pull/42" },
+    { prefix: "  #99 · ", signal: "? status unknown", link: "https://github.com/acme/repo/pull/99" },
+    { prefix: "  elsewhere/other#5 · ", signal: "? status unknown", link: "https://github.com/elsewhere/other/pull/5" },
+  ]);
 });
 
 test("missing current session does not guess from another session", () => {

@@ -1,33 +1,71 @@
 import type { DebugStatusResponse } from "./schema.ts";
-import { getPrSignal, type StatusSignal } from "./status-signal.ts";
+import { getPrSignal, type PrSignal, type StatusSignal } from "./status-signal.ts";
 
 export type { StatusSignal } from "./status-signal.ts";
 export type StatusStyler = (text: string, signal: StatusSignal) => string;
+export type CurrentStatusLine = string | { prefix: string; signal: PrSignal; link: string };
 
-const prLink = (repo: string, number: number) =>
-  /^[\w.-]+\/[\w.-]+$/.test(repo) && Number.isSafeInteger(number) && number > 0
-    ? `https://github.com/${repo}/pull/${number}`
-    : "link unavailable";
+type Session = DebugStatusResponse["sessions"][number];
+type Subscription = NonNullable<Session["subscriptions"]>[number];
 
-const snapshotLink = (repo: string, number: number, url: string | undefined) => {
+const subscriptionKey = (subscription: Subscription) =>
+  `${subscription.repo.toLowerCase()}#${subscription.prNumber}`;
+
+function prLink(repo: string, number: number): string {
+  const validRepo = /^[\w.-]+\/[\w.-]+$/.test(repo);
+  if (!validRepo || !Number.isSafeInteger(number) || number <= 0) {
+    return "link unavailable";
+  }
+  return `https://github.com/${repo}/pull/${number}`;
+}
+
+function snapshotLink(repo: string, number: number, url: string | undefined): string {
   if (!url) return prLink(repo, number);
+
   try {
     const parsed = new URL(url);
-    if (parsed.protocol === "https:" && parsed.hostname === "github.com" && !parsed.username && !parsed.password &&
-        parsed.pathname.toLowerCase() === `/${repo}/pull/${number}`.toLowerCase() && !parsed.search && !parsed.hash) return url;
-  } catch { /* Ignore malformed cached URLs. */ }
+    const matchesPr = parsed.pathname.toLowerCase() === `/${repo}/pull/${number}`.toLowerCase();
+    if (
+      parsed.protocol === "https:" &&
+      parsed.hostname === "github.com" &&
+      !parsed.username &&
+      !parsed.password &&
+      matchesPr &&
+      !parsed.search &&
+      !parsed.hash
+    ) {
+      return url;
+    }
+  } catch {
+    // Ignore malformed cached URLs.
+  }
   return prLink(repo, number);
-};
-export const renderCurrentStatus = (
+}
+
+function activeSubscriptions(session: Session): Map<string, Subscription> {
+  const watched = new Map<string, Subscription>();
+  for (const subscription of session.subscriptions ?? []) {
+    if (subscription.state === "active") {
+      watched.set(subscriptionKey(subscription), subscription);
+    }
+  }
+  return watched;
+}
+
+export function getCurrentStatusLines(
   status: DebugStatusResponse,
   sessionId: string | undefined,
-  options: { style?: StatusStyler; debugCommand?: string; now?: number } = {},
-): string => {
+  options: { debugCommand?: string; now?: number } = {},
+): CurrentStatusLine[] {
   const session = status.sessions.find((item) => item.sessionId === sessionId);
   const otherCount = status.sessions.length - (session ? 1 : 0);
-  const lines = [
-    `premind · running · polling ${status.globallyDisabled ? "off" : "on"} · ${status.activeWatchers} watcher${status.activeWatchers === 1 ? "" : "s"}${status.globallyDisabled ? " · /premind:enable" : ""}`,
+  const polling = status.globallyDisabled ? "off" : "on";
+  const watcherCount = `${status.activeWatchers} watcher${status.activeWatchers === 1 ? "" : "s"}`;
+  const enableHint = status.globallyDisabled ? " · /premind:enable" : "";
+  const lines: CurrentStatusLine[] = [
+    `premind · running · polling ${polling} · ${watcherCount}${enableHint}`,
   ];
+
   if (!session) {
     lines.push("no premind session attached");
   } else {
@@ -35,35 +73,55 @@ export const renderCurrentStatus = (
     const branch = session.worktreeBinding?.branch ?? session.branch;
     lines.push(`${repo} @ ${branch} · ${session.status}/${session.busyState} · ${session.pendingReminderCount} pending`);
 
-    const watched = new Map<string, NonNullable<typeof session.subscriptions>[number]>();
-    for (const subscription of session.subscriptions ?? []) {
-      if (subscription.state !== "active") continue;
-      watched.set(`${subscription.repo.toLowerCase()}#${subscription.prNumber}`, subscription);
-    }
+    const watched = activeSubscriptions(session);
     const branchPr = session.prNumber;
     const branchKey = branchPr === null ? null : `${repo.toLowerCase()}#${branchPr}`;
-    const branchLabel = branchPr === null ? "" : ` · branch PR #${branchPr}${branchKey && !watched.has(branchKey) ? " (not watched)" : ""}`;
+    const branchWatched = branchKey !== null && watched.has(branchKey);
+    const branchLabel = branchPr === null
+      ? ""
+      : ` · branch PR #${branchPr}${branchWatched ? "" : " (not watched)"}`;
     lines.push("", `Watching ${watched.size} PR${watched.size === 1 ? "" : "s"}${branchLabel}`);
-    const sorted = [...watched.values()].sort((left, right) =>
-      Number(`${right.repo.toLowerCase()}#${right.prNumber}` === branchKey) -
-        Number(`${left.repo.toLowerCase()}#${left.prNumber}` === branchKey) ||
-      getPrSignal(left.snapshot, options.now, status.globallyDisabled).priority -
-        getPrSignal(right.snapshot, options.now, status.globallyDisabled).priority ||
-      left.repo.localeCompare(right.repo) || left.prNumber - right.prNumber,
-    );
-    for (const subscription of sorted) {
+
+    const ranked = [...watched.values()].map((subscription) => ({
+      subscription,
+      signal: getPrSignal(subscription.snapshot, options.now, status.globallyDisabled),
+    }));
+    ranked.sort((left, right) => {
+      const leftIsBranch = subscriptionKey(left.subscription) === branchKey;
+      const rightIsBranch = subscriptionKey(right.subscription) === branchKey;
+      if (leftIsBranch !== rightIsBranch) return leftIsBranch ? -1 : 1;
+
+      return left.signal.priority - right.signal.priority ||
+        left.subscription.repo.localeCompare(right.subscription.repo) ||
+        left.subscription.prNumber - right.subscription.prNumber;
+    });
+
+    for (const { subscription, signal } of ranked) {
       const label = subscription.repo.toLowerCase() === repo.toLowerCase()
         ? `#${subscription.prNumber}`
         : `${subscription.repo}#${subscription.prNumber}`;
-      const { text, kind } = getPrSignal(subscription.snapshot, options.now, status.globallyDisabled);
-      const signal = options.style?.(text, kind) ?? text;
       const title = subscription.snapshot?.title.replace(/[\x00-\x1f\x7f]/g, " ").trim();
+      const prefix = `  ${label}${title ? ` ${title}` : ""} · `;
       const link = snapshotLink(subscription.repo, subscription.prNumber, subscription.snapshot?.url);
-      lines.push(`  ${label}${title ? ` ${title}` : ""} · ${signal} — ${link}`);
+      lines.push({ prefix, signal, link });
     }
   }
+
   if (otherCount > 0) {
-    lines.push("", `${otherCount} other session${otherCount === 1 ? "" : "s"}: ${options.debugCommand ?? "/premind:debug-status"}`);
+    const label = `${otherCount} other session${otherCount === 1 ? "" : "s"}`;
+    lines.push("", `${label}: ${options.debugCommand ?? "/premind:debug-status"}`);
   }
-  return lines.join("\n");
-};
+  return lines;
+}
+
+export function renderCurrentStatus(
+  status: DebugStatusResponse,
+  sessionId: string | undefined,
+  options: { style?: StatusStyler; debugCommand?: string; now?: number } = {},
+): string {
+  return getCurrentStatusLines(status, sessionId, options).map((line) => {
+    if (typeof line === "string") return line;
+    const signal = options.style?.(line.signal.text, line.signal.kind) ?? line.signal.text;
+    return `${line.prefix}${signal} — ${line.link}`;
+  }).join("\n");
+}
