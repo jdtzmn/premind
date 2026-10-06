@@ -389,6 +389,8 @@ The allowlist is fixed to: `registerClient`, `heartbeatClient`, `releaseClient`,
 
 On legacy registration the proxy creates a durable, TTL-bound proxy incarnation and modern lease mapping for the legacy client/session identity. A repeated registration rotates the incarnation and claims a higher session generation. Every later tokenless v1 mutation resolves through that mapping and is issued with the current modern epoch/lease token; stale or duplicate legacy incarnations cannot write. Multiple distinct legacy clients remain independent. Proxy restart reloads unexpired mappings; an unmapped request must re-register rather than receiving ambient authority.
 
+The historical socket is also the stable discovery endpoint. The guard answers the permanent bootstrap-v1 `initialize` handshake on behalf of the modern server, whose descriptor advertises its own socket (`premind-modern-epoch-1.sock`, beside the historical socket). Current clients send the handshake to the historical socket and all later protocol-v2 traffic to the advertised socket; on a socket error they re-run the handshake. Clients that never send `initialize`, and pre-bridge daemons that reject it, stay on protocol v1. Until Phase 5 adds per-instance descriptors, the handshake advertises the single running daemon.
+
 ### No OS service
 
 The guard is owned by modern Premind processes, not launchd/systemd. After a reboot, a pre-bridge plugin may start before any modern guard. Its historical state path is quarantined, so its daemon fails closed rather than opening modern data. The coding session continues with a Premind update-required error. When modern Premind starts, it cleans any stale historical socket and restores the safe-v1 proxy.

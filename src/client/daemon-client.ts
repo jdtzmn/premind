@@ -76,6 +76,9 @@ export class PremindDaemonClient {
   readonly clientId = randomUUID();
   private readonly host: SessionHost;
   private readonly socketPath: string;
+  // Normal requests go to the socket the daemon advertises during bootstrap;
+  // the handshake itself always uses the stable entry socket.
+  private routeSocketPath: string;
   private readonly ensureDaemon: () => Promise<void>;
   private readonly maxRetries: number;
   private readonly retryDelayMs: number;
@@ -89,6 +92,7 @@ export class PremindDaemonClient {
   constructor(options: PremindDaemonClientOptions) {
     this.host = options.host ?? "opencode";
     this.socketPath = options.socketPath ?? PREMIND_SOCKET_PATH;
+    this.routeSocketPath = this.socketPath;
     this.ensureDaemon = options.ensureDaemon;
     this.maxRetries = options.maxRetries ?? MAX_RETRIES;
     this.retryDelayMs = options.retryDelayMs ?? RETRY_DELAY_MS;
@@ -527,6 +531,7 @@ export class PremindDaemonClient {
 
   private async initializeProtocol() {
     if (this.initialized) return;
+    this.routeSocketPath = this.socketPath;
     const response = await this.requestRaw({
       type: "initialize",
       bootstrapVersion: 1,
@@ -539,7 +544,7 @@ export class PremindDaemonClient {
         },
         protocols: { min: PREMIND_PROTOCOL_VERSION, max: PROTOCOL_V2 },
       },
-    });
+    }, this.socketPath);
     const bootstrap = bootstrapResponseSchema.safeParse(response);
     if (bootstrap.success) {
       if (!bootstrap.data.ok) {
@@ -565,6 +570,7 @@ export class PremindDaemonClient {
         bootstrap.data.result.capabilities.operations,
       );
       this.protocolVersion = selected;
+      this.routeSocketPath = bootstrap.data.result.daemon.socketPath;
       this.initialized = true;
       return;
     }
@@ -696,9 +702,12 @@ export class PremindDaemonClient {
     return parsed.result;
   }
 
-  private async requestRaw(message: unknown): Promise<unknown> {
+  private async requestRaw(
+    message: unknown,
+    socketPath = this.routeSocketPath,
+  ): Promise<unknown> {
     const line = await new Promise<string>((resolve, reject) => {
-      const socket = net.createConnection(this.socketPath);
+      const socket = net.createConnection(socketPath);
       let buffer = "";
 
       socket.setEncoding("utf8");

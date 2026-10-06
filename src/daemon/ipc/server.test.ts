@@ -4,6 +4,8 @@ import net from "node:net";
 import path from "node:path";
 import { afterEach, describe, test } from "node:test";
 import { bootstrapResponseSchema } from "../../shared/protocol/bootstrap.ts";
+import { LegacyV1GuardServer } from "../../shared/protocol/legacy-v1-guard-server.ts";
+import { LegacyV1ProxyRouter } from "../../shared/protocol/legacy-v1-proxy.ts";
 import { protocolV2ResponseSchema } from "../../shared/protocol/v2.ts";
 import { PremindDaemonClient } from "../../client/daemon-client.ts";
 import { StateStore } from "../persistence/store.ts";
@@ -58,6 +60,55 @@ const initialize = (protocols: { min: number; max: number }) => ({
 });
 
 describe("IpcServer protocol negotiation", () => {
+  test("routes current clients from the historical socket to the modern server", async () => {
+    const dir = fs.mkdtempSync("/tmp/premind-ipc-route-test-");
+    tempDirs.push(dir);
+    const historicalSocketPath = path.join(dir, "premind.sock");
+    const modernSocketPath = path.join(dir, "premind-modern-epoch-1.sock");
+    const server = new IpcServer(new StateStore(path.join(dir, "state.db")));
+    const proxy = new LegacyV1ProxyRouter(server.store, server.daemonInstanceId, (routed) =>
+      server.handleRequest(routed),
+    );
+    server.advertiseSocketPath(modernSocketPath);
+    const guard = new LegacyV1GuardServer(proxy, (value) => server.bootstrap(value));
+    await guard.listen(historicalSocketPath);
+    await server.listen(modernSocketPath);
+    const client = new PremindDaemonClient({
+      host: "pi",
+      socketPath: historicalSocketPath,
+      ensureDaemon: async () => {},
+    });
+    try {
+      await client.registerClient("/tmp/project", "test");
+      assert.equal(client.selectedProtocolVersion, 2);
+      // Operations outside the frozen v1 allowlist only succeed on the modern socket.
+      await client.registerSession({
+        sessionId: "routed-session",
+        repo: "acme/repo",
+        branch: "feature/routed",
+        isPrimary: true,
+        status: "active",
+        busyState: "idle",
+      });
+      await client.deleteSession("routed-session");
+      // v1 would fall back to unregistering, which only detaches the session.
+      assert.equal(server.store.getSession("routed-session")?.status, "closed");
+      const status = await client.debugStatus();
+      assert.equal(status.daemon.protocolVersion, 2);
+      // Historical protocol-v1 clients keep using the frozen proxy.
+      const legacy = (await request(historicalSocketPath, {
+        type: "debugStatus",
+        protocolVersion: 1,
+        payload: {},
+      })) as { ok: boolean; protocolVersion: number };
+      assert.deepEqual([legacy.ok, legacy.protocolVersion], [true, 1]);
+    } finally {
+      await client.release();
+      await guard.close();
+      await server.close(modernSocketPath);
+    }
+  });
+
   test("negotiates protocol v2 through permanent bootstrap v1", async () => {
     const { server, socketPath } = await createServer();
     try {

@@ -118,6 +118,30 @@ export class IpcServer {
     return this.router.handle(request);
   }
 
+  /** Sets the socket advertised to clients before this server starts listening. */
+  advertiseSocketPath(socketPath: string) {
+    this.socketPath = socketPath;
+  }
+
+  /**
+   * Answers a permanent bootstrap-v1 handshake. The legacy guard calls this so
+   * current clients can discover this server from the historical socket.
+   */
+  bootstrap(value: unknown): BootstrapResponse {
+    try {
+      return this.handleInitialize(value);
+    } catch (error) {
+      return bootstrapResponseSchema.parse({
+        ok: false,
+        bootstrapVersion: 1,
+        error: {
+          code: "CLIENT_UPGRADE_REQUIRED",
+          message: error instanceof Error ? error.message : "Invalid request",
+        },
+      });
+    }
+  }
+
 	async listen(socketPath = PREMIND_SOCKET_PATH) {
 		this.socketPath = socketPath;
 		this.lifecycleState = "starting";
@@ -167,7 +191,7 @@ export class IpcServer {
 		try {
 			value = JSON.parse(line);
 			if (this.isRecord(value) && value.type === "initialize") {
-				return this.handleInitialize(value);
+				return this.bootstrap(value);
 			}
 			if (this.isRecord(value) && value.protocolVersion === PROTOCOL_V2) {
 				const request = parseProtocolV2RequestForRouter(value);

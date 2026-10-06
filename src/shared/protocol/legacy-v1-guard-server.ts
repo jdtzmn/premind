@@ -7,7 +7,12 @@ export class LegacyV1GuardServer {
   private socketPath?: string;
   private readonly server: net.Server;
 
-  constructor(private readonly router: LegacyV1ProxyRouter) {
+  constructor(
+    private readonly router: LegacyV1ProxyRouter,
+    // Answers bootstrap handshakes so current clients can discover the modern
+    // socket; without it the guard rejects them and clients fall back to v1.
+    private readonly bootstrap?: (value: unknown) => unknown,
+  ) {
     this.server = net.createServer((socket) => {
       socket.setEncoding("utf8");
       let buffer = "";
@@ -54,7 +59,16 @@ export class LegacyV1GuardServer {
 
   private async handleLine(line: string) {
     try {
-      return await this.router.handle(JSON.parse(line));
+      const value: unknown = JSON.parse(line);
+      if (
+        this.bootstrap &&
+        typeof value === "object" &&
+        value !== null &&
+        (value as { type?: unknown }).type === "initialize"
+      ) {
+        return this.bootstrap(value);
+      }
+      return await this.router.handle(value);
     } catch {
       return {
         ok: false as const,

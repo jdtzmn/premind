@@ -80,7 +80,10 @@ async function main() {
         server.daemonInstanceId,
         (request) => server.handleRequest(request),
       )
-      const guard = new LegacyV1GuardServer(proxy)
+      // Current clients bootstrap on the historical socket and are pointed at
+      // the modern socket; historical v1 clients stay on the frozen proxy.
+      server.advertiseSocketPath(PREMIND_MODERN_SOCKET_PATH)
+      const guard = new LegacyV1GuardServer(proxy, (value) => server.bootstrap(value))
       await guard.listen(PREMIND_SOCKET_PATH)
       runtime = { server, guard }
     },
