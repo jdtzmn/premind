@@ -51,6 +51,21 @@ afterEach(() => {
 })
 
 describe("ReminderHandoffRegistry", () => {
+  test("withholds an existing pending reminder while the session is paused", () => {
+    const store = createStore()
+    seed(store)
+    const registry = new ReminderHandoffRegistry(store)
+    const batch = registry.getPendingReminder("session")
+    assert.ok(batch)
+
+    store.setSessionPaused("session", true)
+    assert.equal(registry.getPendingReminder("session"), null)
+    assert.equal(store.getReminderBatchRecord(batch.batchId)?.state, "built")
+
+    store.setSessionPaused("session", false)
+    assert.equal(registry.getPendingReminder("session")?.batchId, batch.batchId)
+  })
+
   test("rejects illegal transitions and advances only after confirmation", () => {
     const store = createStore()
     const subscription = seed(store)

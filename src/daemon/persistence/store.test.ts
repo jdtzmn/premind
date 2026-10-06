@@ -584,6 +584,75 @@ describe("StateStore", () => {
     store.close()
   })
 
+  test("paused sessions keep subscriptions watched but cannot claim pending reminders", () => {
+    const store = createStore()
+    store.registerClient("pause-client", { pid: 1, projectRoot: "/tmp/project" })
+    store.registerSession({
+      clientId: "pause-client",
+      sessionId: "pause-session",
+      repo: "acme/repo",
+      branch: "feature/pause",
+      isPrimary: true,
+      status: "active",
+      busyState: "idle",
+    })
+    const subscriptions = [
+      { prNumber: 21, source: "automatic" as const },
+      { prNumber: 22, source: "manual" as const },
+    ].map(({ prNumber, source }) =>
+      store.upsertSubscription({
+        sessionId: "pause-session",
+        repo: "acme/repo",
+        prNumber,
+        source,
+      }),
+    )
+    // A batch built before pausing must stay pending, not be handed off.
+    const prebuiltBatchId = store.createOrReplaceReminder(
+      "pause-session",
+      subscriptions[0].subscriptionId,
+      "Reminder 21",
+      [],
+      0,
+    )
+    const subscriptionState = () =>
+      store
+        .listSessionSubscriptions("pause-session", "active")
+        .map(({ subscriptionId, prNumber, source }) => ({ subscriptionId, prNumber, source }))
+    const before = subscriptionState()
+
+    assert.equal(store.setSessionPaused("pause-session", true), true)
+    store.insertEvents("acme/repo", 22, [
+      {
+        dedupeKey: "issue_comment.created:22",
+        kind: "issue_comment.created",
+        priority: "high",
+        summary: "Comment while paused",
+        payload: { commentId: 22 },
+      },
+    ])
+
+    assert.deepEqual(subscriptionState(), before)
+    assert.deepEqual(
+      store.listPrWatchTargets().map(({ pr_number }) => pr_number).sort(),
+      [21, 22],
+    )
+    assert.equal(store.claimReminderBundle("pause-session"), null)
+    assert.equal(store.claimReminder("pause-session"), null)
+    assert.equal(store.getReminderBatchRecord(prebuiltBatchId)?.state, "built")
+
+    assert.equal(store.setSessionPaused("pause-session", false), true)
+    assert.deepEqual(subscriptionState(), before)
+    const bundle = store.claimReminderBundle("pause-session")
+    assert.ok(bundle)
+    assert.deepEqual(
+      bundle.batches.map(({ subscriptionId }) => subscriptionId).sort(),
+      subscriptions.map(({ subscriptionId }) => subscriptionId).sort(),
+    )
+    assert.ok(bundle.batches.some(({ batchId }) => batchId === prebuiltBatchId))
+    store.close()
+  })
+
   test("ensureSessionControl recreates a missing session at the PR event high-water mark", () => {
     const store = createStore()
     store.recordBranchAssociation("acme/repo", "feature/recover", 11)

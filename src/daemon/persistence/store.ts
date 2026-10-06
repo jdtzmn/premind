@@ -1380,6 +1380,11 @@ export class StateStore {
 		).count;
 	}
 
+	/** Paused sessions stay watched but must not receive reminder handoffs. */
+	isSessionPaused(sessionId: string) {
+		return this.getSession(sessionId)?.status === "paused";
+	}
+
 	setSessionPaused(sessionId: string, paused: boolean, now = Date.now()) {
 		const status = paused ? "paused" : "active";
 		const result = this.db
@@ -1968,12 +1973,17 @@ export class StateStore {
 		return record ? this.refreshPendingReminder(record) : null;
 	}
 
-	/** Atomically claims every currently deliverable batch for a session. */
+	/**
+	 * Atomically claims every currently deliverable batch for a session.
+	 * Paused sessions keep their subscriptions, events, and pending batches but
+	 * cannot hand any of them to an adapter until resumed.
+	 */
 	claimReminderBundle(
 		sessionId: string,
 		now = Date.now(),
 	): ReminderBundleClaim | null {
 		return this.transaction(() => {
+			if (this.isSessionPaused(sessionId)) return null;
 			this.expireStaleHandoffs(undefined, now);
 			if (this.listInFlightReminderBatchRecords(sessionId).length > 0) return null;
 
@@ -2105,6 +2115,7 @@ export class StateStore {
 		leaseMs = PREMIND_REMINDER_CLAIM_LEASE_MS,
 	): ReminderClaim | null {
 		return this.transaction(() => {
+			if (this.isSessionPaused(sessionId)) return null;
 			this.expireStaleHandoffs(undefined, now);
 			const activeClaim = this.db
 				.prepare(
