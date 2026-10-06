@@ -14,7 +14,8 @@
     "extensions",
     "plugin-claude",
     "plugins",
-    ".agents"
+    ".agents",
+    "skills"
   ],
   "scripts": {
     "build": "bun run build:runtime && tsc -p tsconfig.json",
@@ -22,6 +23,9 @@
     "validate:package-runtime": "node scripts/validate-package-runtime-artifacts.mjs",
     "build:claude-runtime": "bun run build:runtime",
     "check": "tsc -p tsconfig.json --noEmit",
+    "generate:skill": "node --import tsx scripts/generate-premind-skills.ts",
+    "test:skills": "node --import tsx --test scripts/generate-premind-skills.test.ts",
+    "test:skills:live": "node scripts/evaluate-premind-skill.mjs",
     "daemon": "tsx src/daemon/index.ts",
     "prepack": "node scripts/generate-version.mjs && bun run build:runtime",
     "postpack": "node scripts/generate-version.mjs --restore",
@@ -64,6 +68,9 @@
   "pi": {
     "extensions": [
       "./extensions/premind.ts"
+    ],
+    "skills": [
+      "./skills/premind"
     ]
   },
   "peerDependencies": {
