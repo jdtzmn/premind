@@ -103,7 +103,8 @@ export const commandCapabilities = {
 	enable: {
 		classification: "common",
 		scope: "daemon",
-		description: "Enable GitHub polling globally.",
+		description:
+			"Enable GitHub polling globally for every session; model tools require confirmGlobal: true.",
 		canonical: { commands: ["premind:enable"], tools: ["premind_enable"] },
 		harnesses: {
 			pi: { commands: ["premind:enable"], tools: ["premind_enable"] },
@@ -126,7 +127,8 @@ export const commandCapabilities = {
 	disable: {
 		classification: "common",
 		scope: "daemon",
-		description: "Disable GitHub polling globally.",
+		description:
+			"Disable GitHub polling globally for every session; model tools require confirmGlobal: true.",
 		canonical: { commands: ["premind:disable"], tools: ["premind_disable"] },
 		harnesses: {
 			pi: { commands: ["premind:disable"], tools: ["premind_disable"] },
@@ -326,6 +328,7 @@ export const renderCommandCapabilityDocumentation = (): string => {
 	}
 	lines.push(
 		"- `prune` is Pi-specific administrative maintenance and is not model-callable.",
+		"- `enable` / `disable` model tools in every harness require `confirmGlobal: true` and refuse unconfirmed calls because they affect every session and project.",
 		"- `pause` and `resume` are Pi session-delivery controls; they never change subscriptions and are distinct from global `disable` / `enable`.",
 		"- Claude status remains aggregate and redacted; Pi and OpenCode may expose session detail.",
 		"- Delivery mechanics remain harness-specific even though `/premind:deliver` is canonical.",

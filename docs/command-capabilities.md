@@ -35,6 +35,7 @@ This matrix is generated from `src/shared/command-capabilities.ts`. Harness-visi
 - `unsubscribe` / claude / tools: Claude MCP tools omit the premind_ prefix.
 - `unsubscribe` / opencode / commands: OpenCode currently exposes this as a model tool.
 - `prune` is Pi-specific administrative maintenance and is not model-callable.
+- `enable` / `disable` model tools in every harness require `confirmGlobal: true` and refuse unconfirmed calls because they affect every session and project.
 - `pause` and `resume` are Pi session-delivery controls; they never change subscriptions and are distinct from global `disable` / `enable`.
 - Claude status remains aggregate and redacted; Pi and OpenCode may expose session detail.
 - Delivery mechanics remain harness-specific even though `/premind:deliver` is canonical.
