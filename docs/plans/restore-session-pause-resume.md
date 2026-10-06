@@ -16,6 +16,8 @@ watchers, event history, and delivery cursors.
   events, but neither automatic lifecycle delivery nor `/premind:deliver` may
   claim or send a reminder for that session. Previously built batches remain
   pending.
+- The pause survives a host reload or re-registration of the same session;
+  only an explicit resume lifts it.
 - `/premind:resume` restores the session to active without re-registering,
   recreating, removing, or changing any subscription. Repeating it is
   harmless.

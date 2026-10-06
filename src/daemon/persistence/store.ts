@@ -353,7 +353,12 @@ export class StateStore {
             repo = excluded.repo,
             branch = excluded.branch,
             is_primary = excluded.is_primary,
-            status = excluded.status,
+            -- Re-attaching (for example after a host reload) must not silently
+            -- lift an explicit pause; only resumeSession or session control can.
+            status = CASE
+              WHEN sessions.status = 'paused' AND excluded.status = 'active' THEN 'paused'
+              ELSE excluded.status
+            END,
             busy_state = excluded.busy_state,
             last_activity_at = excluded.last_activity_at,
             updated_at = excluded.updated_at

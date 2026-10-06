@@ -641,6 +641,19 @@ describe("StateStore", () => {
     assert.equal(store.claimReminder("pause-session"), null)
     assert.equal(store.getReminderBatchRecord(prebuiltBatchId)?.state, "built")
 
+    // A host reload re-registers the session as active; the pause must survive.
+    store.registerSession({
+      clientId: "pause-client",
+      sessionId: "pause-session",
+      repo: "acme/repo",
+      branch: "feature/pause",
+      isPrimary: true,
+      status: "active",
+      busyState: "idle",
+    })
+    assert.equal(store.getSession("pause-session")?.status, "paused")
+    assert.equal(store.claimReminderBundle("pause-session"), null)
+
     assert.equal(store.setSessionPaused("pause-session", false), true)
     assert.deepEqual(subscriptionState(), before)
     const bundle = store.claimReminderBundle("pause-session")
