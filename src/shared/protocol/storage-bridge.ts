@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { backup, DatabaseSync } from "node:sqlite";
+import { DatabaseSync } from "node:sqlite";
 import {
   acquireDaemonStartLock,
   isDaemonStartLockHeldBy,
@@ -104,7 +104,9 @@ export const bridgeLegacyStorage = async (
           try {
             const source = new DatabaseSync(options.legacyDbPath, { readOnly: true });
             try {
-              await backup(source, temporaryModernPath);
+              // VACUUM INTO writes a transactionally consistent snapshot and,
+              // unlike sqlite.backup(), exists on every supported Node (22.13+).
+              source.prepare("VACUUM INTO ?").run(temporaryModernPath);
             } finally {
               source.close();
             }
