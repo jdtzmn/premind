@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   pull_request:
     branches: [main]
 
@@ -71,7 +72,7 @@ jobs:
       - run: bun run test:compat
 
   artifact:
-    name: Install artifact
+    name: Release dist candidate
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -84,12 +85,35 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: "22.13"
-      - run: node scripts/build-install-artifact.mjs "$RUNNER_TEMP/premind-install-artifact"
-      - run: node scripts/verify-install-artifact.mjs "$RUNNER_TEMP/premind-install-artifact"
+      - run: node --test scripts/install-artifact-layout.test.mjs scripts/publish-dist.test.mjs
+      - run: node scripts/build-install-artifact.mjs "$RUNNER_TEMP/premind-dist"
+      - run: node scripts/test-dist.mjs "$RUNNER_TEMP/premind-dist"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: premind-install-${{ github.sha }}
-          path: ${{ runner.temp }}/premind-install-artifact/
+          name: premind-dist-${{ github.sha }}
+          path: ${{ runner.temp }}/premind-dist/
           if-no-files-found: error
           include-hidden-files: true # preserve .agents, .codex-plugin, .claude-plugin and .mcp.json
-          retention-days: 7
+          retention-days: 30
+
+  release:
+    name: Publish verified dist
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.repository == 'jdtzmn/premind'
+    needs: [check, unit, harness, compat, artifact]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "22.13"
+      # Download the tested artifact from THIS run. Never run pack/build in the release job.
+      - uses: actions/download-artifact@cc203385981b70ca67e1cc392babf9cc229d5806 # v4.1.9
+        with:
+          name: premind-dist-${{ github.sha }}
+          path: ${{ runner.temp }}/premind-dist
+      - run: node scripts/test-dist.mjs "$RUNNER_TEMP/premind-dist"
+      - run: node scripts/publish-dist.mjs "$RUNNER_TEMP/premind-dist"
+        env:
+          GH_TOKEN: ${{ github.token }}
