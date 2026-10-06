@@ -199,6 +199,13 @@ test("keeps generated runtime artifacts beside the plugin manifests", () => {
 			"utf8",
 		),
 	);
+	for (const reference of ["subscriptions.md", "reminders.md"]) {
+		const relativePath = path.join("skills", "premind", "references", reference);
+		assert.equal(
+			fs.readFileSync(path.join(CODEX_COMPATIBILITY_ROOT, relativePath), "utf8"),
+			fs.readFileSync(path.join(PLUGIN_ROOT, relativePath), "utf8"),
+		);
+	}
 	assert.equal(
 		fs.readFileSync(path.join(PLUGIN_ROOT, "generated", "premind-daemon.mjs"), "utf8"),
 		fs.readFileSync(

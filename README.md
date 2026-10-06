@@ -89,6 +89,14 @@ Codex cannot wake an already-idle stock CLI thread. Updates found while idle rem
 After changing a local checkout, refresh the marketplace/plugin installation and re-review hooks. Remove the plugin with `codex plugin remove premind@premind`, then remove its marketplace source if it is no longer needed.
 For a source checkout modified locally, run `bun run build:runtime` before refreshing so the marketplace sees updated bundles.
 
+### Agent skills
+
+Premind ships task-scoped Agent Skills for Codex (portable and compatibility plugins), Pi (`skills/premind` in the Pi package), and the Claude Code plugin (`plugin-claude/skills/premind`). Each `SKILL.md` loads subscription and reminder guidance from its own `references/` only when relevant. OpenCode's npm plugin does not install into OpenCode's project/global skill discovery directories, so it does not claim an automatically installed skill.
+
+These files are generated, not hand-edited. After changing host control metadata in `src/shared/command-capabilities.ts` or `src/codex/mcp-server.ts`, or updating the shared guidance in `scripts/generate-premind-skills.ts`, run `bun run generate:skill` and `bun run test:skills` and commit the output. CI checks for drift.
+
+For an opt-in model-based check of triggering and selective reference reads, run `bun run test:skills:live` (or append `codex` / `claude` to test those files through Pi's read-only skill runner). It uses an authenticated Pi model, makes no Premind tool calls, and is not a substitute for native Claude/Codex installation checks.
+
 ## How it works
 
 1. When OpenCode loads premind, the plugin starts a local daemon process.

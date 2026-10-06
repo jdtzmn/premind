@@ -1,0 +1,106 @@
+# Issue #67: Generate installable Premind skills
+
+Issue: <https://github.com/jdtzmn/premind/issues/67>
+Reference: Port's `scripts/generate-port-skill.ts` and generated `skills/port-cli/SKILL.md`.
+Skill-writing guidance: <https://skills.sh/anthropics/skills/skill-creator>.
+
+## Goal
+
+Replace the hand-maintained Premind Codex skill with a reproducible, installable Agent Skills package. Reuse Premind's concepts across coding agents without telling one harness to use another harness's commands, tools, session identity, or delivery behavior. Keep the instructions small through progressive disclosure.
+
+The file is `SKILL.md` (singular) inside a skill directory, not a root-level `SKILLS.md` index. The skill directory is the package: `SKILL.md` plus optional `references/` files. A reference is read on demand; it is not independently discovered as a skill.
+
+## Current constraints
+
+- This checkout has `plugins/premind/skills/premind/SKILL.md`, a hard-coded Codex skill. PR #60 proposes a separate Codex compatibility plugin at `plugins/codex/premind/skills/premind/SKILL.md`. Finalize the generated Codex output path against the branch actually being implemented; if #60 lands first, update the compatibility leaf and preserve the portable leaf's packaging contract rather than silently leaving one stale.
+- Pi, Claude Code, and OpenCode have different capability names and delivery semantics. `src/shared/command-capabilities.ts` already describes their command/tool names, but does not describe Codex. Codex's supported MCP controls are currently declared in `src/codex/mcp-server.ts` and require a session handle for mutations.
+- A skill is agent guidance, not the source of truth for runtime behavior. Generating documentation must not change what a plugin actually exposes.
+- Package discovery is host-specific. In particular, Pi's `package.json` currently declares only `pi.extensions`, not a skill. Confirm Claude and OpenCode skill discovery/installation before adding their artifacts to a published package.
+
+## Design
+
+Each supported host gets **one discoverable `premind` entry skill at its actual install location**. Do not ship a universal router that asks the model which agent it is running in. Each entry point contains only:
+
+1. Frontmatter whose description says what Premind enables and when an agent should load the skill; test triggering, not just frontmatter syntax.
+2. A brief explanation of Premind and the instructions needed on every invocation.
+3. Explicit, conditional pointers to on-demand references such as `references/subscriptions.md` and `references/reminders.md`. Use relative paths from that skill directory. Split only when a reference is substantial enough to justify an extra read; do not manufacture tiny files.
+
+Separate *shared product guidance* (untrusted PR content, subscription authority, duplicate event handling) from *host-specific instructions* (actual tool/command names, session binding, worktree activation, delivery timing). Generate the host-specific parts from a small, reviewable capability description backed by the existing capability matrix for Pi/Claude/OpenCode and by Codex's actual MCP surface. Where a description must differ, record the exception explicitly; do not infer behavior from tool names or expose tools that are unavailable in a host. Author shared prose once and render/copy it into each installed skill directory so its relative references work after packaging. Do not have installed skills reach across to repository source paths.
+
+Suggested output layout (verify each host's discovery convention before enabling it):
+
+```text
+plugins/premind/skills/premind/SKILL.md                # portable Codex plugin today
+plugins/premind/skills/premind/references/*.md
+plugins/codex/premind/skills/premind/                    # PR #60 compatibility leaf, if present
+plugin-claude/skills/premind/                            # only after Claude install verification
+skills/premind/                                         # Pi package, if declared in pi.skills
+```
+
+OpenCode needs its own **verified installation path**; do not assume that a skill nested in the Codex plugin is discovered by OpenCode. If its plugin installation cannot ship a discoverable skill without additional user setup, document that constraint and defer the artifact rather than advertising a nonexistent integration. Likewise, add `pi.skills` only when Pi's installed package includes and discovers the generated skill. Skill names should match their containing directory; host-specific filenames need not become separate model-invoked skills.
+
+## Implementation slices
+
+### 1. Establish the artifact and source contract
+
+- Reconcile the active branch with PR #60's portable/compatibility plugin layout.
+- Audit the supported surfaces against runtime registrations and the current `src/shared/command-capabilities.ts` matrix. Decide whether to extend that matrix to Codex or create a narrow Codex metadata adapter; do not make Codex appear to support the Pi/Claude/OpenCode commands it lacks.
+- Create a pure `generatePremindSkillMarkdown(host)` renderer plus a small output-path manifest. Keep common prose and host differences explicit and deterministic. Give generated files a marker and ensure the entry point only links to references actually packaged alongside it.
+- Check representative generated Codex content against existing safety, session-handle, worktree, cross-repository, detail-file, duplicate-event, and delivery-boundary guidance before replacing the hard-coded file.
+
+**Gate:** Generation twice produces identical bytes; generated Codex guidance preserves all applicable behavior and mentions only supported Codex controls. Commit this slice after focused checks.
+
+### 2. Package and disclose per host
+
+- Generate the Codex skill in the plugin directory or directories actually installed by the current marketplace and PR #60 compatibility package. Verify the published/installed package includes both the entry point and every linked reference.
+- Add Pi, Claude Code, and OpenCode entry points **only after** confirming how each host discovers package skills and that its installed artifact contains the referenced files. Configure `pi.skills` for Pi when enabled. Avoid duplicating the same skill in two Pi discovery locations, and avoid accidentally exposing Codex-specific skill files to other hosts.
+- Render each entry point against the host's actual capability surface. Claude's Stop-hook delivery and redaction rules, Codex's session handle and next-boundary delivery, and Pi/OpenCode's own controls must remain distinct. Keep the common safety semantics consistent.
+
+**Gate:** For each enabled host, an installed-package or equivalent discovery smoke check loads exactly its intended `premind` skill, can follow its relative references, and finds no instructions for unavailable tools. If a host lacks a reliable path, leave it out and record the follow-up.
+
+### 3. Guard against drift
+
+- Add `generate:skill` to `package.json`; generate at development/build time and commit outputs, rather than regenerating only at installation or requiring Bun in the shipped skill.
+- Add a CI regeneration-and-diff check for every generated skill and reference, analogous to Port's `generate:skill` check. Check the resulting files after generation rather than relying on a no-op command exit status.
+- Add focused tests for deterministic output, valid frontmatter and relative links, host-specific control names/negative assertions, preservation of safety guidance, and equality between committed artifacts and renderer output. Extend packaging tests to confirm all required files are in the npm/marketplace leaves.
+- Run `bun run check`, the generator tests, and focused packaging/contract checks locally; leave comprehensive suite/build verification to CI per repository policy.
+
+**Gate:** CI fails on stale output or a missing packaged reference, and generation leaves a clean diff. Commit after the targeted validation.
+
+### 4. Exercise the skill as an agent, not just as Markdown
+
+- For each enabled host, try a few realistic prompts: start PR work in the current checkout, switch to a linked worktree, subscribe to a PR in another repository, and process a duplicate or untrusted reminder. Include near-miss prompts that should **not** load the skill (for example, a generic GitHub question unrelated to Premind).
+- Compare the generated skill with the existing skill or no skill on representative prompts. Check whether the agent actually discovers the entry point, loads the right reference only when needed, uses the host's real controls, and respects safety and delivery boundaries. Review outputs and traces, not just name-matching assertions; iterate on the description and guidance where observed behavior differs.
+- Keep this evaluation proportional to the change. Record the prompts and observed results so subsequent edits can reuse them; do not make an Anthropic-specific evaluation harness a prerequisite for Pi, Codex, or OpenCode.
+
+**Gate:** At least one positive and one near-miss invocation per enabled host are inspected; a maintainer can see what the generated skill improves over the previous behavior. Commit the final revisions after the targeted checks.
+
+## Out of scope
+
+- Changing subscription, daemon, lifecycle, or delivery behavior to fit a skill.
+- A root-level, always-loaded skills table of contents or one skill per agent that must be selected manually from a universal router.
+- Claiming support for a host whose installation/discovery contract has not been demonstrated.
+
+## Discovery decisions from implementation
+
+- Pi: publish `skills/premind` via explicit `pi.skills` and include `skills` in npm files. This avoids accidentally selecting either Codex leaf.
+- Claude Code: use the plugin's conventional `plugin-claude/skills/premind` directory; npm packaging checks include both referenced files. The Claude CLI is unavailable in this checkout, so native invocation remains a follow-up smoke check.
+- OpenCode: the npm plugin is loaded from its exported module, whereas OpenCode searches project/global `.opencode/skills`, `.claude/skills`, or `.agents/skills`. Shipping a skill somewhere in this npm package alone would not install it to a discoverable location. Defer an OpenCode skill until there is an explicit installation path.
+- Codex: marketplace selects `plugins/codex/premind`; retain the identical portable plugin leaf. Local Codex 0.146 is below the supported 0.155.1 minimum, so rely on focused packaging tests and CI rather than claiming local discovery verification.
+
+## Behavioral evaluation record
+
+The opt-in `bun run test:skills:live [pi|codex|claude]` runner uses five realistic/near-miss prompts from `scripts/premind-skill-evals.json`. It launches Pi with only `read` enabled, checks that the entry skill and **only the relevant** reference were read, and checks for host-mismatched control names and untrusted-reminder handling. The Codex/Claude variants run through a Pi proxy with an explicit host-role prompt, not through native CLIs.
+
+- Pi: 5/5 final cases passed (start PR, cross-repo PR, switch worktree, reminder safety, unrelated GitHub Actions). Positive cases loaded exactly the relevant reference; the negative case loaded no Premind skill.
+- Codex through Pi proxy: 5/5 routing and explanation cases passed. Claude through Pi proxy: positive cases passed and the unrelated GitHub case passed twice after removing the proxy host hint from negative cases. These are guidance checks, **not** evidence of native plugin discovery.
+- A no-skill/no-tools Pi baseline on the worktree case invented `premind_update_session.checkout_path` and `premind_prepare_pr_report`; the skill-enabled case used `premind_set_active_checkout.path` and `premind_subscribe`. The baseline intentionally had no file-read access, so this is qualitative rather than a controlled performance benchmark.
+- Initial live runs exposed under-triggering on short, generic questions and occasional host-name substitution in the Pi proxy. The final prompts request the exact API fields, the description now includes PR/worktree/reminder triggers, and the entry point directs the agent to use this host's controls. Model invocation remains probabilistic: re-run the cases if skill wording or host tooling changes.
+
+## Acceptance criteria
+
+- Premind's installed Codex skill is generated, preserves the existing behavioral/safety contract, and works in each relevant Codex plugin leaf.
+- Every additional host enabled in this change gets one discoverable, host-correct entry point with working on-demand references; no cross-harness tool instructions leak into it.
+- Shared guidance has one maintained source, generated files are committed, regeneration is deterministic, and CI catches drift and missing packaged files.
+- Representative positive and near-miss prompts demonstrate appropriate skill triggering, selective reference loading, and correct host-specific behavior.
+- Documentation points to the generation command and explains how to update host-specific capability guidance without editing generated Markdown by hand.
