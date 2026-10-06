@@ -946,10 +946,30 @@ describe("premind Pi extension", () => {
 		assert.ok(disableTool);
 		assert.ok(enableTool);
 
+		for (const tool of [disableTool, enableTool]) {
+			assert.match(tool.description ?? "", /ALL sessions and projects/);
+			assert.match(tool.description ?? "", /explicitly requested/);
+			for (const params of [{}, { confirmGlobal: false }]) {
+				await assert.rejects(
+					tool.execute("tool-unconfirmed", params, undefined, undefined, {}),
+					/refused to (disable|enable) polling globally.*confirmGlobal: true/,
+				);
+			}
+		}
+		assert.match(disableTool.description ?? "", /use premind_pause instead/);
+		assert.match(enableTool.description ?? "", /use premind_resume instead/);
+		assert.deepEqual(client.operations, []);
+
 		await disable.handler("", createCommandContext(notifications));
 		await enable.handler("", createCommandContext(notifications));
-		await disableTool.execute("tool-1", {}, undefined, undefined, {});
-		await enableTool.execute("tool-2", {}, undefined, undefined, {});
+		const disabled = await disableTool.execute(
+			"tool-1",
+			{ confirmGlobal: true },
+			undefined,
+			undefined,
+			{},
+		);
+		await enableTool.execute("tool-2", { confirmGlobal: true }, undefined, undefined, {});
 
 		assert.deepEqual(client.operations, [
 			"setGlobalDisabled:true",
@@ -960,9 +980,13 @@ describe("premind Pi extension", () => {
 		assert.deepEqual(
 			notifications.map(({ message }) => message),
 			[
-				"premind polling is disabled globally.",
-				"premind polling is enabled globally.",
+				"premind polling is disabled globally, across all sessions and projects.",
+				"premind polling is enabled globally, across all sessions and projects.",
 			],
+		);
+		assert.equal(
+			disabled.content[0]?.text,
+			"premind polling is disabled globally, across all sessions and projects.",
 		);
 	});
 

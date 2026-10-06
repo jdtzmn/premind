@@ -1,5 +1,11 @@
 import { PREMIND_VERSION_LABEL } from "../shared/version.ts";
 import {
+	GLOBAL_CONFIRMATION_DESCRIPTION,
+	globalControlRefusal,
+	globalControlResult,
+	globalControlToolDescription,
+} from "../shared/global-control.ts";
+import {
 	CONFIG_DIR_NAME,
 	type ExtensionAPI,
 	type Theme,
@@ -420,7 +426,7 @@ export const createPremindPiExtension = (
 
 		const setGlobalPolling = async (disabled: boolean) => {
 			const result = await createDaemonClient().setGlobalDisabled(disabled);
-			return `premind polling is ${result.disabled ? "disabled" : "enabled"} globally.`;
+			return globalControlResult(result.disabled);
 		};
 
 		const setStatus = (
@@ -737,14 +743,16 @@ export const createPremindPiExtension = (
 		});
 
 		pi.registerCommand("premind:enable", {
-			description: "Enable premind GitHub polling globally",
+			description:
+				"Enable premind GitHub polling globally, across all sessions and projects",
 			handler: async (_args, ctx) => {
 				ctx.ui.notify(await setGlobalPolling(false), "info");
 			},
 		});
 
 		pi.registerCommand("premind:disable", {
-			description: "Disable premind GitHub polling globally",
+			description:
+				"Disable premind GitHub polling globally, across all sessions and projects (use /premind:pause for this session only)",
 			handler: async (_args, ctx) => {
 				ctx.ui.notify(await setGlobalPolling(true), "info");
 			},
@@ -1016,31 +1024,33 @@ export const createPremindPiExtension = (
 			},
 		});
 
-		pi.registerTool({
-			name: "premind_enable",
-			label: "Premind Enable",
-			description: "Enable premind GitHub polling globally.",
-			parameters: Type.Object({}),
-			async execute() {
-				return {
-					content: [{ type: "text" as const, text: await setGlobalPolling(false) }],
-					details: {},
-				};
-			},
-		});
-
-		pi.registerTool({
-			name: "premind_disable",
-			label: "Premind Disable",
-			description: "Disable premind GitHub polling globally.",
-			parameters: Type.Object({}),
-			async execute() {
-				return {
-					content: [{ type: "text" as const, text: await setGlobalPolling(true) }],
-					details: {},
-				};
-			},
-		});
+		for (const [name, label, action, alternative] of [
+			["premind_enable", "Premind Enable", "enable", "premind_resume"],
+			["premind_disable", "Premind Disable", "disable", "premind_pause"],
+		] as const) {
+			pi.registerTool({
+				name,
+				label,
+				description: globalControlToolDescription(action, alternative),
+				parameters: Type.Object({
+					confirmGlobal: Type.Boolean({ description: GLOBAL_CONFIRMATION_DESCRIPTION }),
+				}),
+				async execute(_toolCallId, params) {
+					if (params.confirmGlobal !== true) {
+						throw new Error(globalControlRefusal(action, alternative));
+					}
+					return {
+						content: [
+							{
+								type: "text" as const,
+								text: await setGlobalPolling(action === "disable"),
+							},
+						],
+						details: {},
+					};
+				},
+			});
+		}
 
 		pi.registerTool({
 			name: "premind_doctor",
