@@ -998,6 +998,7 @@ describe("premind Pi extension", () => {
 		createPremindPiExtension({
 			createDaemonClient: () => client.client,
 			config: { statusPollIntervalMs: 0 },
+			detectGit: async () => ({ repo: "owner/repo", branch: "feature/recovered" }),
 		})(mock.pi as never);
 
 		const setActiveCheckout = mock.commands.get("premind:set-active-checkout");
@@ -1040,6 +1041,8 @@ describe("premind Pi extension", () => {
 		);
 
 		assert.deepEqual(client.operations, [
+			"registerClient:/tmp/project:pi-extension",
+			"registerSession:/tmp/session.jsonl:owner/repo:feature/recovered",
 			"activateWorktree:/tmp/session.jsonl:/tmp/other-worktree",
 			"subscribe:/tmp/session.jsonl:owner/repo:42:inferred",
 			"unsubscribe:/tmp/session.jsonl:owner/repo:42",
@@ -1055,6 +1058,32 @@ describe("premind Pi extension", () => {
 				"premind unsubscribed from owner/repo#42.",
 			],
 		);
+	});
+
+	test("set active checkout attaches a pre-existing Pi session", async () => {
+		const mock = createMockPi();
+		const client = createClient();
+		createPremindPiExtension({
+			createDaemonClient: () => client.client,
+			config: { statusPollIntervalMs: 0 },
+			detectGit: async () => ({ repo: "owner/repo", branch: "feature/recovered" }),
+		})(mock.pi as never);
+
+		const tool = mock.tools.get("premind_set_active_checkout");
+		assert.ok(tool);
+		await tool.execute(
+			"tool-call-1",
+			{ path: "/tmp/recovered-worktree" },
+			undefined,
+			undefined,
+			createCommandContext(),
+		);
+
+		assert.deepEqual(client.operations, [
+			"registerClient:/tmp/project:pi-extension",
+			"registerSession:/tmp/session.jsonl:owner/repo:feature/recovered",
+			"activateWorktree:/tmp/session.jsonl:/tmp/recovered-worktree",
+		]);
 	});
 
 	test("/premind:deliver reports when there is no pending reminder", async () => {

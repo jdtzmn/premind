@@ -53,6 +53,8 @@ Install the self-contained Claude plugin from a checkout or released package roo
 claude plugin install /path/to/premind/plugin-claude
 ```
 
+When installing directly from a source checkout, run `bun run build:runtime` before `claude plugin install`. Released package contents already include the generated bundles.
+
 The plugin requires **Node 22.13+** for `node:sqlite`. Its hooks start or reuse a shared local daemon from `plugin-claude/generated/premind-daemon.mjs`; a Claude install does not need Bun, `tsx`, a repository checkout, or repository-root `node_modules` at runtime. The launcher probes the shared socket, coordinates startup with a state-directory lock, and fails open if the daemon cannot start.
 
 Claude reminders are delivered only at a `Stop` boundary. A delivered batch is confirmed on Claude's next continuation Stop hook; interrupted handoffs become retryable, so duplicates are preferred to lost reminders. Inactive Claude sessions are not woken in v0.2.
@@ -76,14 +78,24 @@ codex plugin marketplace add /path/to/premind
 codex plugin add premind@premind
 ```
 
+The marketplace installs the Codex compatibility package from `plugins/codex/premind`. It supports **Codex CLI 0.155.1 or newer**. The portable Agent Plugins package remains available at `plugins/premind`; keeping the two entrypoints separate lets current Codex releases load lifecycle hooks through `.codex-plugin/plugin.json` while preserving the universal package for hosts that support it.
+
 Review and trust Premind's lifecycle hooks before enabling them. The plugin uses `SessionStart`, `UserPromptSubmit`, `Stop`, `Interrupt`, and `SessionEnd`; it deliberately does **not** install `PostToolUse`. If hooks are not running, open Codex's hook-management UI, review the commands, and trust the current plugin definition.
 
-The installed plugin runs dependency-closed Node bundles from its own `generated/` directory. It requires **Node 22.13+**, `git`, and an authenticated GitHub CLI (`gh auth login`). Bun, `tsx`, a source checkout, and repository `node_modules` are not runtime prerequisites. Hooks and MCP use Codex-managed `PLUGIN_DATA` for local receipts and session handles; Premind only uses network access for GitHub polling.
+The installed plugin runs dependency-closed Node bundles from its own `generated/` directory. It requires **Node 22.13+**, `git`, and an authenticated GitHub CLI (`gh auth login`). Bun, `tsx`, a source checkout, and repository `node_modules` are not runtime prerequisites. Hooks use Codex-managed `PLUGIN_DATA` for local receipts and session handles; on Codex versions that do not inject it into plugin MCP processes, Premind resolves the same Codex-managed data directory from the installed plugin path. Premind only uses network access for GitHub polling.
 
 Codex cannot wake an already-idle stock CLI thread. Updates found while idle remain durable and arrive at the next available `SessionStart`, `UserPromptSubmit`, or `Stop` boundary. An interrupted delivery may be shown again rather than silently lost.
 
 After changing a local checkout, refresh the marketplace/plugin installation and re-review hooks. Remove the plugin with `codex plugin remove premind@premind`, then remove its marketplace source if it is no longer needed.
 For a source checkout modified locally, run `bun run build:runtime` before refreshing so the marketplace sees updated bundles.
+
+### Agent skills
+
+Premind ships task-scoped Agent Skills for Codex (portable and compatibility plugins), Pi (`skills/premind` in the Pi package), and the Claude Code plugin (`plugin-claude/skills/premind`). Each `SKILL.md` loads subscription and reminder guidance from its own `references/` only when relevant. OpenCode's npm plugin does not install into OpenCode's project/global skill discovery directories, so it does not claim an automatically installed skill.
+
+These files are generated, not hand-edited. After changing host control metadata in `src/shared/command-capabilities.ts` or `src/codex/mcp-server.ts`, or updating the shared guidance in `scripts/generate-premind-skills.ts`, run `bun run generate:skill` and `bun run test:skills` and commit the output. CI checks for drift.
+
+For an opt-in model-based check of triggering and selective reference reads, run `bun run test:skills:live` (or append `codex` / `claude` to test those files through Pi's read-only skill runner). It uses an authenticated Pi model, makes no Premind tool calls, and is not a substitute for native Claude/Codex installation checks.
 
 ## How it works
 
@@ -174,7 +186,7 @@ ls /var/folders/*/*/*/T/premind.sock 2>/dev/null
 - OpenCode
 - `gh` CLI authenticated with access to your repository
 - OpenCode/Pi: Node 22.5+ with the package's `tsx` dependency for the source daemon launcher
-- Claude Code/Codex: Node 22.13+; installed plugins use self-contained generated bundles and do not require Bun, `tsx`, or repository `node_modules` at runtime
+- Claude Code/Codex: Node 22.13+; Codex CLI 0.155.1+; installed plugins use self-contained generated bundles and do not require Bun, `tsx`, or repository `node_modules` at runtime
 
 ## Architecture
 
