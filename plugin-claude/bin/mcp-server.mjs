@@ -26,6 +26,20 @@ const resolveConfigSource = (environment = process.env) => {
   return "schema defaults";
 };
 
+// Mirrors src/shared/global-control.ts; this plain-JS runtime cannot import TS.
+const globalControlSchema = {
+  type: "object",
+  properties: {
+    confirmGlobal: {
+      type: "boolean",
+      description:
+        "Must be true. Set it only after the user explicitly asked to change premind polling globally for every session and project.",
+    },
+  },
+  required: ["confirmGlobal"],
+  additionalProperties: false,
+};
+
 const tools = [
   {
     name: "status",
@@ -49,22 +63,14 @@ const tools = [
   {
     name: "enable",
     description:
-      "Enable Premind polling globally across every active Premind session and project.",
-    inputSchema: {
-      type: "object",
-      properties: {},
-      additionalProperties: false,
-    },
+      "Enable Premind GitHub polling globally, resuming it for ALL sessions and projects. Call only when the user explicitly requested the global enable action, and pass confirmGlobal: true. Never use this to resume one session.",
+    inputSchema: globalControlSchema,
   },
   {
     name: "disable",
     description:
-      "Disable Premind polling globally across every active Premind session and project.",
-    inputSchema: {
-      type: "object",
-      properties: {},
-      additionalProperties: false,
-    },
+      "Disable Premind GitHub polling globally, stopping it for ALL sessions and projects. Call only when the user explicitly requested the global disable action, and pass confirmGlobal: true. Never use this to pause, mute, or quiet the current session.",
+    inputSchema: globalControlSchema,
   },
   {
     name: "set_active_checkout",
@@ -185,11 +191,19 @@ export const handleMcpRequest = async (
     );
   }
   if (name === "enable" || name === "disable") {
+    if (args.confirmGlobal !== true) {
+      return {
+        ...text(
+          `premind refused to ${name} polling globally: this affects every session and project. Ask the user to confirm the global ${name}, then call again with confirmGlobal: true.`,
+        ),
+        isError: true,
+      };
+    }
     const result = await ipc("setGlobalDisabled", {
       disabled: name === "disable",
     });
     return text(
-      `Premind polling is ${result.disabled ? "disabled" : "enabled"} globally.`,
+      `Premind polling is ${result.disabled ? "disabled" : "enabled"} globally, across all sessions and projects.`,
     );
   }
 

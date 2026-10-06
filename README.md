@@ -163,7 +163,7 @@ OpenCode exposes `premind_set_active_checkout`, `premind_subscribe`, and `premin
 
 The Pi package also exposes `/premind:pause` / `/premind:resume` and the `premind_pause` / `premind_resume` tools. Pausing withholds reminders from the current session only: every subscription stays watched, PR updates keep accumulating, and the pause survives a Pi reload until you resume. It is not a substitute for the global `disable` / `enable` controls.
 
-`/premind-disable` is a daemon-wide kill switch: the daemon stays up and sessions keep registering, but no GitHub API calls are made until you re-enable. The flag is persisted in SQLite, so it survives daemon restarts. Queued events are preserved and delivered as normal once you re-enable.
+The global `enable` / `disable` model tools in every harness require `confirmGlobal: true` and refuse unconfirmed calls, so agents cannot mistake them for session controls. `/premind-disable` is a daemon-wide kill switch: the daemon stays up and sessions keep registering, but no GitHub API calls are made until you re-enable. The flag is persisted in SQLite, so it survives daemon restarts. Queued events are preserved and delivered as normal once you re-enable.
 
 premind also exposes a `premind_probe` tool that returns runtime diagnostics. This is useful if you want to verify that the plugin actually initialized even when slash commands are not showing up yet.
 
