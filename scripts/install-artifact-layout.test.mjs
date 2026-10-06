@@ -25,6 +25,7 @@ const makeFixture = () => {
 	});
 	json("plugins/premind/plugin.json", { version: "0.1.0" });
 	json("plugins/codex/premind/.codex-plugin/plugin.json", { version: "0.1.0" });
+	json("plugin-claude/.claude-plugin/plugin.json", { version: "0.2.0" });
 	json(".agents/plugins/marketplace.json", {
 		plugins: [{ source: { path: "./plugins/codex/premind" } }],
 	});
@@ -58,32 +59,43 @@ test("rejects diverging generated bundles", (t) => {
 	assert.throws(() => validateInstallArtifact(root), /premind-mcp\.mjs differs/);
 });
 
-test("verifies archive checksum and extracted contents", (t) => {
-  const { root } = makeFixture();
-  const bundle = fs.mkdtempSync(path.join(os.tmpdir(), "premind-install-bundle-"));
-  t.after(() => fs.rmSync(bundle, { recursive: true, force: true }));
-  fs.renameSync(root, path.join(bundle, "package"));
-  const filename = "premind-0.1.0.tgz";
-  const packed = spawnSync("tar", ["-czf", filename, "package"], { cwd: bundle });
-  assert.equal(packed.status, 0, packed.stderr?.toString());
-  const archive = path.join(bundle, filename);
-  const original = fs.readFileSync(archive);
-  const sha256 = createHash("sha256").update(original).digest("hex");
-  fs.writeFileSync(
-    path.join(bundle, "artifact.json"),
-    JSON.stringify({
-      schemaVersion: 1,
-      sourceCommit: "a".repeat(40),
-      packageName: "premind",
-      packageVersion: "0.1.0",
-      archive: { file: filename, sha256 },
-      extractedRoot: "package",
-    }),
-  );
-  assert.equal(verifyInstallArtifact(bundle).archive.sha256, sha256);
-  fs.appendFileSync(archive, "corrupt");
-  assert.throws(() => verifyInstallArtifact(bundle), /archive checksum differs/);
-  fs.writeFileSync(archive, original);
-  fs.writeFileSync(path.join(bundle, "package/extensions/premind.ts"), "different");
-  assert.throws(() => verifyInstallArtifact(bundle), /extracted extensions\/premind\.ts differs/);
+test("verifies versioned dist archives and their extracted contents", (t) => {
+	const { root } = makeFixture();
+	const bundle = fs.mkdtempSync(path.join(os.tmpdir(), "premind-dist-bundle-"));
+	t.after(() => fs.rmSync(bundle, { recursive: true, force: true }));
+	fs.renameSync(root, path.join(bundle, "package"));
+	const codexRoot = path.join(bundle, "codex-source");
+	fs.mkdirSync(path.join(codexRoot, "plugins/codex"), { recursive: true });
+	fs.cpSync(path.join(bundle, "package/.agents"), path.join(codexRoot, ".agents"), { recursive: true });
+	fs.cpSync(path.join(bundle, "package/plugins/codex/premind"), path.join(codexRoot, "plugins/codex/premind"), { recursive: true });
+	const archives = {
+		npm: { file: "premind-0.1.0.tgz", source: bundle, member: "package" },
+		codex: { file: "premind-codex-0.1.0.tgz", source: codexRoot, member: "." },
+		claude: { file: "premind-claude-0.2.0.tgz", source: path.join(bundle, "package/plugin-claude"), member: "." },
+	};
+	for (const asset of Object.values(archives)) {
+		const packed = spawnSync("tar", ["-czf", path.join(bundle, asset.file), "-C", asset.source, asset.member]);
+		assert.equal(packed.status, 0, packed.stderr?.toString());
+		asset.sha256 = createHash("sha256").update(fs.readFileSync(path.join(bundle, asset.file))).digest("hex");
+		delete asset.source;
+		delete asset.member;
+	}
+	fs.writeFileSync(path.join(bundle, "SHA256SUMS"), `${Object.values(archives).map((asset) => `${asset.sha256}  ${asset.file}`).join("\n")}\n`);
+	fs.writeFileSync(path.join(bundle, "artifact.json"), JSON.stringify({
+		schemaVersion: 2,
+		sourceCommit: "a".repeat(40),
+		packageName: "premind",
+		packageVersion: "0.1.0",
+		claudeVersion: "0.2.0",
+		archives,
+		extractedRoot: "package",
+	}));
+	assert.equal(verifyInstallArtifact(bundle).archives.npm.sha256, archives.npm.sha256);
+	const archive = path.join(bundle, archives.codex.file);
+	const original = fs.readFileSync(archive);
+	fs.appendFileSync(archive, "corrupt");
+	assert.throws(() => verifyInstallArtifact(bundle), /codex archive checksum differs/);
+	fs.writeFileSync(archive, original);
+	fs.writeFileSync(path.join(bundle, "package/extensions/premind.ts"), "different");
+	assert.throws(() => verifyInstallArtifact(bundle), /extracted npm extensions\/premind\.ts differs/);
 });
