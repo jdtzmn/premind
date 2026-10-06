@@ -2,6 +2,7 @@ import { tool, type Plugin } from "@opencode-ai/plugin"
 import { PREMIND_CLIENT_HEARTBEAT_MS, PREMIND_IDLE_DELIVERY_THRESHOLD_MS } from "../shared/constants.ts"
 import type { PremindConfig } from "../shared/schema.ts"
 import { PREMIND_VERSION_LABEL } from "../shared/version.ts"
+import { GLOBAL_CONFIRMATION_DESCRIPTION, globalControlRefusal, globalControlToolDescription } from "../shared/global-control.ts"
 import { ensureUserConfigTemplate, getDefaultUserConfigPath, getLegacyUserConfigPath, loadPremindConfig } from "../shared/config-loader.ts"
 import { PremindDaemonClient } from "../client/daemon-client.ts"
 import { renderPremindStatus } from "./commands.ts"
@@ -789,7 +790,7 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
     await daemon.setGlobalDisabled(false)
     await injectResponse(
       sessionID,
-      "premind re-enabled globally. GitHub polling will resume on the next scheduler tick.",
+      "premind re-enabled globally. GitHub polling will resume on the next scheduler tick across all sessions and projects.",
       inputRef,
     )
   }
@@ -865,7 +866,7 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
       }
       configInput.command["premind-enable"] = {
         template: COMMAND_MARKERS.enable,
-        description: "Re-enable premind globally (resumes GitHub polling)",
+        description: "Re-enable premind globally (resumes GitHub polling across all sessions and projects)",
       }
 
       // Keep the heartbeat alive for the lifetime of the plugin instance.
@@ -941,19 +942,25 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
       premind_deliver: deliverTool,
       premind_send_now: deliverTool,
       premind_disable: tool({
-        description: "Disable premind globally. Stops GitHub polling across all sessions and projects; the daemon stays up so sessions keep registering. Useful for avoiding GitHub API rate limits.",
-        args: {},
-        async execute() {
+        description: `${globalControlToolDescription("disable")} The daemon stays up so sessions keep registering.`,
+        args: {
+          confirmGlobal: tool.schema.boolean().describe(GLOBAL_CONFIRMATION_DESCRIPTION),
+        },
+        async execute(args) {
+          if (args.confirmGlobal !== true) return globalControlRefusal("disable")
           await daemon.setGlobalDisabled(true)
           return "premind disabled globally. GitHub polling is stopped across all sessions and projects."
         },
       }),
       premind_enable: tool({
-        description: "Re-enable premind globally after premind_disable. GitHub polling resumes on the next scheduler tick.",
-        args: {},
-        async execute() {
+        description: `${globalControlToolDescription("enable")} Polling resumes on the next scheduler tick.`,
+        args: {
+          confirmGlobal: tool.schema.boolean().describe(GLOBAL_CONFIRMATION_DESCRIPTION),
+        },
+        async execute(args) {
+          if (args.confirmGlobal !== true) return globalControlRefusal("enable")
           await daemon.setGlobalDisabled(false)
-          return "premind re-enabled globally. GitHub polling will resume on the next scheduler tick."
+          return "premind re-enabled globally. GitHub polling will resume on the next scheduler tick across all sessions and projects."
         },
       }),
       premind_probe: tool({

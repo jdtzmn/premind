@@ -256,10 +256,24 @@ describe("premind plugin compatibility harness", () => {
     assert.ok(operations.includes("subscribe:session-1:acme/repo:13"))
     assert.ok(operations.includes("unsubscribe:session-1:acme/repo:13"))
 
-    const toolDisableResult = await runtime.tool.premind_disable.execute({}, { sessionID: "session-1" })
+    for (const name of ["premind_disable", "premind_enable"] as const) {
+      assert.match(runtime.tool[name].description ?? "", /ALL sessions and projects/)
+      assert.match(runtime.tool[name].description ?? "", /explicitly requested/)
+      const globalOperationCount = operations.filter((operation) => operation.startsWith("setGlobalDisabled:")).length
+      for (const args of [{}, { confirmGlobal: false }]) {
+        const refused = await runtime.tool[name].execute(args, { sessionID: "session-1" })
+        assert.match(refused, /refused to (disable|enable) polling globally.*confirmGlobal: true/)
+      }
+      assert.equal(
+        operations.filter((operation) => operation.startsWith("setGlobalDisabled:")).length,
+        globalOperationCount,
+      )
+    }
+
+    const toolDisableResult = await runtime.tool.premind_disable.execute({ confirmGlobal: true }, { sessionID: "session-1" })
     assert.match(toolDisableResult, /premind disabled globally/)
 
-    const toolEnableResult = await runtime.tool.premind_enable.execute({}, { sessionID: "session-1" })
+    const toolEnableResult = await runtime.tool.premind_enable.execute({ confirmGlobal: true }, { sessionID: "session-1" })
     assert.match(toolEnableResult, /premind re-enabled globally/)
 
     const toolProbeResult = await runtime.tool.premind_probe.execute({}, { sessionID: "session-1" })
