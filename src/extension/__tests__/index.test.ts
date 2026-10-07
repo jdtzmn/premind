@@ -4,6 +4,7 @@ import {
 	createPremindPiExtension,
 	renderPremindPiStatus,
 	renderPremindReminderText,
+	STATUS_POLL_STALE_MS,
 } from "../index.ts";
 import type {
 	DebugStatusResponse,
@@ -697,6 +698,47 @@ describe("premind Pi extension", () => {
 				"ackReminderBundle:/tmp/session.jsonl:confirmed",
 			),
 		);
+		await shutdown({}, ctx);
+	});
+
+	test("status polling recovers after a daemon request that never settles", async (t) => {
+		t.mock.timers.enable({ apis: ["setInterval", "Date"] });
+		const mock = createMockPi();
+		const client = createClient({ pendingBatch: reminderBatch });
+		const { ctx } = createEventContext();
+		let statusCalls = 0;
+		client.client.debugStatus = async () => {
+			statusCalls++;
+			// The first poll's request is lost with its daemon and never settles.
+			if (statusCalls === 2) return new Promise<DebugStatusResponse>(() => {});
+			return status;
+		};
+		createPremindPiExtension({
+			createDaemonClient: () => client.client,
+			config: { statusPollIntervalMs: 5_000 },
+			detectGit: async () => ({ repo: "owner/repo", branch: "feature/pi" }),
+		})(mock.pi as never);
+
+		const start = mock.events.get("session_start");
+		const shutdown = mock.events.get("session_shutdown");
+		assert.ok(start);
+		assert.ok(shutdown);
+		await start({}, ctx);
+
+		t.mock.timers.tick(5_000);
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		assert.equal(statusCalls, 2);
+
+		// While the stuck poll is still recent, later ticks must not overlap it.
+		t.mock.timers.tick(5_000);
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		assert.equal(statusCalls, 2);
+		assert.equal(mock.sentMessages.length, 0);
+
+		// Once the stuck poll is stale, polling resumes and delivers.
+		t.mock.timers.tick(STATUS_POLL_STALE_MS);
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		assert.equal(mock.sentMessages.length, 1);
 		await shutdown({}, ctx);
 	});
 

@@ -101,6 +101,10 @@ const SESSION_SOURCE = "pi-extension";
 const DEFAULT_HEARTBEAT_MS = 10_000;
 const DEFAULT_STATUS_POLL_INTERVAL_MS = 15_000;
 const MIN_STATUS_POLL_INTERVAL_MS = 5_000;
+// A status poll still running after this long is treated as abandoned so one
+// stuck daemon request cannot end idle delivery for the rest of the session.
+// Daemon requests time out well before this, so it only trips on a true hang.
+export const STATUS_POLL_STALE_MS = 2 * 60_000;
 const REMINDER_VISIBLE_EVENT_LIMIT = 3;
 const PR_ICON = ""; // nf-oct-git_pull_request
 const STALE_EXTENSION_CONTEXT_PREFIX = "This extension ctx is stale";
@@ -298,7 +302,9 @@ export const createPremindPiExtension = (
 		let sessionClient: DaemonClientLike | undefined;
 		let heartbeatTimer: NodeJS.Timeout | undefined;
 		let statusPollTimer: NodeJS.Timeout | undefined;
-		let statusPollInFlight = false;
+		// Start time of the running status poll, or undefined when none is running.
+		let statusPollStartedAt: number | undefined;
+		let statusPollToken = 0;
 		let deliveryInFlight = false;
 		let sessionGeneration = 0;
 		let config = normalizePremindPiConfig(dependencies.config);
@@ -545,8 +551,17 @@ export const createPremindPiExtension = (
 			},
 			generation: number,
 		) => {
-			if (generation !== sessionGeneration || statusPollInFlight) return;
-			statusPollInFlight = true;
+			if (generation !== sessionGeneration) return;
+			const startedAt = Date.now();
+			if (
+				statusPollStartedAt !== undefined &&
+				startedAt - statusPollStartedAt < STATUS_POLL_STALE_MS
+			)
+				return;
+			// Owning the poll by token lets an abandoned poll finish late without
+			// clearing the marker of the poll that replaced it.
+			const token = ++statusPollToken;
+			statusPollStartedAt = startedAt;
 			try {
 				await refreshStatusbar(ctx, generation);
 				if (
@@ -568,7 +583,7 @@ export const createPremindPiExtension = (
 				)
 					setStatus(ctx, `${PR_ICON} error`);
 			} finally {
-				statusPollInFlight = false;
+				if (token === statusPollToken) statusPollStartedAt = undefined;
 			}
 		};
 
