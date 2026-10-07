@@ -13,6 +13,9 @@ import os from "node:os"
 import path from "node:path"
 import { acquireSessionLifecycleLock } from "../../../codex/delivery-receipts.ts"
 import { runCodexLifecycle } from "../../../codex/lifecycle.ts"
+import { handleCodexMcpRequest } from "../../../codex/mcp-server.ts"
+import { ensureCodexSessionBinding } from "../../../codex/session-binding.ts"
+import { harnessToolName } from "./tool-names.ts"
 import type { AdapterDriver, DeliveryCapture, StartIdleArgs } from "./types.ts"
 
 const HOST_SESSION_ID = "harness-thread"
@@ -26,11 +29,17 @@ const createCodexHarness = ({ daemonClient, sessionId, branch }: CodexHarnessArg
 	const pluginData = fs.mkdtempSync(path.join(os.tmpdir(), "premind-codex-driver-"))
 	const captured: DeliveryCapture[] = []
 	let turn = 0
+	let sessionHandle: string | undefined
 
 	const dependencies = {
 		client: daemonClient,
 		ensureDaemon: async () => undefined,
 		detectGitContext: async () => ({ repo: "acme/repo", branch }),
+		ensureSessionBinding: async (targetSessionId: string, cwd: string) => {
+			const binding = ensureCodexSessionBinding(pluginData, targetSessionId, cwd)
+			sessionHandle = binding.sessionHandle
+			return binding
+		},
 		acquireLock: async (targetSessionId: string, cleanupBoundary: boolean) =>
 			await acquireSessionLifecycleLock(pluginData, targetSessionId, {
 				...(cleanupBoundary ? { timeoutMs: 100 } : {}),
@@ -94,6 +103,10 @@ const createCodexHarness = ({ daemonClient, sessionId, branch }: CodexHarnessArg
 
 	return {
 		captured,
+		pluginData,
+		get sessionHandle() {
+			return sessionHandle
+		},
 		sessionStart,
 		stop,
 		/** Deliver at Stop, then confirm when the requested continuation stops. */
@@ -129,6 +142,57 @@ export const codexDriver: AdapterDriver = {
 		return {
 			captured: harness.captured,
 			idleAgain: () => harness.stop(),
+		}
+	},
+
+	async createControls(args) {
+		const harness = createCodexHarness(args)
+		await harness.sessionStart()
+		let requestId = 0
+		return {
+			captured: harness.captured,
+			async invoke(capabilityId, params = {}) {
+				const name = harnessToolName("codex", capabilityId)
+				const definition = (await handleCodexMcpRequest(
+					{ jsonrpc: "2.0", id: ++requestId, method: "tools/list" },
+					{
+						client: args.daemonClient as never,
+						pluginData: harness.pluginData,
+						cwd: "/tmp/project",
+						ensureDaemon: async () => {},
+					},
+				)) as { tools: Array<{ name: string; inputSchema: { properties: object } }> }
+				const takesHandle = definition.tools.some(
+					(tool) => tool.name === name && "sessionHandle" in tool.inputSchema.properties,
+				)
+				const result = (await handleCodexMcpRequest(
+					{
+						jsonrpc: "2.0",
+						id: ++requestId,
+						method: "tools/call",
+						params: {
+							name,
+							arguments: {
+								...params,
+								...(takesHandle && harness.sessionHandle
+									? { sessionHandle: harness.sessionHandle }
+									: {}),
+							},
+						},
+					},
+					{
+						client: args.daemonClient as never,
+						pluginData: harness.pluginData,
+						cwd: "/tmp/project",
+						ensureDaemon: async () => {},
+					},
+				)) as { content: Array<{ text: string }>; isError?: boolean }
+				return {
+					text: result.content.map((part) => part.text).join("\n"),
+					isError: result.isError === true,
+				}
+			},
+			shutdown: harness.shutdown,
 		}
 	},
 
