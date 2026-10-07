@@ -50,7 +50,12 @@ const createCodexHarness = ({ daemonClient, sessionId, branch }: CodexHarnessArg
 				decision?: string
 				reason?: string
 			}
-			if (output.hookSpecificOutput?.additionalContext) {
+			const context = output.hookSpecificOutput?.additionalContext
+			// SessionStart always announces the session handle; that is not a reminder.
+			const isHandleNoticeOnly =
+				context !== undefined &&
+				/^Premind session handle: \S+\n[^\n]*$/.test(context.trim())
+			if (context && !isHandleNoticeOnly) {
 				captured.push({
 					sessionId,
 					text: output.hookSpecificOutput.additionalContext,
