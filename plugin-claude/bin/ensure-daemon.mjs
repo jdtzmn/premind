@@ -5,6 +5,7 @@ import path from "node:path";
 import {
   CLAUDE_REQUIRED_DAEMON_OPERATIONS,
   acquireDaemonStartLock,
+  isDaemonStarting,
   probeDaemon,
   releaseDaemonStartLock,
   waitForDaemon,
@@ -36,6 +37,13 @@ export const ensureDaemonRunning = async () => {
         startupTimeoutMs,
       );
     if (await probeDaemon()) return true;
+    // A daemon that holds the daemon lock is starting up; never spawn another.
+    if (isDaemonStarting())
+      return await waitForDaemon(
+        undefined,
+        CLAUDE_REQUIRED_DAEMON_OPERATIONS,
+        startupTimeoutMs,
+      );
     if (!fs.existsSync(runtimePath)) return false;
 
     const child = spawn(process.execPath, [runtimePath], {
