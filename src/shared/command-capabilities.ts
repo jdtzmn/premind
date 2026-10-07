@@ -1,10 +1,40 @@
-export const premindHarnesses = ["pi", "claude", "opencode"] as const;
+/**
+ * The cross-harness contract for every Premind command and model tool.
+ *
+ * Every supported harness must expose each capability's canonical surface.
+ * Any missing or renamed surface needs a typed exception; tests enforce this
+ * for every capability, whatever its classification. See AGENTS.md
+ * "Supported Harnesses".
+ */
+export const premindHarnesses = ["pi", "claude", "opencode", "codex"] as const;
 
 export type PremindHarness = (typeof premindHarnesses)[number];
 export type CapabilityClassification = "common" | "adapter-specific";
 export type CapabilityScope = "daemon" | "session";
 
 export type CapabilitySurfaceKind = "commands" | "tools";
+
+export const premindHarnessLabels = {
+	pi: "Pi",
+	claude: "Claude Code",
+	opencode: "OpenCode",
+	codex: "Codex",
+} as const satisfies Record<PremindHarness, string>;
+
+/**
+ * - `unsupported`: the host cannot provide the canonical surface.
+ * - `deferred`: the host could provide it but does not yet; must name a
+ *   tracking issue or PR.
+ * - `host-naming`: the surface exists under a host-specific name.
+ */
+export type CapabilityExceptionKind = "unsupported" | "deferred" | "host-naming";
+
+export type CapabilityException = {
+	kind: CapabilityExceptionKind;
+	reason: string;
+	/** Required for `deferred`: an issue or PR reference such as `#77`. */
+	tracking?: string;
+};
 
 export type HarnessCapabilityAliases = Partial<
 	Record<CapabilitySurfaceKind, readonly string[]>
@@ -14,7 +44,7 @@ export type HarnessCapabilitySurface = {
 	commands: readonly string[];
 	tools: readonly string[];
 	aliases?: HarnessCapabilityAliases;
-	exceptions?: Partial<Record<CapabilitySurfaceKind, string>>;
+	exceptions?: Partial<Record<CapabilitySurfaceKind, CapabilityException>>;
 };
 
 export type CommandCapability = {
@@ -24,6 +54,24 @@ export type CommandCapability = {
 	canonical: Record<CapabilitySurfaceKind, readonly string[]>;
 	harnesses: Record<PremindHarness, HarnessCapabilitySurface>;
 };
+
+const HARNESS_GAPS_ISSUE = "#77";
+
+const claudeToolNaming: CapabilityException = {
+	kind: "host-naming",
+	reason: "Claude MCP tools omit the premind_ prefix.",
+};
+
+const codexHasNoCommands: CapabilityException = {
+	kind: "unsupported",
+	reason: "Codex plugins expose MCP tools and skills, not slash commands.",
+};
+
+const deferred = (reason: string): CapabilityException => ({
+	kind: "deferred",
+	reason,
+	tracking: HARNESS_GAPS_ISSUE,
+});
 
 export const commandCapabilities = {
 	status: {
@@ -36,16 +84,22 @@ export const commandCapabilities = {
 			claude: {
 				commands: ["premind:status"],
 				tools: ["status"],
-				exceptions: {
-					tools: "Claude MCP tools omit the premind_ prefix.",
-				},
+				exceptions: { tools: claudeToolNaming },
 			},
 			opencode: {
 				commands: ["premind-status"],
 				tools: ["premind_status"],
 				exceptions: {
-					commands: "OpenCode retains its established hyphenated status command.",
+					commands: {
+						kind: "host-naming",
+						reason: "OpenCode retains its established hyphenated status command.",
+					},
 				},
+			},
+			codex: {
+				commands: [],
+				tools: ["premind_status"],
+				exceptions: { commands: codexHasNoCommands },
 			},
 		},
 	},
@@ -60,14 +114,28 @@ export const commandCapabilities = {
 				commands: ["premind:doctor"],
 				tools: ["probe"],
 				exceptions: {
-					tools: "Claude retains the existing probe MCP tool name.",
+					tools: {
+						kind: "host-naming",
+						reason: "Claude retains the existing probe MCP tool name.",
+					},
 				},
 			},
 			opencode: {
 				commands: ["premind:doctor"],
 				tools: ["premind_probe"],
 				exceptions: {
-					tools: "OpenCode retains the existing premind_probe tool name.",
+					tools: {
+						kind: "host-naming",
+						reason: "OpenCode retains the existing premind_probe tool name.",
+					},
+				},
+			},
+			codex: {
+				commands: [],
+				tools: [],
+				exceptions: {
+					commands: codexHasNoCommands,
+					tools: deferred("Codex does not yet expose a doctor MCP tool."),
 				},
 			},
 		},
@@ -87,7 +155,10 @@ export const commandCapabilities = {
 				commands: ["premind:deliver"],
 				tools: [],
 				exceptions: {
-					tools: "Claude delivery remains owned by the Stop hook.",
+					tools: {
+						kind: "unsupported",
+						reason: "Claude delivery remains owned by the Stop hook.",
+					},
 				},
 			},
 			opencode: {
@@ -96,6 +167,16 @@ export const commandCapabilities = {
 				aliases: {
 					commands: ["premind-send-now"],
 					tools: ["premind_send_now"],
+				},
+			},
+			codex: {
+				commands: [],
+				tools: [],
+				exceptions: {
+					commands: codexHasNoCommands,
+					tools: deferred(
+						"Codex does not yet expose a deliver MCP tool; lifecycle hooks may need to own delivery as Claude's Stop hook does.",
+					),
 				},
 			},
 		},
@@ -110,15 +191,24 @@ export const commandCapabilities = {
 			claude: {
 				commands: ["premind:enable"],
 				tools: ["enable"],
-				exceptions: {
-					tools: "Claude MCP tools omit the premind_ prefix.",
-				},
+				exceptions: { tools: claudeToolNaming },
 			},
 			opencode: {
 				commands: ["premind-enable"],
 				tools: ["premind_enable"],
 				exceptions: {
-					commands: "OpenCode retains its established hyphenated enable command.",
+					commands: {
+						kind: "host-naming",
+						reason: "OpenCode retains its established hyphenated enable command.",
+					},
+				},
+			},
+			codex: {
+				commands: [],
+				tools: [],
+				exceptions: {
+					commands: codexHasNoCommands,
+					tools: deferred("Codex does not yet expose an enable MCP tool."),
 				},
 			},
 		},
@@ -133,15 +223,24 @@ export const commandCapabilities = {
 			claude: {
 				commands: ["premind:disable"],
 				tools: ["disable"],
-				exceptions: {
-					tools: "Claude MCP tools omit the premind_ prefix.",
-				},
+				exceptions: { tools: claudeToolNaming },
 			},
 			opencode: {
 				commands: ["premind-disable"],
 				tools: ["premind_disable"],
 				exceptions: {
-					commands: "OpenCode retains its established hyphenated disable command.",
+					commands: {
+						kind: "host-naming",
+						reason: "OpenCode retains its established hyphenated disable command.",
+					},
+				},
+			},
+			codex: {
+				commands: [],
+				tools: [],
+				exceptions: {
+					commands: codexHasNoCommands,
+					tools: deferred("Codex does not yet expose a disable MCP tool."),
 				},
 			},
 		},
@@ -163,14 +262,21 @@ export const commandCapabilities = {
 				commands: [],
 				tools: ["set_active_checkout"],
 				exceptions: {
-					commands: "Claude currently exposes this as a model tool.",
-					tools: "Claude MCP tools omit the premind_ prefix.",
+					commands: deferred("Claude currently exposes this only as a model tool."),
+					tools: claudeToolNaming,
 				},
 			},
 			opencode: {
 				commands: [],
 				tools: ["premind_set_active_checkout"],
-				exceptions: { commands: "OpenCode currently exposes this as a model tool." },
+				exceptions: {
+					commands: deferred("OpenCode currently exposes this only as a model tool."),
+				},
+			},
+			codex: {
+				commands: [],
+				tools: ["premind_set_active_checkout"],
+				exceptions: { commands: codexHasNoCommands },
 			},
 		},
 	},
@@ -184,14 +290,19 @@ export const commandCapabilities = {
 			claude: {
 				commands: ["premind:subscribe"],
 				tools: ["subscribe"],
-				exceptions: {
-					tools: "Claude MCP tools omit the premind_ prefix.",
-				},
+				exceptions: { tools: claudeToolNaming },
 			},
 			opencode: {
 				commands: [],
 				tools: ["premind_subscribe"],
-				exceptions: { commands: "OpenCode currently exposes this as a model tool." },
+				exceptions: {
+					commands: deferred("OpenCode currently exposes this only as a model tool."),
+				},
+			},
+			codex: {
+				commands: [],
+				tools: ["premind_subscribe"],
+				exceptions: { commands: codexHasNoCommands },
 			},
 		},
 	},
@@ -211,47 +322,96 @@ export const commandCapabilities = {
 			claude: {
 				commands: ["premind:unsubscribe"],
 				tools: ["unsubscribe"],
-				exceptions: {
-					tools: "Claude MCP tools omit the premind_ prefix.",
-				},
+				exceptions: { tools: claudeToolNaming },
 			},
 			opencode: {
 				commands: [],
 				tools: ["premind_unsubscribe"],
-				exceptions: { commands: "OpenCode currently exposes this as a model tool." },
+				exceptions: {
+					commands: deferred("OpenCode currently exposes this only as a model tool."),
+				},
+			},
+			codex: {
+				commands: [],
+				tools: ["premind_unsubscribe"],
+				exceptions: { commands: codexHasNoCommands },
 			},
 		},
 	},
 	prune: {
 		classification: "adapter-specific",
 		scope: "daemon",
-		description: "Remove closed sessions and their pending reminder batches.",
+		description:
+			"Remove closed sessions and their pending reminder batches (administrative; not model-callable).",
 		canonical: { commands: ["premind:prune"], tools: [] },
 		harnesses: {
 			pi: { commands: ["premind:prune"], tools: [] },
-			claude: { commands: [], tools: [] },
-			opencode: { commands: [], tools: [] },
+			claude: {
+				commands: [],
+				tools: [],
+				exceptions: { commands: deferred("Only Pi exposes prune today.") },
+			},
+			opencode: {
+				commands: [],
+				tools: [],
+				exceptions: { commands: deferred("Only Pi exposes prune today.") },
+			},
+			codex: {
+				commands: [],
+				tools: [],
+				exceptions: { commands: codexHasNoCommands },
+			},
 		},
 	},
 } as const satisfies Record<string, CommandCapability>;
 
 export type CommandCapabilityId = keyof typeof commandCapabilities;
 
+/** Harness-level surfaces outside the command/tool matrix. */
+export const harnessSkillExceptions: Partial<
+	Record<PremindHarness, CapabilityException>
+> = {
+	opencode: {
+		kind: "unsupported",
+		reason:
+			"OpenCode's npm plugin cannot install into OpenCode's skill discovery directories.",
+	},
+};
+
+export const harnessSurface = (
+	capability: CommandCapability,
+	harness: PremindHarness,
+): HarnessCapabilitySurface => capability.harnesses[harness];
+
 export const expectedCapabilitySurface = (
 	harness: PremindHarness,
-	surface: "commands" | "tools",
+	surface: CapabilitySurfaceKind,
 ): string[] =>
-	Object.values(commandCapabilities)
+	Object.values(commandCapabilities as Record<string, CommandCapability>)
 		.flatMap((capability) => {
-			const capabilitySurface: HarnessCapabilitySurface =
-				capability.harnesses[harness];
-			const aliases =
-				"aliases" in capabilitySurface
-					? (capabilitySurface.aliases?.[surface] ?? [])
-					: [];
-			return [...capabilitySurface[surface], ...aliases];
+			const capabilitySurface = harnessSurface(capability, harness);
+			return [
+				...capabilitySurface[surface],
+				...(capabilitySurface.aliases?.[surface] ?? []),
+			];
 		})
 		.sort();
+
+/** Every exception declared in the registry, flattened for checks and docs. */
+export const listCapabilityExceptions = () =>
+	Object.entries(commandCapabilities as Record<string, CommandCapability>).flatMap(
+		([capabilityId, capability]) =>
+			premindHarnesses.flatMap((harness) =>
+				Object.entries(harnessSurface(capability, harness).exceptions ?? {}).map(
+					([surface, exception]) => ({
+						capabilityId,
+						harness,
+						surface: surface as CapabilitySurfaceKind,
+						exception: exception as CapabilityException,
+					}),
+				),
+			),
+	);
 
 const formatSurface = (surface: HarnessCapabilitySurface): string => {
 	const commands = surface.commands.map((name) => `\`/${name}\``);
@@ -277,32 +437,51 @@ const formatSurface = (surface: HarnessCapabilitySurface): string => {
 };
 
 export const renderCommandCapabilityDocumentation = (): string => {
+	const harnessHeaders = premindHarnesses.map((harness) => premindHarnessLabels[harness]);
 	const lines = [
 		"# Premind Command Capabilities",
 		"",
-		"This matrix is generated from `src/shared/command-capabilities.ts`. Harness-visible names may differ only when they are explicitly declared here.",
+		"This matrix is generated from `src/shared/command-capabilities.ts`. Every harness must expose each canonical surface; any missing or renamed surface is declared below as an `unsupported`, `deferred`, or `host-naming` exception.",
 		"",
-		"| Capability | Classification | Scope | Canonical | Pi | Claude Code | OpenCode |",
-		"| --- | --- | --- | --- | --- | --- | --- |",
+		`| Capability | Classification | Scope | Canonical | ${harnessHeaders.join(" | ")} |`,
+		`| --- | --- | --- | --- | ${harnessHeaders.map(() => "---").join(" | ")} |`,
 	];
-	for (const [capabilityId, capability] of Object.entries(commandCapabilities)) {
+	for (const [capabilityId, capability] of Object.entries(
+		commandCapabilities as Record<string, CommandCapability>,
+	)) {
+		const cells = premindHarnesses.map((harness) =>
+			formatSurface(harnessSurface(capability, harness)),
+		);
 		lines.push(
-			`| \`${capabilityId}\` | ${capability.classification} | ${capability.scope} | ${formatSurface(capability.canonical)} | ${formatSurface(capability.harnesses.pi)} | ${formatSurface(capability.harnesses.claude)} | ${formatSurface(capability.harnesses.opencode)} |`,
+			`| \`${capabilityId}\` | ${capability.classification} | ${capability.scope} | ${formatSurface(capability.canonical)} | ${cells.join(" | ")} |`,
 		);
 	}
-	lines.push("", "## Intentional exceptions", "");
-	for (const [capabilityId, capability] of Object.entries(commandCapabilities)) {
-		for (const harness of premindHarnesses) {
-			const surface = capability.harnesses[harness];
-			if (!("exceptions" in surface)) continue;
-			for (const [kind, reason] of Object.entries(surface.exceptions ?? {})) {
-				lines.push(`- \`${capabilityId}\` / ${harness} / ${kind}: ${reason}`);
-			}
-		}
+	const exceptions = listCapabilityExceptions();
+	const deferredGaps = exceptions.filter(({ exception }) => exception.kind === "deferred");
+	lines.push("", "## Deferred gaps", "");
+	if (deferredGaps.length === 0) lines.push("None.");
+	for (const { capabilityId, harness, surface, exception } of deferredGaps) {
+		lines.push(
+			`- \`${capabilityId}\` / ${premindHarnessLabels[harness]} / ${surface}: ${exception.reason} (tracked in ${exception.tracking})`,
+		);
+	}
+	lines.push("", "## Other exceptions", "");
+	for (const { capabilityId, harness, surface, exception } of exceptions) {
+		if (exception.kind === "deferred") continue;
+		lines.push(
+			`- \`${capabilityId}\` / ${premindHarnessLabels[harness]} / ${surface} (${exception.kind}): ${exception.reason}`,
+		);
+	}
+	for (const [harness, exception] of Object.entries(harnessSkillExceptions)) {
+		lines.push(
+			`- skills / ${premindHarnessLabels[harness as PremindHarness]} (${exception.kind}): ${exception.reason}`,
+		);
 	}
 	lines.push(
-		"- `prune` is Pi-specific administrative maintenance and is not model-callable.",
-		"- Claude status remains aggregate and redacted; Pi and OpenCode may expose session detail.",
+		"",
+		"## Notes",
+		"",
+		"- Claude status remains aggregate and redacted; Pi, OpenCode, and Codex may expose session detail.",
 		"- Delivery mechanics remain harness-specific even though `/premind:deliver` is canonical.",
 		"",
 	);

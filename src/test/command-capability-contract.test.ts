@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import { readdirSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { describe, test } from "node:test";
 import { createPremindPiExtension } from "../extension/index.ts";
 import { createPremindPlugin } from "../plugin-opencode/index.ts";
+import { codexMcpTools } from "../codex/mcp-server.ts";
 import { expectedCapabilitySurface } from "../shared/command-capabilities.ts";
 // @ts-expect-error The shipped Claude MCP runtime is plain JavaScript.
 import { handleMcpRequest } from "../../plugin-claude/bin/mcp-server.mjs";
@@ -73,6 +74,21 @@ const collectClaudeSurface = async () => {
 	};
 };
 
+/**
+ * Codex plugins expose MCP tools and skills but cannot register slash commands,
+ * so the command surface is the absence of any command manifest.
+ */
+const collectCodexSurface = () => {
+	for (const pluginRoot of ["../../plugins/premind/", "../../plugins/codex/premind/"]) {
+		assert.equal(
+			existsSync(new URL(`${pluginRoot}commands`, import.meta.url)),
+			false,
+			`${pluginRoot} unexpectedly ships slash commands; declare them in command-capabilities.ts`,
+		)
+	}
+	return { commands: [], tools: sorted(codexMcpTools.map((tool) => tool.name)) }
+}
+
 describe("adapter command capability contract", () => {
 	test("Pi registrations match the declared surface", () => {
 		const actual = collectPiSurface();
@@ -87,6 +103,12 @@ describe("adapter command capability contract", () => {
 			expectedCapabilitySurface("claude", "commands"),
 		);
 		assert.deepEqual(actual.tools, expectedCapabilitySurface("claude", "tools"));
+	});
+
+	test("Codex MCP tools match the declared surface", () => {
+		const actual = collectCodexSurface();
+		assert.deepEqual(actual.commands, expectedCapabilitySurface("codex", "commands"));
+		assert.deepEqual(actual.tools, expectedCapabilitySurface("codex", "tools"));
 	});
 
 	test("OpenCode registrations match the declared surface", async () => {
