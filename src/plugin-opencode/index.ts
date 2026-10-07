@@ -2,6 +2,7 @@ import { tool, type Plugin } from "@opencode-ai/plugin"
 import { PREMIND_CLIENT_HEARTBEAT_MS, PREMIND_IDLE_DELIVERY_THRESHOLD_MS } from "../shared/constants.ts"
 import type { PremindConfig } from "../shared/schema.ts"
 import { PREMIND_VERSION_LABEL } from "../shared/version.ts"
+import { commandCapabilities } from "../shared/command-capabilities.ts"
 import { ensureUserConfigTemplate, getDefaultUserConfigPath, getLegacyUserConfigPath, loadPremindConfig } from "../shared/config-loader.ts"
 import { PremindDaemonClient } from "../client/daemon-client.ts"
 import { renderPremindStatus } from "./commands.ts"
@@ -823,7 +824,7 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
   }
 
   const deliverTool = tool({
-    description: "Deliver pending PR updates to the current session immediately, without waiting for the idle countdown",
+    description: `${commandCapabilities.deliver.toolGuidance} Skips the idle countdown.`,
     args: {},
     async execute(_args, ctx) {
       const sessionId = ctx.sessionID ?? lastPrimarySessionId
@@ -881,7 +882,7 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
     // Register tools so the model can also call them.
     tool: {
       premind_status: tool({
-        description: "Show premind daemon status including active sessions, watchers, and pending reminder counts",
+        description: `Show premind daemon status, active sessions, and watchers. ${commandCapabilities.status.toolGuidance}`,
         args: {},
         async execute(_args, ctx) {
           const status = await daemon.debugStatus()
@@ -889,7 +890,7 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
         },
       }),
       premind_set_active_checkout: tool({
-        description: "Set the active Git checkout for this session. Call premind_set_active_checkout at the start of any PR work, including when already in the startup checkout, and again after switching branches before creating or following a PR.",
+        description: `Set the active Git checkout for this session. ${commandCapabilities["set-active-checkout"].toolGuidance}`,
         args: {
           path: tool.schema.string().min(1).describe("Absolute or project-relative path to the Git checkout"),
         },
@@ -905,7 +906,7 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
         },
       }),
       premind_subscribe: tool({
-        description: "Mandatory PR tracking: Immediately call this tool after creating, opening, discovering, or beginning work on a pull request. Do this before reporting the PR URL or status to the user. Applies after gh pr create, gh stack submit, gh stack link, or any equivalent GitHub operation.",
+        description: commandCapabilities.subscribe.toolGuidance,
         args: {
           prNumber: tool.schema.number().int().positive().describe("Pull request number"),
           repo: tool.schema.string().min(1).optional().describe("Optional owner/repository; defaults to the active worktree repository"),
@@ -922,7 +923,7 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
         },
       }),
       premind_unsubscribe: tool({
-        description: "Unsubscribe the current premind session from a pull request.",
+        description: `Unsubscribe the current premind session from a pull request. ${commandCapabilities.unsubscribe.toolGuidance}`,
         args: {
           prNumber: tool.schema.number().int().positive().describe("Pull request number"),
           repo: tool.schema.string().min(1).optional().describe("Optional owner/repository; defaults to the active worktree repository"),
@@ -941,7 +942,7 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
       premind_deliver: deliverTool,
       premind_send_now: deliverTool,
       premind_disable: tool({
-        description: "Disable premind globally. Stops GitHub polling across all sessions and projects; the daemon stays up so sessions keep registering. Useful for avoiding GitHub API rate limits.",
+        description: `Disable premind polling. ${commandCapabilities.disable.toolGuidance} The daemon stays up so sessions keep registering; useful for avoiding GitHub API rate limits.`,
         args: {},
         async execute() {
           await daemon.setGlobalDisabled(true)
@@ -949,7 +950,7 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
         },
       }),
       premind_enable: tool({
-        description: "Re-enable premind globally after premind_disable. GitHub polling resumes on the next scheduler tick.",
+        description: `Re-enable premind polling after premind_disable. ${commandCapabilities.enable.toolGuidance} Polling resumes on the next scheduler tick.`,
         args: {},
         async execute() {
           await daemon.setGlobalDisabled(false)
@@ -957,7 +958,7 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
         },
       }),
       premind_probe: tool({
-        description: "Verify premind plugin initialization and return runtime diagnostics for this instance and all other live instances",
+        description: `${commandCapabilities.doctor.toolGuidance} Verifies plugin initialization and returns runtime diagnostics for this instance and all other live instances.`,
         args: {},
         async execute() {
           return getDoctorText()

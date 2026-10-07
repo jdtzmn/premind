@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
+import { commandCapabilities } from "../shared/command-capabilities.ts";
 import { z } from "zod";
 import { PremindDaemonClient } from "../client/daemon-client.ts";
 import { createDaemonLauncher } from "../client/daemon-launcher.ts";
@@ -89,7 +90,7 @@ const tools = [
 	{
 		name: "premind_status",
 		description:
-			"Return redacted Premind status and, when resolvable, status for the current Codex session.",
+			`Return redacted Premind status and, when resolvable, status for the current Codex session. ${commandCapabilities.status.toolGuidance}`,
 		inputSchema: {
 			type: "object",
 			properties: { sessionHandle: { type: "string", format: "uuid" } },
@@ -99,7 +100,7 @@ const tools = [
 	{
 		name: "premind_set_active_checkout",
 		description:
-			"Set the active Git checkout for this Codex session. Call it at the start of PR work and again after switching branches or worktrees.",
+			`Set the active Git checkout for this Codex session. ${commandCapabilities["set-active-checkout"].toolGuidance}`,
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -112,7 +113,7 @@ const tools = [
 	},
 	{
 		name: "premind_subscribe",
-		description: "Subscribe this Codex session to a pull request.",
+		description: `Subscribe this Codex session to a pull request. ${commandCapabilities.subscribe.toolGuidance}`,
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -126,7 +127,7 @@ const tools = [
 	},
 	{
 		name: "premind_unsubscribe",
-		description: "Unsubscribe this Codex session from a pull request.",
+		description: `Unsubscribe this Codex session from a pull request. ${commandCapabilities.unsubscribe.toolGuidance}`,
 		inputSchema: {
 			type: "object",
 			properties: {

@@ -26,10 +26,12 @@ const resolveConfigSource = (environment = process.env) => {
   return "schema defaults";
 };
 
+// Descriptions mirror `toolGuidance` in src/shared/command-capabilities.ts;
+// src/test/command-capability-contract.test.ts compares them.
 const tools = [
   {
     name: "status",
-    description: "Return redacted Premind aggregate status.",
+    description: "Return redacted Premind aggregate status. Inspect Premind status, including pending reminder counts.",
     inputSchema: {
       type: "object",
       properties: {},
@@ -39,7 +41,7 @@ const tools = [
   {
     name: "probe",
     description:
-      "Report Claude plugin, Node runtime, configuration, daemon, and delivery health without exposing session data.",
+      "Diagnose Premind adapter, configuration, and daemon health. Reports Claude plugin, Node runtime, configuration, daemon, and delivery health without exposing session data.",
     inputSchema: {
       type: "object",
       properties: {},
@@ -49,7 +51,7 @@ const tools = [
   {
     name: "enable",
     description:
-      "Enable Premind polling globally across every active Premind session and project.",
+      "Enable Premind polling. This enables Premind GitHub polling globally, for every session and project.",
     inputSchema: {
       type: "object",
       properties: {},
@@ -59,7 +61,7 @@ const tools = [
   {
     name: "disable",
     description:
-      "Disable Premind polling globally across every active Premind session and project.",
+      "Disable Premind polling. This disables Premind GitHub polling globally, for every session and project.",
     inputSchema: {
       type: "object",
       properties: {},
@@ -69,7 +71,7 @@ const tools = [
   {
     name: "set_active_checkout",
     description:
-      "Set the active Git checkout for this Claude session. Call this at the start of any PR work, including when already in the startup checkout, and again after switching branches before creating or following a PR.",
+      "Set the active Git checkout for this Claude session. Call this at the start of any PR work, including when already in the startup checkout, and again after switching branches or worktrees before creating or following a PR.",
     inputSchema: {
       type: "object",
       properties: { path: { type: "string" } },
@@ -99,7 +101,7 @@ const tools = [
   },
   {
     name: "unsubscribe",
-    description: "Unsubscribe the current Claude session from a pull request.",
+    description: "Unsubscribe the current Claude session from a pull request. Use this only when the user asks to stop tracking a pull request.",
     inputSchema: {
       type: "object",
       properties: {

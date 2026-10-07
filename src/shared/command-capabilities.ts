@@ -62,6 +62,11 @@ export type CommandCapability = {
 	canonical: Record<CapabilitySurfaceKind, readonly string[]>;
 	/** Parameters every harness's model tool must accept. */
 	parameters: Readonly<Record<string, ToolParameter>>;
+	/**
+	 * Agent-facing guidance every harness's model tool description must contain
+	 * verbatim. Hosts may add a host-specific lead, never different guidance.
+	 */
+	toolGuidance?: string;
 	harnesses: Record<PremindHarness, HarnessCapabilitySurface>;
 };
 
@@ -99,6 +104,8 @@ export const commandCapabilities = {
 		description: "Inspect daemon state and pending reminder counts.",
 		canonical: { commands: ["premind:status"], tools: ["premind_status"] },
 		parameters: {},
+		toolGuidance:
+			"Inspect Premind status, including pending reminder counts.",
 		harnesses: {
 			pi: { commands: ["premind:status"], tools: ["premind_status"] },
 			claude: {
@@ -130,6 +137,8 @@ export const commandCapabilities = {
 		description: "Diagnose adapter, configuration, and daemon health.",
 		canonical: { commands: ["premind:doctor"], tools: ["premind_doctor"] },
 		parameters: {},
+		toolGuidance:
+			"Diagnose Premind adapter, configuration, and daemon health.",
 		harnesses: {
 			pi: { commands: ["premind:doctor"], tools: ["premind_doctor"] },
 			claude: {
@@ -168,6 +177,8 @@ export const commandCapabilities = {
 		description: "Deliver queued reminders at the earliest safe harness boundary.",
 		canonical: { commands: ["premind:deliver"], tools: ["premind_deliver"] },
 		parameters: {},
+		toolGuidance:
+			"Deliver pending Premind reminders for this session at the earliest safe boundary.",
 		harnesses: {
 			pi: {
 				commands: ["premind:deliver"],
@@ -210,6 +221,8 @@ export const commandCapabilities = {
 		description: "Enable GitHub polling globally.",
 		canonical: { commands: ["premind:enable"], tools: ["premind_enable"] },
 		parameters: {},
+		toolGuidance:
+			"This enables Premind GitHub polling globally, for every session and project.",
 		harnesses: {
 			pi: { commands: ["premind:enable"], tools: ["premind_enable"] },
 			claude: {
@@ -243,6 +256,8 @@ export const commandCapabilities = {
 		description: "Disable GitHub polling globally.",
 		canonical: { commands: ["premind:disable"], tools: ["premind_disable"] },
 		parameters: {},
+		toolGuidance:
+			"This disables Premind GitHub polling globally, for every session and project.",
 		harnesses: {
 			pi: { commands: ["premind:disable"], tools: ["premind_disable"] },
 			claude: {
@@ -279,6 +294,8 @@ export const commandCapabilities = {
 			tools: ["premind_set_active_checkout"],
 		},
 		parameters: { path: { type: "string", required: true } },
+		toolGuidance:
+			"Call this at the start of any PR work, including when already in the startup checkout, and again after switching branches or worktrees before creating or following a PR.",
 		harnesses: {
 			pi: {
 				commands: ["premind:set-active-checkout"],
@@ -317,6 +334,8 @@ export const commandCapabilities = {
 			repo: { type: "string", required: false },
 			writePolicy: { type: "string", required: false },
 		},
+		toolGuidance:
+			"Mandatory PR tracking: Immediately call this tool after creating, opening, discovering, or beginning work on a pull request. Do this before reporting the PR URL or status to the user. Applies after gh pr create, gh stack submit, gh stack link, or any equivalent GitHub operation.",
 		harnesses: {
 			pi: { commands: ["premind:subscribe"], tools: ["premind_subscribe"] },
 			claude: {
@@ -357,6 +376,8 @@ export const commandCapabilities = {
 			prNumber: { type: "integer", required: true },
 			repo: { type: "string", required: false },
 		},
+		toolGuidance:
+			"Use this only when the user asks to stop tracking a pull request.",
 		harnesses: {
 			pi: {
 				commands: ["premind:unsubscribe"],

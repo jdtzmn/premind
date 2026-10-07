@@ -58,26 +58,31 @@ const harnessCollectors = {
 	claude: () => collectClaudeSurface(),
 	opencode: () => collectOpenCodeSurface(),
 	codex: async () => collectCodexSurface(),
-} satisfies Record<PremindHarness, () => Promise<{ schemas: ToolSchemas }>>;
+} satisfies Record<
+	PremindHarness,
+	() => Promise<{ schemas: ToolSchemas; descriptions: Record<string, string> }>
+>;
 
 const collectPiSurface = () => {
 	const commands = new Set<string>();
 	const tools = new Set<string>();
 	const schemas: ToolSchemas = {};
+	const descriptions: Record<string, string> = {};
 	const pi = {
 		on() {},
 		registerMessageRenderer() {},
 		registerCommand(name: string) {
 			commands.add(name);
 		},
-		registerTool(definition: { name: string; parameters?: unknown }) {
+		registerTool(definition: { name: string; parameters?: unknown; description?: string }) {
 			tools.add(definition.name);
 			schemas[definition.name] = normalizeJsonSchema(definition.parameters);
+			descriptions[definition.name] = definition.description ?? "";
 		},
 		sendMessage() {},
 	};
 	createPremindPiExtension()(pi as never);
-	return { commands: sorted(commands), tools: sorted(tools), schemas };
+	return { commands: sorted(commands), tools: sorted(tools), schemas, descriptions };
 };
 
 const collectOpenCodeSurface = async () => {
@@ -104,7 +109,7 @@ const collectOpenCodeSurface = async () => {
 	} as never);
 	const runtime = plugin as unknown as {
 		config: (input: Record<string, unknown>) => Promise<void>;
-		tool: Record<string, { args: Record<string, unknown> }>;
+		tool: Record<string, { args: Record<string, unknown>; description: string }>;
 	};
 	const config: Record<string, unknown> = {};
 	await runtime.config(config);
@@ -118,6 +123,9 @@ const collectOpenCodeSurface = async () => {
 		commands: sorted(Object.keys(config.command as Record<string, unknown>)),
 		tools: sorted(Object.keys(runtime.tool)),
 		schemas,
+		descriptions: Object.fromEntries(
+			Object.entries(runtime.tool).map(([name, definition]) => [name, definition.description]),
+		),
 	};
 };
 
@@ -127,13 +135,20 @@ const collectClaudeSurface = async () => {
 		.filter((name) => name.endsWith(".md"))
 		.map((name) => `premind:${name.slice(0, -3)}`);
 	const result = await handleMcpRequest({ method: "tools/list" });
-	const listed = result.tools as Array<{ name: string; inputSchema: unknown }>;
+	const listed = result.tools as Array<{
+		name: string;
+		inputSchema: unknown;
+		description: string;
+	}>;
 	return {
 		commands: sorted(commands),
 		tools: sorted(listed.map((definition) => definition.name)),
 		schemas: Object.fromEntries(
 			listed.map((definition) => [definition.name, normalizeJsonSchema(definition.inputSchema)]),
 		) as ToolSchemas,
+		descriptions: Object.fromEntries(
+			listed.map((definition) => [definition.name, definition.description]),
+		),
 	};
 };
 
@@ -158,6 +173,9 @@ const collectCodexSurface = () => {
 				normalizeJsonSchema(definition.inputSchema),
 			]),
 		) as ToolSchemas,
+		descriptions: Object.fromEntries(
+			codexMcpTools.map((definition) => [definition.name, definition.description as string]),
+		),
 	}
 }
 
@@ -250,6 +268,27 @@ describe("adapter command capability contract", () => {
 						exception.tracking ?? "",
 						/^(#\d+|https:\/\/github\.com\/\S+)$/,
 						`${driver.key}.${scenario} is deferred and must name a tracking issue or PR`,
+					);
+				}
+			}
+		}
+	});
+
+	test("every harness tool description carries the canonical agent guidance", async () => {
+		for (const harness of premindHarnesses) {
+			const { descriptions } = await harnessCollectors[harness]();
+			for (const [capabilityId, capability] of Object.entries(
+				commandCapabilities as Record<string, CommandCapability>,
+			)) {
+				const surface = harnessSurface(capability, harness);
+				for (const name of [...surface.tools, ...(surface.aliases?.tools ?? [])]) {
+					assert.ok(
+						capability.toolGuidance,
+						`${capabilityId} has model tools but no canonical toolGuidance`,
+					);
+					assert.ok(
+						descriptions[name]?.includes(capability.toolGuidance),
+						`${harness} tool ${name} (${capabilityId}) description drifted from its canonical guidance:\n  expected to contain: ${capability.toolGuidance}\n  actual: ${descriptions[name]}`,
 					);
 				}
 			}

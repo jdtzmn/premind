@@ -58,8 +58,8 @@ const createCodexHarness = ({ daemonClient, sessionId, branch }: CodexHarnessArg
 			if (context && !isHandleNoticeOnly) {
 				captured.push({
 					sessionId,
-					text: output.hookSpecificOutput.additionalContext,
-					meta: { hookEventName: output.hookSpecificOutput.hookEventName },
+					text: context,
+					meta: { hookEventName: output.hookSpecificOutput?.hookEventName },
 				})
 			} else if (output.decision === "block" && output.reason) {
 				captured.push({
