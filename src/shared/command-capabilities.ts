@@ -40,11 +40,19 @@ export type HarnessCapabilityAliases = Partial<
 	Record<CapabilitySurfaceKind, readonly string[]>
 >;
 
+export type ToolParameterType = "string" | "integer" | "number" | "boolean";
+
+export type ToolParameter = { type: ToolParameterType; required: boolean };
+
 export type HarnessCapabilitySurface = {
 	commands: readonly string[];
 	tools: readonly string[];
 	aliases?: HarnessCapabilityAliases;
 	exceptions?: Partial<Record<CapabilitySurfaceKind, CapabilityException>>;
+	/** Host-injected tool parameters beyond the canonical set, such as Codex session handles. */
+	extraParameters?: Readonly<Record<string, ToolParameter & { reason: string }>>;
+	/** Canonical tool parameters this harness does not accept yet. */
+	parameterExceptions?: Readonly<Record<string, CapabilityException>>;
 };
 
 export type CommandCapability = {
@@ -52,6 +60,8 @@ export type CommandCapability = {
 	scope: CapabilityScope;
 	description: string;
 	canonical: Record<CapabilitySurfaceKind, readonly string[]>;
+	/** Parameters every harness's model tool must accept. */
+	parameters: Readonly<Record<string, ToolParameter>>;
 	harnesses: Record<PremindHarness, HarnessCapabilitySurface>;
 };
 
@@ -67,6 +77,15 @@ const codexHasNoCommands: CapabilityException = {
 	reason: "Codex plugins expose MCP tools and skills, not slash commands.",
 };
 
+const codexSessionHandle = (required: boolean) =>
+	({
+		sessionHandle: {
+			type: "string",
+			required,
+			reason: "Codex MCP processes identify the session by the handle lifecycle context supplies.",
+		},
+	}) as const;
+
 const deferred = (reason: string): CapabilityException => ({
 	kind: "deferred",
 	reason,
@@ -79,6 +98,7 @@ export const commandCapabilities = {
 		scope: "daemon",
 		description: "Inspect daemon state and pending reminder counts.",
 		canonical: { commands: ["premind:status"], tools: ["premind_status"] },
+		parameters: {},
 		harnesses: {
 			pi: { commands: ["premind:status"], tools: ["premind_status"] },
 			claude: {
@@ -100,6 +120,7 @@ export const commandCapabilities = {
 				commands: [],
 				tools: ["premind_status"],
 				exceptions: { commands: codexHasNoCommands },
+				extraParameters: codexSessionHandle(false),
 			},
 		},
 	},
@@ -108,6 +129,7 @@ export const commandCapabilities = {
 		scope: "daemon",
 		description: "Diagnose adapter, configuration, and daemon health.",
 		canonical: { commands: ["premind:doctor"], tools: ["premind_doctor"] },
+		parameters: {},
 		harnesses: {
 			pi: { commands: ["premind:doctor"], tools: ["premind_doctor"] },
 			claude: {
@@ -145,6 +167,7 @@ export const commandCapabilities = {
 		scope: "session",
 		description: "Deliver queued reminders at the earliest safe harness boundary.",
 		canonical: { commands: ["premind:deliver"], tools: ["premind_deliver"] },
+		parameters: {},
 		harnesses: {
 			pi: {
 				commands: ["premind:deliver"],
@@ -186,6 +209,7 @@ export const commandCapabilities = {
 		scope: "daemon",
 		description: "Enable GitHub polling globally.",
 		canonical: { commands: ["premind:enable"], tools: ["premind_enable"] },
+		parameters: {},
 		harnesses: {
 			pi: { commands: ["premind:enable"], tools: ["premind_enable"] },
 			claude: {
@@ -218,6 +242,7 @@ export const commandCapabilities = {
 		scope: "daemon",
 		description: "Disable GitHub polling globally.",
 		canonical: { commands: ["premind:disable"], tools: ["premind_disable"] },
+		parameters: {},
 		harnesses: {
 			pi: { commands: ["premind:disable"], tools: ["premind_disable"] },
 			claude: {
@@ -253,6 +278,7 @@ export const commandCapabilities = {
 			commands: ["premind:set-active-checkout"],
 			tools: ["premind_set_active_checkout"],
 		},
+		parameters: { path: { type: "string", required: true } },
 		harnesses: {
 			pi: {
 				commands: ["premind:set-active-checkout"],
@@ -277,6 +303,7 @@ export const commandCapabilities = {
 				commands: [],
 				tools: ["premind_set_active_checkout"],
 				exceptions: { commands: codexHasNoCommands },
+				extraParameters: codexSessionHandle(true),
 			},
 		},
 	},
@@ -285,6 +312,11 @@ export const commandCapabilities = {
 		scope: "session",
 		description: "Subscribe the current session to a pull request.",
 		canonical: { commands: ["premind:subscribe"], tools: ["premind_subscribe"] },
+		parameters: {
+			prNumber: { type: "integer", required: true },
+			repo: { type: "string", required: false },
+			writePolicy: { type: "string", required: false },
+		},
 		harnesses: {
 			pi: { commands: ["premind:subscribe"], tools: ["premind_subscribe"] },
 			claude: {
@@ -298,11 +330,18 @@ export const commandCapabilities = {
 				exceptions: {
 					commands: deferred("OpenCode currently exposes this only as a model tool."),
 				},
+				parameterExceptions: {
+					writePolicy: deferred("OpenCode subscriptions do not accept an explicit write policy yet."),
+				},
 			},
 			codex: {
 				commands: [],
 				tools: ["premind_subscribe"],
 				exceptions: { commands: codexHasNoCommands },
+				extraParameters: codexSessionHandle(true),
+				parameterExceptions: {
+					writePolicy: deferred("Codex subscriptions do not accept an explicit write policy yet."),
+				},
 			},
 		},
 	},
@@ -313,6 +352,10 @@ export const commandCapabilities = {
 		canonical: {
 			commands: ["premind:unsubscribe"],
 			tools: ["premind_unsubscribe"],
+		},
+		parameters: {
+			prNumber: { type: "integer", required: true },
+			repo: { type: "string", required: false },
 		},
 		harnesses: {
 			pi: {
@@ -335,6 +378,7 @@ export const commandCapabilities = {
 				commands: [],
 				tools: ["premind_unsubscribe"],
 				exceptions: { commands: codexHasNoCommands },
+				extraParameters: codexSessionHandle(true),
 			},
 		},
 	},
@@ -344,6 +388,7 @@ export const commandCapabilities = {
 		description:
 			"Remove closed sessions and their pending reminder batches (administrative; not model-callable).",
 		canonical: { commands: ["premind:prune"], tools: [] },
+		parameters: {},
 		harnesses: {
 			pi: { commands: ["premind:prune"], tools: [] },
 			claude: {
@@ -413,6 +458,33 @@ export const listCapabilityExceptions = () =>
 			),
 	);
 
+/** Every canonical parameter a harness is excused from accepting. */
+export const listParameterExceptions = () =>
+	Object.entries(commandCapabilities as Record<string, CommandCapability>).flatMap(
+		([capabilityId, capability]) =>
+			premindHarnesses.flatMap((harness) =>
+				Object.entries(harnessSurface(capability, harness).parameterExceptions ?? {}).map(
+					([parameter, exception]) => ({ capabilityId, harness, parameter, exception }),
+				),
+			),
+	);
+
+/** The parameters a harness's model tool for this capability must accept. */
+export const expectedToolParameters = (
+	capability: CommandCapability,
+	harness: PremindHarness,
+): Record<string, ToolParameter> => {
+	const surface = harnessSurface(capability, harness);
+	const expected: Record<string, ToolParameter> = {};
+	for (const [name, parameter] of Object.entries(capability.parameters)) {
+		if (!surface.parameterExceptions?.[name]) expected[name] = { ...parameter };
+	}
+	for (const [name, { type, required }] of Object.entries(surface.extraParameters ?? {})) {
+		expected[name] = { type, required };
+	}
+	return expected;
+};
+
 const formatSurface = (surface: HarnessCapabilitySurface): string => {
 	const commands = surface.commands.map((name) => `\`/${name}\``);
 	const tools = surface.tools.map((name) => `\`${name}\``);
@@ -458,11 +530,19 @@ export const renderCommandCapabilityDocumentation = (): string => {
 	}
 	const exceptions = listCapabilityExceptions();
 	const deferredGaps = exceptions.filter(({ exception }) => exception.kind === "deferred");
+	const deferredParameters = listParameterExceptions().filter(
+		({ exception }) => exception.kind === "deferred",
+	);
 	lines.push("", "## Deferred gaps", "");
-	if (deferredGaps.length === 0) lines.push("None.");
+	if (deferredGaps.length === 0 && deferredParameters.length === 0) lines.push("None.");
 	for (const { capabilityId, harness, surface, exception } of deferredGaps) {
 		lines.push(
 			`- \`${capabilityId}\` / ${premindHarnessLabels[harness]} / ${surface}: ${exception.reason} (tracked in ${exception.tracking})`,
+		);
+	}
+	for (const { capabilityId, harness, parameter, exception } of deferredParameters) {
+		lines.push(
+			`- \`${capabilityId}\` / ${premindHarnessLabels[harness]} / parameter \`${parameter}\`: ${exception.reason} (tracked in ${exception.tracking})`,
 		);
 	}
 	lines.push("", "## Other exceptions", "");

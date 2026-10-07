@@ -26,6 +26,8 @@ This matrix is generated from `src/shared/command-capabilities.ts`. Every harnes
 - `unsubscribe` / OpenCode / commands: OpenCode currently exposes this only as a model tool. (tracked in #77)
 - `prune` / Claude Code / commands: Only Pi exposes prune today. (tracked in #77)
 - `prune` / OpenCode / commands: Only Pi exposes prune today. (tracked in #77)
+- `subscribe` / OpenCode / parameter `writePolicy`: OpenCode subscriptions do not accept an explicit write policy yet. (tracked in #77)
+- `subscribe` / Codex / parameter `writePolicy`: Codex subscriptions do not accept an explicit write policy yet. (tracked in #77)
 
 ## Other exceptions
 

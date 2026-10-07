@@ -4,28 +4,77 @@ import { describe, test } from "node:test";
 import { createPremindPiExtension } from "../extension/index.ts";
 import { createPremindPlugin } from "../plugin-opencode/index.ts";
 import { codexMcpTools } from "../codex/mcp-server.ts";
-import { expectedCapabilitySurface } from "../shared/command-capabilities.ts";
+import { tool } from "@opencode-ai/plugin";
+import {
+	type CommandCapability,
+	commandCapabilities,
+	expectedCapabilitySurface,
+	expectedToolParameters,
+	harnessSurface,
+	type PremindHarness,
+	premindHarnesses,
+	type ToolParameter,
+} from "../shared/command-capabilities.ts";
 // @ts-expect-error The shipped Claude MCP runtime is plain JavaScript.
 import { handleMcpRequest } from "../../plugin-claude/bin/mcp-server.mjs";
 
 const sorted = (values: Iterable<string>) => [...values].sort();
 
+type ToolSchemas = Record<string, Record<string, ToolParameter>>;
+type JsonSchemaNode = {
+	type?: string;
+	const?: unknown;
+	enum?: unknown[];
+	anyOf?: JsonSchemaNode[];
+	properties?: Record<string, JsonSchemaNode>;
+	required?: string[];
+};
+
+const parameterType = (node: JsonSchemaNode): string => {
+	if (node.type) return node.type;
+	if (node.const !== undefined) return typeof node.const;
+	if (node.enum?.length) return typeof node.enum[0];
+	const branchTypes = new Set((node.anyOf ?? []).map(parameterType));
+	return branchTypes.size === 1 ? [...branchTypes][0] : "unknown";
+};
+
+/** Reduces TypeBox, zod-generated, and hand-written JSON schemas to name/type/required. */
+const normalizeJsonSchema = (schema: unknown): Record<string, ToolParameter> => {
+	const node = (schema ?? {}) as JsonSchemaNode;
+	const required = new Set(node.required ?? []);
+	return Object.fromEntries(
+		Object.entries(node.properties ?? {}).map(([name, property]) => [
+			name,
+			{ type: parameterType(property) as ToolParameter["type"], required: required.has(name) },
+		]),
+	);
+};
+
+const harnessCollectors = {
+	pi: async () => collectPiSurface(),
+	claude: () => collectClaudeSurface(),
+	opencode: () => collectOpenCodeSurface(),
+	codex: async () => collectCodexSurface(),
+} satisfies Record<PremindHarness, () => Promise<{ schemas: ToolSchemas }>>;
+
 const collectPiSurface = () => {
 	const commands = new Set<string>();
 	const tools = new Set<string>();
+	const schemas: ToolSchemas = {};
 	const pi = {
 		on() {},
 		registerMessageRenderer() {},
 		registerCommand(name: string) {
 			commands.add(name);
 		},
-		registerTool(definition: { name: string }) {
+		registerTool(definition: { name: string; parameters?: unknown }) {
 			tools.add(definition.name);
+			schemas[definition.name] = normalizeJsonSchema(definition.parameters);
 		},
 		sendMessage() {},
 	};
 	createPremindPiExtension()(pi as never);
-	return { commands: sorted(commands), tools: sorted(tools) };
+	return { commands: sorted(commands), tools: sorted(tools), schemas };
 };
 
 const collectOpenCodeSurface = async () => {
@@ -52,13 +101,20 @@ const collectOpenCodeSurface = async () => {
 	} as never);
 	const runtime = plugin as unknown as {
 		config: (input: Record<string, unknown>) => Promise<void>;
-		tool: Record<string, unknown>;
+		tool: Record<string, { args: Record<string, unknown> }>;
 	};
 	const config: Record<string, unknown> = {};
 	await runtime.config(config);
+	const schemas: ToolSchemas = {};
+	for (const [name, definition] of Object.entries(runtime.tool)) {
+		schemas[name] = normalizeJsonSchema(
+			tool.schema.toJSONSchema(tool.schema.object(definition.args as never)),
+		);
+	}
 	return {
 		commands: sorted(Object.keys(config.command as Record<string, unknown>)),
 		tools: sorted(Object.keys(runtime.tool)),
+		schemas,
 	};
 };
 
@@ -68,9 +124,13 @@ const collectClaudeSurface = async () => {
 		.filter((name) => name.endsWith(".md"))
 		.map((name) => `premind:${name.slice(0, -3)}`);
 	const result = await handleMcpRequest({ method: "tools/list" });
+	const listed = result.tools as Array<{ name: string; inputSchema: unknown }>;
 	return {
 		commands: sorted(commands),
-		tools: sorted(result.tools.map((tool: { name: string }) => tool.name)),
+		tools: sorted(listed.map((definition) => definition.name)),
+		schemas: Object.fromEntries(
+			listed.map((definition) => [definition.name, normalizeJsonSchema(definition.inputSchema)]),
+		) as ToolSchemas,
 	};
 };
 
@@ -86,7 +146,16 @@ const collectCodexSurface = () => {
 			`${pluginRoot} unexpectedly ships slash commands; declare them in command-capabilities.ts`,
 		)
 	}
-	return { commands: [], tools: sorted(codexMcpTools.map((tool) => tool.name)) }
+	return {
+		commands: [],
+		tools: sorted(codexMcpTools.map((definition) => definition.name)),
+		schemas: Object.fromEntries(
+			codexMcpTools.map((definition) => [
+				definition.name,
+				normalizeJsonSchema(definition.inputSchema),
+			]),
+		) as ToolSchemas,
+	}
 }
 
 describe("adapter command capability contract", () => {
@@ -118,5 +187,33 @@ describe("adapter command capability contract", () => {
 			expectedCapabilitySurface("opencode", "commands"),
 		);
 		assert.deepEqual(actual.tools, expectedCapabilitySurface("opencode", "tools"));
+	});
+
+	test("every harness tool accepts exactly the declared parameters", async () => {
+		for (const harness of premindHarnesses) {
+			const { schemas } = await harnessCollectors[harness]();
+			for (const [capabilityId, capability] of Object.entries(
+				commandCapabilities as Record<string, CommandCapability>,
+			)) {
+				const surface = harnessSurface(capability, harness);
+				const expected = expectedToolParameters(capability, harness);
+				for (const name of [...surface.tools, ...(surface.aliases?.tools ?? [])]) {
+					assert.deepEqual(
+						schemas[name],
+						expected,
+						`${harness} tool ${name} (${capabilityId}) parameters drifted from command-capabilities.ts`,
+					);
+				}
+				for (const parameter of Object.keys(surface.parameterExceptions ?? {})) {
+					for (const name of surface.tools) {
+						assert.equal(
+							parameter in (schemas[name] ?? {}),
+							false,
+							`${harness} tool ${name} now accepts ${parameter}; remove its stale parameter exception`,
+						);
+					}
+				}
+			}
+		}
 	});
 });

@@ -7,6 +7,7 @@ import {
 	expectedCapabilitySurface,
 	harnessSurface,
 	listCapabilityExceptions,
+	listParameterExceptions,
 	premindHarnesses,
 	renderCommandCapabilityDocumentation,
 } from "./command-capabilities.ts";
@@ -74,6 +75,20 @@ describe("command capability contract", () => {
 					surfaceNames.length > 0,
 					`${label} is host-naming but exposes no surface; use unsupported or deferred`,
 				);
+			}
+		}
+	});
+
+	test("parameter exceptions name canonical parameters and track deferred gaps", () => {
+		for (const { capabilityId, harness, parameter, exception } of listParameterExceptions()) {
+			const label = `${capabilityId}.${harness}.${parameter}`;
+			assert.ok(
+				parameter in commandCapabilities[capabilityId as keyof typeof commandCapabilities].parameters,
+				`${label} excuses a parameter that is not canonical`,
+			);
+			assert.ok(exception.reason.trim(), `${label} needs a reason`);
+			if (exception.kind === "deferred") {
+				assert.match(exception.tracking ?? "", /^(#\d+|https:\/\/github\.com\/\S+)$/);
 			}
 		}
 	});
