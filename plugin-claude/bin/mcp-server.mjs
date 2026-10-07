@@ -6,6 +6,7 @@ import readline from "node:readline";
 import { fileURLToPath } from "node:url";
 import { request } from "./lib.mjs";
 import { ensureDaemonRunning } from "./ensure-daemon.mjs";
+import { daemonLockStatus } from "../generated/daemon-startup.mjs";
 
 const PLUGIN_VERSION = "0.2.0";
 const REQUIRED_NODE = { major: 22, minor: 13 };
@@ -177,6 +178,7 @@ export const handleMcpRequest = async (
           protocolVersion: status?.daemon?.protocolVersion ?? null,
           globallyDisabled: disabled ? Boolean(disabled.disabled) : null,
           ...(reachable ? {} : { error: "Premind daemon is unavailable." }),
+          lock: daemonLockStatus(environment.PREMIND_STATE_DIR),
         },
         configSource: resolveConfigSource(environment),
         delivery:

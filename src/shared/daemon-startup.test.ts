@@ -8,6 +8,8 @@ import {
   CODEX_REQUIRED_DAEMON_OPERATIONS,
   acquireDaemonLock,
   acquireDaemonStartLock,
+  daemonLockStatus,
+  formatDaemonLockStatus,
   holdsDaemonLock,
   inspectDaemon,
   isDaemonStarting,
@@ -276,4 +278,21 @@ test("Codex probe rejects daemons without atomic claim capabilities", async () =
       compatibleServer.close(() => resolve()),
     );
   }
+});
+
+test("describes the daemon lock holder for doctor output", async () => {
+  const stateDir = createTempDir();
+  assert.equal(daemonLockStatus(stateDir), null);
+  assert.match(formatDaemonLockStatus(null), /not held/);
+
+  const lock = await acquireDaemonLock({ stateDir });
+  assert.ok(lock);
+  const held = daemonLockStatus(stateDir);
+  assert.equal(held?.pid, process.pid);
+  assert.equal(held?.alive, true);
+  assert.match(formatDaemonLockStatus(held), new RegExp(`held by pid ${process.pid} since`));
+  releaseDaemonLock(lock);
+
+  writeDaemonLock(stateDir, DEAD_PID, Date.now());
+  assert.match(formatDaemonLockStatus(daemonLockStatus(stateDir)), /process gone/);
 });

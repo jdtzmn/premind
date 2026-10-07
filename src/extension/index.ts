@@ -11,6 +11,10 @@ import { Type } from "typebox";
 import { PremindDaemonClient } from "../client/daemon-client.ts";
 import { detectGitContext } from "../client/git-context.ts";
 import { ensureDaemonRunning } from "../plugin-opencode/daemon-launcher.ts";
+import {
+	daemonLockStatus,
+	formatDaemonLockStatus,
+} from "../shared/daemon-startup.ts";
 import type {
 	AckReminderPayload,
 	AckReminderBundlePayload,
@@ -305,6 +309,19 @@ export const createPremindPiExtension = (
 		// Start time of the running status poll, or undefined when none is running.
 		let statusPollStartedAt: number | undefined;
 		let statusPollToken = 0;
+		let lastStatusPollCompletedAt: number | undefined;
+		let lastStatusPollError: string | undefined;
+
+		const describeStatusPoll = (now: number) => {
+			if (
+				statusPollStartedAt !== undefined &&
+				now - statusPollStartedAt >= STATUS_POLL_STALE_MS
+			)
+				return `stuck for ${Math.round((now - statusPollStartedAt) / 1000)}s; the next poll replaces it`;
+			if (lastStatusPollCompletedAt === undefined) return "no poll has completed yet";
+			const age = `last completed ${Math.round((now - lastStatusPollCompletedAt) / 1000)}s ago`;
+			return lastStatusPollError ? `${age} with an error: ${lastStatusPollError}` : age;
+		};
 		let deliveryInFlight = false;
 		let sessionGeneration = 0;
 		let config = normalizePremindPiConfig(dependencies.config);
@@ -373,10 +390,27 @@ export const createPremindPiExtension = (
 				`- status polling: ${config.statusPollIntervalMs === 0 ? "disabled" : `${config.statusPollIntervalMs}ms`}`,
 				`- session: ${currentSessionId ? `attached (${formatSessionId(currentSessionId)})` : "not attached"}`,
 				"- delivery: follow-up messages can wake an idle Pi session",
+				...(config.statusPollIntervalMs > 0
+					? [`- idle delivery poll: ${describeStatusPoll(Date.now())}`]
+					: []),
+				`- daemon lock: ${formatDaemonLockStatus(daemonLockStatus())}`,
 			];
 			try {
 				const status = await createDaemonClient().debugStatus();
 				lines.splice(2, 0, `- daemon: reachable (protocol ${status.daemon.protocolVersion})`);
+				// Idle sessions that still have reminders usually mean that session's
+				// idle delivery stopped; a message there delivers the backlog.
+				const stalled = status.sessions.filter(
+					(session) =>
+						session.busyState === "idle" && session.pendingReminderCount > 0,
+				);
+				lines.push(
+					stalled.length === 0
+						? "- idle sessions with pending reminders: none"
+						: `- idle sessions with pending reminders: ${stalled
+								.map((session) => `${formatSessionId(session.sessionId)} (${session.pendingReminderCount})`)
+								.join(", ")}`,
+				);
 			} catch (error) {
 				lines.splice(
 					2,
@@ -562,6 +596,7 @@ export const createPremindPiExtension = (
 			// clearing the marker of the poll that replaced it.
 			const token = ++statusPollToken;
 			statusPollStartedAt = startedAt;
+			let pollError: string | undefined;
 			try {
 				await refreshStatusbar(ctx, generation);
 				if (
@@ -577,13 +612,18 @@ export const createPremindPiExtension = (
 				if (generation === sessionGeneration && result.delivered)
 					setStatus(ctx, undefined);
 			} catch (error) {
+				pollError = error instanceof Error ? error.message : String(error);
 				if (
 					generation === sessionGeneration &&
 					!isStaleExtensionContextError(error)
 				)
 					setStatus(ctx, `${PR_ICON} error`);
 			} finally {
-				if (token === statusPollToken) statusPollStartedAt = undefined;
+				if (token === statusPollToken) {
+					statusPollStartedAt = undefined;
+					lastStatusPollCompletedAt = Date.now();
+					lastStatusPollError = pollError;
+				}
 			}
 		};
 

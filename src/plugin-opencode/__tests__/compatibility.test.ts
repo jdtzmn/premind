@@ -167,6 +167,7 @@ describe("premind plugin compatibility harness", () => {
     }
     const doctorPrompt = syncPrompts.find((prompt) => prompt.text.includes("premind doctor"))
     assert.ok(doctorPrompt, "should have injected doctor response")
+    assert.match(doctorPrompt.text, /daemon lock: /)
     assert.match(doctorPrompt.text, /host: opencode/)
 
 
