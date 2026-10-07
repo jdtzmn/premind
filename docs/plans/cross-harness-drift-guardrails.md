@@ -154,3 +154,25 @@ guardrail fails as expected by temporarily:
 - marking a capability adapter-specific without a reason;
 - changing one adapter's parameter or description;
 - dropping a driver from `ADAPTER_DRIVERS`.
+
+## Implementation notes
+
+- **A third exception kind, `host-naming`.** Some surfaces exist under a
+  host-specific name rather than being missing: Claude's MCP tools omit the
+  `premind_` prefix, and OpenCode keeps its hyphenated commands. These are
+  recorded as `host-naming` so `unsupported` keeps meaning "cannot exist".
+- **Every gap is tracked in #77.** That covers the Codex gaps, the existing
+  OpenCode and Claude command gaps, `prune`, and the `writePolicy` parameter
+  missing from OpenCode and Codex.
+- **Scenarios exercise model tools.** Slash commands stay covered by the name
+  contract and adapter-local tests, because Claude's commands are prompt files
+  and Codex has none, so neither can be executed in a harness.
+- **Drivers can be excused from shared scenarios with typed exceptions.**
+  Adding Codex to the fan-out showed that it hands off one reminder batch per
+  lifecycle boundary instead of bundling them. Its driver records this as a
+  `deferred` `bundlesPendingBatches` exception (#77), and the late-arrival
+  test checks successive delivery for Codex instead.
+- **Canonical guidance comes from the registry.** Each capability's
+  `toolGuidance` is the source:
+  - Pi, OpenCode, and Codex build their tool descriptions from it.
+  - The Claude MCP server keeps its own copy, which the contract test checks.
