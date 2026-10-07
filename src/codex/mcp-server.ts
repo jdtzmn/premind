@@ -97,8 +97,9 @@ const tools = [
 		},
 	},
 	{
-		name: "premind_activate_worktree",
-		description: "Bind this Codex session to a linked or nested worktree path.",
+		name: "premind_set_active_checkout",
+		description:
+			"Set the active Git checkout for this Codex session. Call it at the start of PR work and again after switching branches or worktrees.",
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -210,7 +211,7 @@ const requireBinding = async (
 type ParsedToolCall =
 	| { name: "premind_status"; args: z.infer<typeof statusArgumentsSchema> }
 	| {
-			name: "premind_activate_worktree";
+			name: "premind_set_active_checkout";
 			args: z.infer<typeof activateArgumentsSchema>;
 	  }
 	| {
@@ -230,7 +231,7 @@ const parseToolCall = (params: unknown): ParsedToolCall => {
 			if (!args.success) throw new JsonRpcError(-32602, "Invalid tool arguments");
 			return { name: call.data.name, args: args.data };
 		}
-		case "premind_activate_worktree": {
+		case "premind_set_active_checkout": {
 			const args = activateArgumentsSchema.safeParse(rawArguments);
 			if (!args.success) throw new JsonRpcError(-32602, "Invalid tool arguments");
 			return { name: call.data.name, args: args.data };
@@ -281,7 +282,7 @@ const callTool = async (
 		}
 
 		const binding = await requireBinding(dependencies, tool.args.sessionHandle);
-		if (tool.name === "premind_activate_worktree") {
+		if (tool.name === "premind_set_active_checkout") {
 			const result = await dependencies.client.activateWorktree({
 				sessionId: binding.sessionId,
 				path: tool.args.path,
