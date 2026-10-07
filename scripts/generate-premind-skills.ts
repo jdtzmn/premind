@@ -6,7 +6,7 @@ import { commandCapabilities } from "../src/shared/command-capabilities.ts";
 
 type SkillHost = "codex" | "pi" | "claude";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const skillRoots = {
+export const skillRoots = {
 	codex: [
 		"plugins/premind/skills/premind",
 		"plugins/codex/premind/skills/premind",

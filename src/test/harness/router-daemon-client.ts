@@ -20,8 +20,12 @@ import type { PremindRequest } from "../../shared/ipc.ts"
 import type {
 	AckReminderPayload,
 	AckReminderBundlePayload,
+	ClaimReminderPayload,
+	CodexSessionPayload,
 	RegisterSessionPayload,
 	ReminderBatch,
+	ReminderClaim,
+	SettleReminderClaimPayload,
 } from "../../shared/schema.ts"
 
 export type RouterDaemonClient = ReturnType<typeof createRouterDaemonClient>
@@ -188,5 +192,15 @@ export const createRouterDaemonClient = (
 		},
 		getGlobalDisabled: async () =>
 			(await request("getGlobalDisabled", {})) as { disabled: boolean },
+
+		// Codex lifecycle surface (`CodexDaemonClient`).
+		registerCodexSession: async (payload: CodexSessionPayload) =>
+			(await request("registerCodexSession", payload)) as { active?: boolean },
+		claimReminder: async (payload: ClaimReminderPayload) =>
+			(await request("claimReminder", payload)) as { claim: ReminderClaim | null },
+		settleReminderClaim: async (payload: SettleReminderClaimPayload) =>
+			(await request("settleReminderClaim", payload)) as { settled: boolean },
+		releaseSessionOwner: async (sessionId: string) =>
+			await request("releaseSessionOwner", { sessionId }),
 	}
 }

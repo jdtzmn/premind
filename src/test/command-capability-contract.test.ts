@@ -5,11 +5,14 @@ import { createPremindPiExtension } from "../extension/index.ts";
 import { createPremindPlugin } from "../plugin-opencode/index.ts";
 import { codexMcpTools } from "../codex/mcp-server.ts";
 import { tool } from "@opencode-ai/plugin";
+import { skillRoots } from "../../scripts/generate-premind-skills.ts";
+import { ADAPTER_DRIVERS } from "./harness/adapters/index.ts";
 import {
 	type CommandCapability,
 	commandCapabilities,
 	expectedCapabilitySurface,
 	expectedToolParameters,
+	harnessSkillExceptions,
 	harnessSurface,
 	type PremindHarness,
 	premindHarnesses,
@@ -212,6 +215,42 @@ describe("adapter command capability contract", () => {
 							`${harness} tool ${name} now accepts ${parameter}; remove its stale parameter exception`,
 						);
 					}
+				}
+			}
+		}
+	});
+
+	test("every registry of harnesses names the same supported set", () => {
+		const supported = [...premindHarnesses].sort();
+		assert.deepEqual(
+			ADAPTER_DRIVERS.map((driver) => driver.key).sort(),
+			supported,
+			"src/test/harness/adapters/index.ts must have a driver for every supported harness",
+		);
+		assert.deepEqual(
+			[...Object.keys(skillRoots), ...Object.keys(harnessSkillExceptions)].sort(),
+			supported,
+			"every harness needs generated skills or a declared skill exception",
+		);
+		for (const harness of Object.keys(harnessSkillExceptions)) {
+			assert.equal(
+				harness in skillRoots,
+				false,
+				`${harness} ships skills; remove its stale skill exception`,
+			);
+		}
+	});
+
+	test("driver scenario exceptions are typed and tracked", () => {
+		for (const driver of ADAPTER_DRIVERS) {
+			for (const [scenario, exception] of Object.entries(driver.scenarioExceptions ?? {})) {
+				assert.ok(exception?.reason.trim(), `${driver.key}.${scenario} needs a reason`);
+				if (exception?.kind === "deferred") {
+					assert.match(
+						exception.tracking ?? "",
+						/^(#\d+|https:\/\/github\.com\/\S+)$/,
+						`${driver.key}.${scenario} is deferred and must name a tracking issue or PR`,
+					);
 				}
 			}
 		}

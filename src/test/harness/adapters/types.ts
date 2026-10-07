@@ -6,6 +6,7 @@
  * simply never proven to receive updates.
  */
 
+import type { CapabilityException } from "../../../shared/command-capabilities.ts"
 import type { RouterDaemonClient } from "../router-daemon-client.ts"
 
 /** One reminder as the host actually received it. */
@@ -46,4 +47,12 @@ export type AdapterDriver = {
 	branch: string
 	deliver: (args: DeliverArgs) => Promise<DeliverResult>
 	startIdle: (args: StartIdleArgs) => Promise<IdleDeliveryHandle>
+	/**
+	 * Shared scenarios this host is excused from, with the same typed exceptions
+	 * as `command-capabilities.ts`. A `deferred` entry must name a tracking issue.
+	 */
+	scenarioExceptions?: Partial<Record<SharedScenarioId, CapabilityException>>
 }
+
+/** Cross-adapter behaviors a driver may be excused from. */
+export type SharedScenarioId = "bundlesPendingBatches"
