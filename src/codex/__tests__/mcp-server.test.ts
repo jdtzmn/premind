@@ -126,6 +126,7 @@ test("discovers only the supported Codex controls", async () => {
 		),
 		[
 			"premind_status",
+			"premind_debug_status",
 			"premind_set_active_checkout",
 			"premind_subscribe",
 			"premind_unsubscribe",
@@ -516,6 +517,12 @@ test("redacts daemon internals and returns execution failures as tool results", 
 		assert.equal(output.includes("/private/worktree"), false);
 		assert.equal(output.includes("/private/git"), false);
 
+		const debug = await handleCodexMcpRequest(
+			call("premind_debug_status", { sessionHandle: binding.sessionHandle }),
+			dependencies,
+		);
+		assert.match(JSON.stringify(debug), /premind status v/);
+		assert.match(JSON.stringify(debug), /codex:thread-1/);
 		const failed = await handleCodexMcpRequest(
 			call("premind_status", { sessionHandle: binding.sessionHandle }),
 			{

@@ -373,12 +373,23 @@ export class PremindDaemonClient {
     return globalDisabledResponseSchema.parse(response);
   }
 
-  async debugStatus() {
-    const response = await this.requestWithRetry({
-      type: "debugStatus",
-      protocolVersion: PREMIND_PROTOCOL_VERSION,
-      payload: {},
-    });
+  async debugStatus(options: { includeSnapshots?: boolean } = {}) {
+    let response: unknown;
+    try {
+      response = await this.requestWithRetry({
+        type: "debugStatus",
+        protocolVersion: PREMIND_PROTOCOL_VERSION,
+        payload: options.includeSnapshots ? { includeSnapshots: true } : {},
+      });
+    } catch (error) {
+      if (!options.includeSnapshots || !isUnsupportedOperation(error)) throw error;
+      // An older daemon understands only the empty payload; keep status available.
+      response = await this.requestWithRetry({
+        type: "debugStatus",
+        protocolVersion: PREMIND_PROTOCOL_VERSION,
+        payload: {},
+      });
+    }
     return debugStatusResponseSchema.parse(response);
   }
 

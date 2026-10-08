@@ -75,6 +75,29 @@ describe("PremindDaemonClient.ensureSessionControl", () => {
   });
 });
 
+describe("debug status snapshot opt-in compatibility", () => {
+  const response = { daemon: { protocolVersion: 1, heartbeatMs: 10_000, leaseTtlMs: 30_000, idleShutdownGraceMs: 15_000 }, globallyDisabled: false, activeClients: 0, activeSessions: 0, closedSessions: 0, activeWatchers: 0, lastReapAt: null, lastReapCount: 0, sessions: [] };
+  test("requests snapshots only when opted in, then falls back on an older daemon", async () => {
+    const client = createClient();
+    const requests: Request[] = [];
+    (client as unknown as { requestWithRetry: (request: Request) => Promise<unknown> }).requestWithRetry = async (request) => {
+      requests.push(request);
+      if (request.payload.includeSnapshots) throw new Error("BAD_REQUEST: unsupported payload");
+      return response;
+    };
+    assert.deepEqual(await client.debugStatus({ includeSnapshots: true }), response);
+    assert.deepEqual(requests.map((request) => request.payload), [{ includeSnapshots: true }, {}]);
+    requests.length = 0;
+    await client.debugStatus();
+    assert.deepEqual(requests.map((request) => request.payload), [{}]);
+  });
+  test("non-compatibility errors are not masked by a retry", async () => {
+    const client = createClient();
+    (client as unknown as { requestWithRetry: (request: Request) => Promise<unknown> }).requestWithRetry = async () => { throw new Error("AUTH_FAILED: token invalid"); };
+    await assert.rejects(client.debugStatus({ includeSnapshots: true }), /AUTH_FAILED/);
+  });
+});
+
 describe("reminder bundle compatibility", () => {
   test("falls back to one legacy batch when bundle operations are unavailable", async () => {
     const client = createClient();

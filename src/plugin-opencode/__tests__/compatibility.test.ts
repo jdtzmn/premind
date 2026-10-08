@@ -150,9 +150,21 @@ describe("premind plugin compatibility harness", () => {
     } catch (error) {
       assert.match((error as Error).message, /PREMIND_HANDLED/)
     }
-    const statusPrompt = syncPrompts.find((p) => p.text.includes("premind status"))
+    const statusPrompt = syncPrompts.find((p) => p.text.includes("premind · running"))
     assert.ok(statusPrompt, "should have injected status response")
     assert.equal(statusPrompt.noReply, true, "status response should be noReply")
+
+    const debugMarker = commands["premind:debug-status"].template
+    try {
+      await runtime["chat.message"](
+        { sessionID: "session-1" },
+        { message: { parts: [{ type: "text", text: debugMarker }] }, parts: [{ type: "text", text: debugMarker }] },
+      )
+      assert.fail("expected handled debug command")
+    } catch (error) {
+      assert.match((error as Error).message, /PREMIND_HANDLED/)
+    }
+    assert.ok(syncPrompts.some((prompt) => prompt.text.includes("premind status v")))
 
 
     const doctorMarker = commands["premind:doctor"].template
@@ -247,7 +259,8 @@ describe("premind plugin compatibility harness", () => {
     assert.ok(runtime.tool.premind_probe, "premind_probe tool should exist")
 
     const toolStatusResult = await runtime.tool.premind_status.execute({}, { sessionID: "session-1" })
-    assert.match(toolStatusResult, /premind status/)
+    assert.match(toolStatusResult, /premind · running/)
+    assert.match(await runtime.tool.premind_debug_status.execute({}, { sessionID: "session-1" }), /premind status v/)
 
     const toolDeliverResult = await runtime.tool.premind_deliver.execute({}, { sessionID: "session-1" })
     assert.match(toolDeliverResult, /delivering PR updates now/)

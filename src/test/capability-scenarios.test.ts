@@ -65,6 +65,24 @@ const SCENARIOS: CapabilityScenario[] = [
 		},
 	},
 	{
+		name: "debug status lists every daemon session",
+		capabilities: ["debug-status"],
+		async run({ driver, controls, daemonClient, sessionId }) {
+			const before = daemonClient.operations.filter((op) => op === "debugStatus").length
+			const result = await controls.invoke("debug-status")
+			assertSucceeded(result, `${driver.key} debug-status`)
+			assert.ok(
+				daemonClient.operations.filter((op) => op === "debugStatus").length > before,
+				`${driver.key} debug-status did not read daemon state`,
+			)
+			assert.ok(
+				// Hosts may abbreviate session ids, but each keeps the id's trailing characters.
+				result.text.includes(path.basename(sessionId).replace(/\.jsonl$/, "").slice(-12)),
+				`${driver.key} debug-status did not list the session inventory`,
+			)
+		},
+	},
+	{
 		name: "doctor returns a diagnostic",
 		capabilities: ["doctor"],
 		async run({ driver, controls }) {

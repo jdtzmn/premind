@@ -1,4 +1,5 @@
 import { PREMIND_VERSION_LABEL } from "../shared/version.ts";
+import { renderCurrentStatus } from "../shared/status-view.ts";
 import { commandCapabilities } from "../shared/command-capabilities.ts";
 import {
 	GLOBAL_CONFIRMATION_DESCRIPTION,
@@ -17,7 +18,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { Text } from "@earendil-works/pi-tui";
+import { Text, Key, matchesKey } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { PremindDaemonClient } from "../client/daemon-client.ts";
 import { detectGitContext } from "../client/git-context.ts";
@@ -85,7 +86,7 @@ type DaemonClientLike = {
 		sessionId: string,
 	) => Promise<{ batch: ReminderBatch | null }>;
 	ackReminder: (payload: AckReminderPayload) => Promise<unknown>;
-	debugStatus: () => Promise<DebugStatusResponse>;
+	debugStatus: (options?: { includeSnapshots?: boolean }) => Promise<DebugStatusResponse>;
 	pruneClosedSessions: () => Promise<unknown>;
 };
 
@@ -211,6 +212,7 @@ const formatSessionId = (sessionId: string) => {
 export const renderPremindPiStatus = (
 	status: DebugStatusResponse,
 	versionLabel = PREMIND_VERSION_LABEL,
+	currentSessionId?: string,
 ) => {
 	const activeLabel = `${status.activeSessions} active session${status.activeSessions === 1 ? "" : "s"}`;
 	const header = `premind: ${versionLabel} · ${activeLabel}`;
@@ -228,7 +230,7 @@ export const renderPremindPiStatus = (
 		const subscriptionSummary = subscriptions
 			? ` | subscriptions ${subscriptions}`
 			: "";
-		return `- ${session.repo} @ ${session.branch}${pr} | ${session.status}/${session.busyState} | pending ${session.pendingReminderCount}${worktree}${subscriptionSummary} | session ${formatSessionId(session.sessionId)}`;
+		return `- ${session.repo} @ ${session.branch}${pr} | ${session.status}/${session.busyState} | pending ${session.pendingReminderCount}${worktree}${subscriptionSummary} | session ${formatSessionId(session.sessionId)}${session.sessionId === currentSessionId ? " (current)" : ""}`;
 	});
 	return [
 		header,
@@ -388,10 +390,12 @@ export const createPremindPiExtension = (
 			return attachPiSession(ctx);
 		};
 
-		const getStatusText = async () => {
-			const status = await createDaemonClient().debugStatus();
-			return renderPremindPiStatus(status);
+		const getStatusText = async (ctx: { cwd: string; sessionManager?: { getSessionFile?: () => string | undefined } }) => {
+			const status = await createDaemonClient().debugStatus({ includeSnapshots: true });
+			return renderCurrentStatus(status, currentSessionId ?? getPiSessionId(ctx));
 		};
+		const getDebugStatusText = async (ctx: { cwd: string; sessionManager?: { getSessionFile?: () => string | undefined } }) =>
+			renderPremindPiStatus(await createDaemonClient().debugStatus(), PREMIND_VERSION_LABEL, currentSessionId ?? getPiSessionId(ctx));
 
 		const getDoctorText = async () => {
 			const lines = [
@@ -787,15 +791,65 @@ export const createPremindPiExtension = (
 
 		pi.registerCommand("premind:status", {
 			description:
-				"Show premind daemon status, attached sessions, and pending reminders",
+				"Show the current session's watched PRs and premind health",
 			handler: async (_args, ctx) => {
 				try {
-					ctx.ui.notify(await getStatusText(), "info");
+					const status = await createDaemonClient().debugStatus({ includeSnapshots: true });
+					const sessionId = currentSessionId ?? getPiSessionId(ctx);
+					if (ctx.hasUI && typeof ctx.ui.custom === "function") {
+						await ctx.ui.custom<void>((_tui, theme, _keys, done) => {
+							const display = new Text();
+							const hint = new Text("Esc or Enter to close");
+							const colors = {
+								error: "error",
+								warning: "warning",
+								success: "success",
+								merged: "accent",
+								muted: "muted",
+								unknown: "muted",
+							} as const;
+							return {
+								render(width: number) {
+									const useColor = !("NO_COLOR" in process.env);
+									const text = renderCurrentStatus(status, sessionId, {
+										style: (signalText, signal) =>
+											useColor ? theme.fg(colors[signal], signalText) : signalText,
+									});
+									display.setText(text);
+									const hintLines = hint.render(width);
+									const styledHint = useColor
+										? hintLines.map((line) => theme.fg("dim", line))
+										: hintLines;
+									return [...display.render(width), "", ...styledHint];
+								},
+								invalidate() {
+									display.invalidate();
+									hint.invalidate();
+								},
+								handleInput(data: string) {
+									if (matchesKey(data, Key.escape) || matchesKey(data, Key.enter)) done();
+								},
+							};
+						});
+					} else {
+						ctx.ui.notify(renderCurrentStatus(status, sessionId), "info");
+					}
 				} catch (error) {
 					ctx.ui.notify(
 						`${STATUS_ERROR_PREFIX}: ${error instanceof Error ? error.message : String(error)}`,
 						"error",
 					);
+				}
+			},
+		});
+
+		pi.registerCommand("premind:debug-status", {
+			description: "Show the full premind daemon and all-session diagnostic inventory",
+			handler: async (_args, ctx) => {
+				try {
+					ctx.ui.notify(await getDebugStatusText(ctx), "info");
+				} catch (error) {
+					ctx.ui.notify(`${STATUS_ERROR_PREFIX}: ${error instanceof Error ? error.message : String(error)}`, "error");
 				}
 			},
 		});
@@ -1121,16 +1175,16 @@ export const createPremindPiExtension = (
 		pi.registerTool({
 			name: "premind_status",
 			label: "Premind Status",
-			description: `Show premind daemon status, active sessions, and watchers. ${commandCapabilities.status.toolGuidance}`,
+			description: `Show the current premind session's branch, watched PR links, health, and pending reminders. ${commandCapabilities.status.toolGuidance}`,
 			promptSnippet: "Inspect premind PR reminder daemon status.",
 			promptGuidelines: [
-				"Use premind_status when the user asks about premind daemon state, PR reminder attachment, pending reminders, or watcher status.",
+				"Use premind_status for the current session's watched PRs or health; use premind_debug_status to inspect all sessions.",
 			],
 			parameters: Type.Object({}),
-			async execute() {
+			async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
 				try {
 					return {
-						content: [{ type: "text" as const, text: await getStatusText() }],
+						content: [{ type: "text" as const, text: await getStatusText(ctx) }],
 						details: {},
 					};
 				} catch (error) {
@@ -1146,6 +1200,16 @@ export const createPremindPiExtension = (
 				}
 			},
 		});
+		pi.registerTool({
+			name: "premind_debug_status",
+			label: "Premind Debug Status",
+			description: `Inspect the full daemon and all premind sessions. ${commandCapabilities["debug-status"].toolGuidance}`,
+			parameters: Type.Object({}),
+			async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+				return { content: [{ type: "text" as const, text: await getDebugStatusText(ctx) }], details: {} };
+			},
+		});
+
 	};
 };
 

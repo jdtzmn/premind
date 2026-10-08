@@ -8,6 +8,7 @@ import { SESSION_PAUSED_DELIVERY_MESSAGE, SESSION_PAUSED_MESSAGE, SESSION_RESUME
 import { ensureUserConfigTemplate, getDefaultUserConfigPath, getLegacyUserConfigPath, loadPremindConfig } from "../shared/config-loader.ts"
 import { PremindDaemonClient } from "../client/daemon-client.ts"
 import { renderPremindStatus } from "./commands.ts"
+import { renderCurrentStatus } from "../shared/status-view.ts";
 import { getPluginRuntimeStatePath, readPluginInstances, readPluginRuntimeState, registerPluginInstance, writePluginRuntimeState } from "./debug-state.ts"
 import { detectGitContext } from "../client/git-context.ts"
 import { ensureDaemonRunning } from "./daemon-launcher.ts"
@@ -15,6 +16,7 @@ import { daemonLockStatus, formatDaemonLockStatus } from "../shared/daemon-start
 
 const COMMAND_MARKERS = {
   status: "[PREMIND_STATUS]",
+  debugStatus: "[PREMIND_DEBUG_STATUS]",
   doctor: "[PREMIND_DOCTOR]",
   sendNow: "[PREMIND_SEND_NOW]",
   disable: "[PREMIND_DISABLE]",
@@ -52,7 +54,7 @@ type DaemonClientLike = {
   ackReminder: (payload: import("../shared/schema.ts").AckReminderPayload) => Promise<unknown>
   setGlobalDisabled: (disabled: boolean) => Promise<{ disabled: boolean }>
   getGlobalDisabled: () => Promise<{ disabled: boolean }>
-  debugStatus: () => Promise<any>
+  debugStatus: (options?: { includeSnapshots?: boolean }) => Promise<any>
 }
 
 type PromptInput = {
@@ -764,10 +766,14 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
   }
 
   const handleStatusCommand = async (sessionID: string, inputRef?: { agent?: string; model?: { providerID: string; modelID: string } }) => {
-    const status = await daemon.debugStatus()
-    await injectResponse(sessionID, renderPremindStatus(status), inputRef)
+    const status = await daemon.debugStatus({ includeSnapshots: true })
+    await injectResponse(sessionID, renderCurrentStatus(status, sessionID), inputRef)
   }
 
+
+  const handleDebugStatusCommand = async (sessionID: string, inputRef?: { agent?: string; model?: { providerID: string; modelID: string } }) => {
+    await injectResponse(sessionID, renderPremindStatus(await daemon.debugStatus(), Date.now(), PREMIND_VERSION_LABEL, sessionID), inputRef)
+  }
 
   const isSessionPaused = async (sessionID: string) => {
     const status = await daemon.debugStatus().catch(() => undefined)
@@ -885,7 +891,11 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
       configInput.command ??= {}
       configInput.command["premind-status"] = {
         template: COMMAND_MARKERS.status,
-        description: "Show premind daemon status, attached sessions, and pending reminders",
+        description: "Show this session's watched PR links and premind health",
+      }
+      configInput.command["premind:debug-status"] = {
+        template: COMMAND_MARKERS.debugStatus,
+        description: "Show the full premind daemon and all-session diagnostic inventory",
       }
       configInput.command["premind:doctor"] = {
         template: COMMAND_MARKERS.doctor,
@@ -929,11 +939,18 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
     // Register tools so the model can also call them.
     tool: {
       premind_status: tool({
-        description: `Show premind daemon status, active sessions, and watchers. ${commandCapabilities.status.toolGuidance}`,
+        description: `Show the current session's watched PR links, pending reminders, and premind health. ${commandCapabilities.status.toolGuidance}`,
         args: {},
         async execute(_args, ctx) {
-          const status = await daemon.debugStatus()
-          return renderPremindStatus(status)
+          const status = await daemon.debugStatus({ includeSnapshots: true })
+          return renderCurrentStatus(status, ctx.sessionID)
+        },
+      }),
+      premind_debug_status: tool({
+        description: `Show the full premind daemon and all-session diagnostic inventory. ${commandCapabilities["debug-status"].toolGuidance}`,
+        args: {},
+        async execute(_args, ctx) {
+          return renderPremindStatus(await daemon.debugStatus(), Date.now(), PREMIND_VERSION_LABEL, ctx.sessionID)
         },
       }),
       premind_set_active_checkout: tool({
@@ -1139,6 +1156,9 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
       // Handle slash command markers injected via config.
       if (outputText.includes(COMMAND_MARKERS.status)) {
         await handleStatusCommand(input.sessionID, inputRef)
+      }
+      if (outputText.includes(COMMAND_MARKERS.debugStatus)) {
+        await handleDebugStatusCommand(input.sessionID, inputRef)
       }
       if (outputText.includes(COMMAND_MARKERS.doctor)) {
         await handleDoctorCommand(input.sessionID, inputRef)

@@ -149,8 +149,8 @@ const deferred = (reason: string): CapabilityException => ({
 export const commandCapabilities = {
 	status: {
 		classification: "common",
-		scope: "daemon",
-		description: "Inspect daemon state and pending reminder counts.",
+		scope: "session",
+		description: "Inspect the current session's watched PRs and premind health.",
 		canonical: { commands: ["premind:status"], tools: ["premind_status"] },
 		parameters: {},
 		toolGuidance:
@@ -168,13 +168,44 @@ export const commandCapabilities = {
 				exceptions: {
 					commands: {
 						kind: "host-naming",
-						reason: "OpenCode retains its established hyphenated status command.",
+						reason: "The server plugin retains /premind-status as a plain fallback; OpenCode's separately installed TUI companion supplies the colored /premind:status command.",
 					},
 				},
 			},
 			codex: {
 				commands: [],
 				tools: ["premind_status"],
+				exceptions: { commands: codexHasNoCommands },
+				extraParameters: codexSessionHandle(false),
+			},
+		},
+	},
+	"debug-status": {
+		classification: "adapter-specific",
+		scope: "daemon",
+		description: "Inspect every daemon session and watcher for troubleshooting.",
+		canonical: { commands: ["premind:debug-status"], tools: ["premind_debug_status"] },
+		parameters: {},
+		toolGuidance:
+			"Inspect every Premind daemon session and watcher for troubleshooting.",
+		harnesses: {
+			pi: { commands: ["premind:debug-status"], tools: ["premind_debug_status"] },
+			claude: {
+				commands: [],
+				tools: [],
+				exceptions: {
+					commands: deferred(
+						"Claude status stays aggregate and redacted until session identity is safely available, so the full session inventory is not exposed yet.",
+					),
+					tools: deferred(
+						"Claude status stays aggregate and redacted until session identity is safely available, so the full session inventory is not exposed yet.",
+					),
+				},
+			},
+			opencode: { commands: ["premind:debug-status"], tools: ["premind_debug_status"] },
+			codex: {
+				commands: [],
+				tools: ["premind_debug_status"],
 				exceptions: { commands: codexHasNoCommands },
 				extraParameters: codexSessionHandle(false),
 			},
@@ -678,7 +709,9 @@ export const renderCommandCapabilityDocumentation = (): string => {
 		"",
 		"## Notes",
 		"",
-		"- Claude status remains aggregate and redacted; Pi, OpenCode, and Codex may expose session detail.",
+		"- Claude status remains aggregate and redacted; it cannot show watched PR details or colored PR signals until session identity is safely available.",
+		"- OpenCode's separate TUI companion renders colored `/premind:status`; server `/premind-status` and tool output remain unstyled.",
+		"- Codex MCP exposes session-scoped `premind_status` and separate `premind_debug_status`.",
 		"- `pause` / `resume` act on one session and never change subscriptions; `enable` / `disable` act on every session, and their model tools refuse calls without `confirmGlobal: true`.",
 		"- Delivery mechanics remain harness-specific even though `/premind:deliver` is canonical.",
 		"",

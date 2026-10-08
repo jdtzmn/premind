@@ -186,6 +186,17 @@ describe("plugin commands", () => {
     const withSome = renderPremindStatus({ ...base, closedSessions: 42 })
     assert.match(withSome, /- closed sessions \(pending pruning\): 42/)
   })
+  test("marks only the invoking session in debug diagnostics", () => {
+    const session = { sessionId: "current", repo: "acme/repo", branch: "feature", prNumber: 42, status: "active", busyState: "idle", pendingReminderCount: 0 }
+    const rendered = renderPremindStatus({
+      daemon: { protocolVersion: 1 }, activeClients: 1, activeSessions: 2, activeWatchers: 1,
+      lastReapAt: null, lastReapCount: 0, sessions: [session, { ...session, sessionId: "other" }],
+    }, Date.now(), "v0.1.0", "current")
+    assert.match(rendered, /session current \(current\):/)
+    assert.match(rendered, /session other:/)
+    assert.doesNotMatch(rendered, /session other \(current\)/)
+  })
+
 })
 
 describe("formatRelativeTime", () => {

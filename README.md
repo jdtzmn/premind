@@ -19,6 +19,16 @@ Add `premind` to your `opencode.json`:
 
 OpenCode will install it automatically on next startup.
 
+### Colored OpenCode status (TUI companion)
+
+OpenCode's server plugin cannot style chat/tool text. For the required colored `/premind:status` view, install the **separate TUI entrypoint** in OpenCode's `tui.json` on a version that supports TUI plugins, alongside the server plugin above:
+
+```json
+{ "plugin": ["/absolute/path/to/premind/src/plugin-opencode/tui.ts"] }
+```
+
+After publishing, use the installed package name (`"premind"`) instead of a local path. The package exports `./tui` for OpenCode's TUI loader; do not load the server entrypoint as a TUI plugin. `/premind-status` remains a readable, unstyled server-plugin fallback, and agent tool responses stay unstyled. The native TUI uses theme colors and clickable links; it never inserts ANSI escapes into chat, MCP responses, or redirected output.
+
 ### From npm
 
 If published to npm:
@@ -148,9 +158,10 @@ Earlier versions documented a top-level `premind` key inside `opencode.jsonc`. T
 
 ## Commands
 
-premind registers these slash commands automatically:
+The server plugin registers these slash commands; the colored `/premind:status` additionally requires the TUI companion:
 
-- `/premind-status` — show current daemon state, active worktrees, subscriptions, and pending reminder counts
+- `/premind:status` — colored, linked current-session watched PRs in the OpenCode TUI companion; `/premind-status` is the plain server-plugin fallback
+- `/premind:debug-status` — daemon-wide all-session diagnostics (also available as `premind_debug_status` to agents)
 - `/premind:doctor` — diagnose plugin, configuration, and daemon health
 - `/premind:deliver` — deliver queued PR updates immediately at the earliest safe harness boundary
 - `/premind-send-now` — deprecated OpenCode alias for `/premind:deliver`

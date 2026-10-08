@@ -4,7 +4,8 @@ This matrix is generated from `src/shared/command-capabilities.ts`. Every harnes
 
 | Capability | Classification | Scope | Canonical | Pi | Claude Code | OpenCode | Codex |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `status` | common | daemon | commands `/premind:status`<br>tools `premind_status` | commands `/premind:status`<br>tools `premind_status` | commands `/premind:status`<br>tools `status` | commands `/premind-status`<br>tools `premind_status` | tools `premind_status` |
+| `status` | common | session | commands `/premind:status`<br>tools `premind_status` | commands `/premind:status`<br>tools `premind_status` | commands `/premind:status`<br>tools `status` | commands `/premind-status`<br>tools `premind_status` | tools `premind_status` |
+| `debug-status` | adapter-specific | daemon | commands `/premind:debug-status`<br>tools `premind_debug_status` | commands `/premind:debug-status`<br>tools `premind_debug_status` | — | commands `/premind:debug-status`<br>tools `premind_debug_status` | tools `premind_debug_status` |
 | `doctor` | common | daemon | commands `/premind:doctor`<br>tools `premind_doctor` | commands `/premind:doctor`<br>tools `premind_doctor` | commands `/premind:doctor`<br>tools `probe` | commands `/premind:doctor`<br>tools `premind_probe` | — |
 | `deliver` | common | session | commands `/premind:deliver`<br>tools `premind_deliver` | commands `/premind:deliver`<br>tools `premind_deliver`<br>deprecated command aliases `/premind:flush` | commands `/premind:deliver` | commands `/premind:deliver`<br>tools `premind_deliver`<br>deprecated command aliases `/premind-send-now`<br>deprecated tool aliases `premind_send_now` | — |
 | `enable` | common | daemon | commands `/premind:enable`<br>tools `premind_enable` | commands `/premind:enable`<br>tools `premind_enable` | commands `/premind:enable`<br>tools `enable` | commands `/premind-enable`<br>tools `premind_enable` | — |
@@ -18,6 +19,8 @@ This matrix is generated from `src/shared/command-capabilities.ts`. Every harnes
 
 ## Deferred gaps
 
+- `debug-status` / Claude Code / commands: Claude status stays aggregate and redacted until session identity is safely available, so the full session inventory is not exposed yet. (tracked in #77)
+- `debug-status` / Claude Code / tools: Claude status stays aggregate and redacted until session identity is safely available, so the full session inventory is not exposed yet. (tracked in #77)
 - `doctor` / Codex / tools: Codex does not yet expose a doctor MCP tool. (tracked in #77)
 - `deliver` / Codex / tools: Codex does not yet expose a deliver MCP tool; lifecycle hooks may need to own delivery as Claude's Stop hook does. (tracked in #77)
 - `enable` / Codex / tools: Codex does not yet expose an enable MCP tool. (tracked in #77)
@@ -34,8 +37,9 @@ This matrix is generated from `src/shared/command-capabilities.ts`. Every harnes
 ## Other exceptions
 
 - `status` / Claude Code / tools (host-naming): Claude MCP tools omit the premind_ prefix.
-- `status` / OpenCode / commands (host-naming): OpenCode retains its established hyphenated status command.
+- `status` / OpenCode / commands (host-naming): The server plugin retains /premind-status as a plain fallback; OpenCode's separately installed TUI companion supplies the colored /premind:status command.
 - `status` / Codex / commands (unsupported): Codex plugins expose MCP tools and skills, not slash commands.
+- `debug-status` / Codex / commands (unsupported): Codex plugins expose MCP tools and skills, not slash commands.
 - `doctor` / Claude Code / tools (host-naming): Claude retains the existing probe MCP tool name.
 - `doctor` / OpenCode / tools (host-naming): OpenCode retains the existing premind_probe tool name.
 - `doctor` / Codex / commands (unsupported): Codex plugins expose MCP tools and skills, not slash commands.
@@ -62,6 +66,8 @@ This matrix is generated from `src/shared/command-capabilities.ts`. Every harnes
 
 ## Notes
 
-- Claude status remains aggregate and redacted; Pi, OpenCode, and Codex may expose session detail.
+- Claude status remains aggregate and redacted; it cannot show watched PR details or colored PR signals until session identity is safely available.
+- OpenCode's separate TUI companion renders colored `/premind:status`; server `/premind-status` and tool output remain unstyled.
+- Codex MCP exposes session-scoped `premind_status` and separate `premind_debug_status`.
 - `pause` / `resume` act on one session and never change subscriptions; `enable` / `disable` act on every session, and their model tools refuse calls without `confirmGlobal: true`.
 - Delivery mechanics remain harness-specific even though `/premind:deliver` is canonical.

@@ -23,6 +23,8 @@ describe("plugin packaging", () => {
 			fs.existsSync(exportsEntry),
 			`exports["."] ${pkg.exports["."]} does not exist`,
 		);
+		const tuiEntry = path.resolve(ROOT, pkg.exports["./tui"]);
+		assert.ok(fs.existsSync(tuiEntry), `OpenCode TUI entry ${pkg.exports["./tui"]} does not exist`);
 	});
 
 	test("plugin entry exports PremindPlugin and createPremindPlugin", async () => {
@@ -52,6 +54,13 @@ describe("plugin packaging", () => {
 			"function",
 			"default export should expose server plugin",
 		);
+	});
+
+	test("separate TUI entry exports the native status companion", async () => {
+		const mod = await import("../../plugin-opencode/tui.ts");
+		assert.equal(mod.default.id, "premind.status-tui");
+		assert.equal(typeof mod.default.tui, "function");
+		assert.equal("server" in mod.default, false);
 	});
 
 	test("daemon entry file exists relative to plugin", () => {

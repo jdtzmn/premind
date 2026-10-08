@@ -6,7 +6,7 @@ Use the exact `Premind session handle` supplied by lifecycle context for session
 
 - After moving work into a linked or nested Git worktree, call `premind_set_active_checkout` with the current handle and new path.
 - Use `premind_subscribe` or `premind_unsubscribe` only when the user asks to change tracking; pass `repo` as `owner/name` for a PR outside the current repository.
-- Use `premind_status` to inspect redacted state. If multiple sessions share a working directory, supply the current handle rather than guessing.
+- Use `premind_status` to inspect this session's watched PRs and Premind health. Use `premind_debug_status` only to troubleshoot every daemon session. If multiple sessions share a working directory, supply the current handle rather than guessing.
 - When the user asks to pause, mute, or quiet Premind, call `premind_pause` with the current handle. It withholds reminders from this session only and keeps every subscription. Call `premind_resume` to restore delivery. Do not change subscriptions or global polling for this.
 
 A skill helps use controls; lifecycle hooks own registration and delivery. Do not claim that a tool call itself delivered a reminder.
