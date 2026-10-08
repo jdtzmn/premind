@@ -353,12 +353,7 @@ export class StateStore {
             repo = excluded.repo,
             branch = excluded.branch,
             is_primary = excluded.is_primary,
-            -- Re-attaching (for example after a host reload) must not silently
-            -- lift an explicit pause; only resumeSession or session control can.
-            status = CASE
-              WHEN sessions.status = 'paused' AND excluded.status = 'active' THEN 'paused'
-              ELSE excluded.status
-            END,
+            status = excluded.status,
             busy_state = excluded.busy_state,
             last_activity_at = excluded.last_activity_at,
             updated_at = excluded.updated_at
@@ -388,7 +383,8 @@ export class StateStore {
 		this.db.exec("BEGIN IMMEDIATE");
 		try {
 			const existing = this.getSession(payload.sessionId);
-			const status = payload.paused ? "paused" : "active";
+			// Pause is stored separately from lifecycle status; see setSessionPaused.
+			const status = "active";
 			const contextChanged =
 				existing !== undefined &&
 				(existing.repo !== payload.repo || existing.branch !== payload.branch);
@@ -484,6 +480,7 @@ export class StateStore {
 			}
 
 			this.touchBranchWatcher(payload.repo, payload.branch, now);
+			this.writeSessionPause(payload.sessionId, payload.paused, now);
 			this.db.exec("COMMIT");
 			// Preserve the main-compatible response shape without closing peer sessions.
 			return { created: !existing, superseded: 0 };
@@ -1189,6 +1186,14 @@ export class StateStore {
 				`DELETE FROM sessions WHERE status = 'closed' AND updated_at < :cutoff`,
 			)
 			.run({ cutoff });
+		// Drop pauses whose session never came back within the same retention.
+		this.db
+			.prepare(
+				`DELETE FROM session_pauses
+				 WHERE paused_at < :cutoff
+				   AND session_id NOT IN (SELECT session_id FROM sessions)`,
+			)
+			.run({ cutoff });
 		return result.changes as number;
 	}
 
@@ -1352,7 +1357,10 @@ export class StateStore {
 				repo: session.repo,
 				branch: session.branch,
 				prNumber: session.pr_number,
-				status: session.status,
+				status:
+					session.status === "active" && this.isSessionPaused(session.session_id)
+						? "paused"
+						: session.status,
 				busyState: session.busy_state,
 				pendingReminderCount,
 				worktreeBinding: binding
@@ -1385,19 +1393,44 @@ export class StateStore {
 		).count;
 	}
 
-	/** Paused sessions stay watched but must not receive reminder handoffs. */
+	/**
+	 * A paused session stays registered and watched, and keeps accumulating
+	 * events, but no reminder is handed to it. The pause lives in
+	 * `session_pauses`, not in `sessions.status`, so lifecycle transitions
+	 * (Pi reload delete/re-register, Claude suspend, Codex dormancy, stale
+	 * reaping) never lift it. Only an explicit resume does.
+	 */
 	isSessionPaused(sessionId: string) {
-		return this.getSession(sessionId)?.status === "paused";
+		const paused = this.db
+			.prepare(`SELECT 1 FROM session_pauses WHERE session_id = ?`)
+			.get(sessionId);
+		// `status = 'paused'` is the pre-session_pauses representation.
+		return paused !== undefined || this.getSession(sessionId)?.status === "paused";
 	}
 
 	setSessionPaused(sessionId: string, paused: boolean, now = Date.now()) {
-		const status = paused ? "paused" : "active";
-		const result = this.db
+		if (!this.getSession(sessionId)) return false;
+		this.writeSessionPause(sessionId, paused, now);
+		return true;
+	}
+
+	private writeSessionPause(sessionId: string, paused: boolean, now: number) {
+		if (paused) {
+			this.db
+				.prepare(
+					`INSERT INTO session_pauses (session_id, paused_at) VALUES (:sessionId, :now)
+					 ON CONFLICT(session_id) DO NOTHING`,
+				)
+				.run({ sessionId, now });
+			return;
+		}
+		this.db.prepare(`DELETE FROM session_pauses WHERE session_id = ?`).run(sessionId);
+		this.db
 			.prepare(
-				`UPDATE sessions SET status = :status, updated_at = :now WHERE session_id = :sessionId`,
+				`UPDATE sessions SET status = 'active', updated_at = :now
+				 WHERE session_id = :sessionId AND status = 'paused'`,
 			)
-			.run({ status, now, sessionId });
-		return (result.changes as number) > 0;
+			.run({ sessionId, now });
 	}
 
 	isGloballyDisabled(): boolean {
@@ -2812,6 +2845,8 @@ export class StateStore {
 
 		switch (payload.state) {
 			case "handed_off":
+				// A batch fetched before a pause must not be handed off after it.
+				if (this.isSessionPaused(payload.sessionId)) return false;
 				return this.transitionReminderBatchState(
 					payload.batchId,
 					payload.sessionId,
@@ -2852,7 +2887,7 @@ export class StateStore {
 		const session = this.getSession(sessionId);
 		if (
 			!session ||
-			session.status === "paused" ||
+			this.isSessionPaused(sessionId) ||
 			session.status === "dormant" ||
 			session.status === "closed"
 		)
@@ -3202,6 +3237,13 @@ export class StateStore {
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL,
         updated_at INTEGER NOT NULL
+      );
+
+      -- No foreign key: a pause must outlive the session row (Pi deletes and
+      -- re-registers its session on reload). Orphans are pruned with closed sessions.
+      CREATE TABLE IF NOT EXISTS session_pauses (
+        session_id TEXT PRIMARY KEY,
+        paused_at INTEGER NOT NULL
       );
     `);
 
