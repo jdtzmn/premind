@@ -7,6 +7,7 @@ import { codexMcpTools } from "../codex/mcp-server.ts";
 import { tool } from "@opencode-ai/plugin";
 import { skillRoots } from "../../scripts/generate-premind-skills.ts";
 import { ADAPTER_DRIVERS } from "./harness/adapters/index.ts";
+import { assertApprovedUnsupported } from "../shared/host-limitations.test-helpers.ts";
 import {
 	type CommandCapability,
 	commandCapabilities,
@@ -274,6 +275,11 @@ describe("adapter command capability contract", () => {
 						`${driver.key}.${scenario} is deferred and must name a tracking issue or PR`,
 					);
 				}
+				assertApprovedUnsupported(exception, {
+					label: `${driver.key}.${scenario}`,
+					harness: driver.key as PremindHarness,
+					surface: "scenarios",
+				});
 			}
 		}
 	});
