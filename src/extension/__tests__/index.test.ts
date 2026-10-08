@@ -4,6 +4,7 @@ import {
 	createPremindPiExtension,
 	renderPremindPiStatus,
 	renderPremindReminderText,
+	STATUS_POLL_STALE_MS,
 } from "../index.ts";
 import type {
 	DebugStatusResponse,
@@ -360,7 +361,7 @@ describe("premind Pi extension", () => {
 		assert.ok(activeCheckoutTool);
 		assert.equal(
 			activeCheckoutTool.description,
-			"Set the active Git checkout for the current premind session.",
+			"Set the active Git checkout for the current premind session. Call this at the start of any PR work, including when already in the startup checkout, and again after switching branches or worktrees before creating or following a PR.",
 		);
 		assert.deepEqual(activeCheckoutTool.promptGuidelines, [
 			"Call premind_set_active_checkout at the start of any PR work, including when already in the startup checkout, and again after switching branches before creating or following a PR.",
@@ -700,6 +701,47 @@ describe("premind Pi extension", () => {
 		await shutdown({}, ctx);
 	});
 
+	test("status polling recovers after a daemon request that never settles", async (t) => {
+		t.mock.timers.enable({ apis: ["setInterval", "Date"] });
+		const mock = createMockPi();
+		const client = createClient({ pendingBatch: reminderBatch });
+		const { ctx } = createEventContext();
+		let statusCalls = 0;
+		client.client.debugStatus = async () => {
+			statusCalls++;
+			// The first poll's request is lost with its daemon and never settles.
+			if (statusCalls === 2) return new Promise<DebugStatusResponse>(() => {});
+			return status;
+		};
+		createPremindPiExtension({
+			createDaemonClient: () => client.client,
+			config: { statusPollIntervalMs: 5_000 },
+			detectGit: async () => ({ repo: "owner/repo", branch: "feature/pi" }),
+		})(mock.pi as never);
+
+		const start = mock.events.get("session_start");
+		const shutdown = mock.events.get("session_shutdown");
+		assert.ok(start);
+		assert.ok(shutdown);
+		await start({}, ctx);
+
+		t.mock.timers.tick(5_000);
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		assert.equal(statusCalls, 2);
+
+		// While the stuck poll is still recent, later ticks must not overlap it.
+		t.mock.timers.tick(5_000);
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		assert.equal(statusCalls, 2);
+		assert.equal(mock.sentMessages.length, 0);
+
+		// Once the stuck poll is stale, polling resumes and delivers.
+		t.mock.timers.tick(STATUS_POLL_STALE_MS);
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		assert.equal(mock.sentMessages.length, 1);
+		await shutdown({}, ctx);
+	});
+
 	test("status polling never delivers while the Pi agent is busy", async (t) => {
 		t.mock.timers.enable({ apis: ["setInterval"] });
 		const mock = createMockPi();
@@ -926,6 +968,53 @@ describe("premind Pi extension", () => {
 		assert.match(notifications[0]?.message ?? "", /host: pi/);
 		assert.match(notifications[0]?.message ?? "", /daemon: reachable \(protocol 1\)/);
 		assert.match(notifications[0]?.message ?? "", /follow-up messages can wake an idle Pi session/);
+		assert.match(notifications[0]?.message ?? "", /daemon lock: /);
+		assert.match(notifications[0]?.message ?? "", /idle sessions with pending reminders: /);
+	});
+
+	test("/premind:doctor flags idle sessions holding reminders and a stuck idle poll", async (t) => {
+		t.mock.timers.enable({ apis: ["setInterval", "Date"] });
+		const mock = createMockPi();
+		const client = createClient();
+		let statusCalls = 0;
+		const stalledStatus: DebugStatusResponse = {
+			...status,
+			sessions: status.sessions.map((session) => ({
+				...session,
+				busyState: "idle" as const,
+				pendingReminderCount: 48,
+			})),
+		};
+		client.client.debugStatus = async () => {
+			statusCalls++;
+			if (statusCalls === 2) return new Promise<DebugStatusResponse>(() => {});
+			return stalledStatus;
+		};
+		const notifications: Array<{ message: string; level: string }> = [];
+		createPremindPiExtension({
+			createDaemonClient: () => client.client,
+			config: { statusPollIntervalMs: 5_000 },
+			detectGit: async () => ({ repo: "owner/repo", branch: "feature/pi" }),
+		})(mock.pi as never);
+		const start = mock.events.get("session_start");
+		const shutdown = mock.events.get("session_shutdown");
+		assert.ok(start);
+		assert.ok(shutdown);
+		const { ctx } = createEventContext();
+		await start({}, ctx);
+		t.mock.timers.tick(5_000);
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		// Move the clock past the stale threshold without firing the next poll.
+		t.mock.timers.setTime(Date.now() + STATUS_POLL_STALE_MS);
+
+		const command = mock.commands.get("premind:doctor");
+		assert.ok(command);
+		await command.handler("", createCommandContext(notifications));
+
+		const message = notifications[0]?.message ?? "";
+		assert.match(message, /idle delivery poll: stuck for \d+s/);
+		assert.match(message, /idle sessions with pending reminders: .+\(48\)/);
+		await shutdown({}, ctx);
 	});
 
 	test("global polling commands and tools target the daemon-wide switch", async () => {

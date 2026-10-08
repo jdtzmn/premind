@@ -88,7 +88,9 @@ export const PR_SNAPSHOT_QUERY = /* GraphQL */ `
                   nodes {
                     __typename
                     ... on CheckRun {
+                      databaseId
                       name
+                      startedAt
                       status
                       conclusion
                       detailsUrl
@@ -98,6 +100,7 @@ export const PR_SNAPSHOT_QUERY = /* GraphQL */ `
                     }
                     ... on StatusContext {
                       context
+                      createdAt
                       state
                       targetUrl
                     }
@@ -148,7 +151,9 @@ type ReviewCommentNode = {
 
 type CheckRunNode = {
   __typename: "CheckRun"
+  databaseId?: number | null
   name?: string | null
+  startedAt?: string | null
   status?: string | null
   conclusion?: string | null
   detailsUrl?: string | null
@@ -158,6 +163,7 @@ type CheckRunNode = {
 type StatusContextNode = {
   __typename: "StatusContext"
   context?: string | null
+  createdAt?: string | null
   state?: string | null
   targetUrl?: string | null
 }
@@ -246,6 +252,8 @@ const toCheck = (node: CheckContextNode | null): PullRequestCheck | null => {
       link: run.detailsUrl ?? undefined,
       event: run.checkSuite?.workflowRun?.event ?? undefined,
       workflow: run.checkSuite?.workflowRun?.workflow?.name ?? undefined,
+      ...(typeof run.databaseId === "number" ? { id: run.databaseId } : {}),
+      ...(run.startedAt ? { startedAt: run.startedAt } : {}),
     }
   }
   if (node.__typename === "StatusContext") {
@@ -254,6 +262,7 @@ const toCheck = (node: CheckContextNode | null): PullRequestCheck | null => {
       name: context.context ?? "",
       state: mapStatusContextState(context.state),
       link: context.targetUrl ?? undefined,
+      ...(context.createdAt ? { startedAt: context.createdAt } : {}),
     }
   }
   return null

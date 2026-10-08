@@ -29,6 +29,7 @@ test("probe reports runtime, plugin, config, daemon, and delivery health", async
     {
       HOME: "/definitely-missing-premind-home",
       CLAUDE_PLUGIN_ROOT: "/tmp/premind-plugin",
+      PREMIND_STATE_DIR: "/definitely-missing-premind-state",
     },
   );
   const value = JSON.parse(result.content[0].text);
@@ -39,6 +40,7 @@ test("probe reports runtime, plugin, config, daemon, and delivery health", async
     reachable: true,
     protocolVersion: 1,
     globallyDisabled: false,
+    lock: null,
   });
   assert.equal(value.configSource, "schema defaults");
   assert.match(value.delivery, /Stop-boundary only/);
@@ -51,7 +53,10 @@ test("probe reports a redacted diagnostic when the daemon is unavailable", async
     async () => {
       throw new Error("private/session/path");
     },
-    { HOME: "/definitely-missing-premind-home" },
+    {
+      HOME: "/definitely-missing-premind-home",
+      PREMIND_STATE_DIR: "/definitely-missing-premind-state",
+    },
   );
   const value = JSON.parse(result.content[0].text);
   assert.deepEqual(value.daemon, {
@@ -59,6 +64,7 @@ test("probe reports a redacted diagnostic when the daemon is unavailable", async
     protocolVersion: null,
     globallyDisabled: null,
     error: "Premind daemon is unavailable.",
+    lock: null,
   });
   assert.equal(value.runtime.requiredNode, ">=22.13.0");
   assert.equal(value.configSource, "schema defaults");

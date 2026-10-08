@@ -1,5 +1,11 @@
 import { PREMIND_CLOSED_SESSION_RETENTION_MS, PREMIND_DAEMON_LOG_PATH, PREMIND_IDLE_SHUTDOWN_GRACE_MS, PREMIND_REMINDER_HANDOFF_STALE_MS, PREMIND_SESSION_STALE_MS } from "../shared/constants.ts"
-import { isSocketReachable } from "../shared/daemon-startup.ts"
+import {
+  acquireDaemonLock,
+  holdsDaemonLock,
+  isSocketReachable,
+  releaseDaemonLock,
+  type DaemonLock,
+} from "../shared/daemon-startup.ts"
 import { createLogger } from "./logging/logger.ts"
 import { IpcServer } from "./ipc/server.ts"
 import { GitHubClient } from "./github/client.ts"
@@ -14,11 +20,31 @@ import { DaemonLifecycleRuntime } from "./lifecycle/daemon-lifecycle-runtime.ts"
 const logger = createLogger("daemon")
 
 const STALENESS_SWEEP_INTERVAL_MS = 5 * 60 * 1000
+// How often a running daemon confirms it still owns the daemon lock.
+const DAEMON_LOCK_CHECK_INTERVAL_MS = 15 * 1000
 
 async function main() {
   logger.info("daemon starting", { pid: process.pid, logFile: PREMIND_DAEMON_LOG_PATH })
+  // Claim the daemon lock before any startup work, so a daemon that loses the
+  // race exits immediately instead of competing for the database and socket.
+  const lock = await acquireDaemonLock()
+  if (!lock) {
+    logger.info("daemon startup skipped; another daemon holds the daemon lock")
+    return
+  }
+  try {
+    await startDaemon(lock)
+  } catch (error) {
+    releaseDaemonLock(lock)
+    throw error
+  }
+}
+
+async function startDaemon(lock: DaemonLock) {
+  // A daemon from before the daemon lock existed may still own the socket.
   if (await isSocketReachable()) {
     logger.info("daemon startup skipped; another process owns the socket")
+    releaseDaemonLock(lock)
     return
   }
   const server = new IpcServer()
@@ -82,6 +108,13 @@ async function main() {
     logger.info("detail file cleanup", { removed: cleanedFiles })
   }
 
+  // Startup work can take seconds under load. If the lock was reclaimed in the
+  // meantime, another daemon is taking over: leave the socket to it.
+  if (!holdsDaemonLock(lock)) {
+    logger.warn("daemon lock lost during startup; exiting before listening")
+    server.store.close()
+    return
+  }
   await server.listen()
 
   const discoveryScheduler = new PollScheduler(
@@ -156,16 +189,27 @@ async function main() {
   }, STALENESS_SWEEP_INTERVAL_MS)
   if (typeof reapInterval.unref === "function") reapInterval.unref()
 
+  // A daemon whose lock was reclaimed (for example after it stopped answering)
+  // must stop polling and writing so two daemons never run side by side.
+  const lockCheckInterval = setInterval(() => {
+    if (holdsDaemonLock(lock)) return
+    logger.warn("daemon lock taken over by another daemon; shutting down")
+    lifecycle.requestStop("lock-lost")
+  }, DAEMON_LOCK_CHECK_INTERVAL_MS)
+  if (typeof lockCheckInterval.unref === "function") lockCheckInterval.unref()
+
   const lifecycle = new DaemonLifecycleRuntime({
     hasDemand: () => server.hasDemand(),
     graceMs: PREMIND_IDLE_SHUTDOWN_GRACE_MS,
     onStopping: async (reason) => {
       clearInterval(reapInterval)
+      clearInterval(lockCheckInterval)
       discoveryScheduler.stop()
       prScheduler.stop()
       pullRequestWatcher.close()
       logger.info("graceful shutdown", { reason })
       await server.close()
+      releaseDaemonLock(lock)
     },
     onStopped: () => process.exit(0),
     onError: (error) => {

@@ -205,6 +205,8 @@ describe("pending reminder live reconciliation", () => {
     { name: "different workflow is not a match", checks: [check("SUCCESS", "other")], kind: "check.unverified", summary: /UNVERIFIED/, action: false },
     { name: "different event is not a match", checks: [check("SUCCESS", "CI", "label")], kind: "check.unverified", summary: /UNVERIFIED/, action: false },
     { name: "terminal duplicates cannot be ordered", checks: [check("SUCCESS"), check("FAILURE")], kind: "check.unverified", summary: /UNVERIFIED/, action: false },
+    { name: "a newer passing run supersedes a failure", checks: [{ ...check("SUCCESS"), id: 2 }, { ...check("FAILURE"), id: 1 }], kind: "check.resolved", summary: /now passed/, action: false },
+    { name: "a newer failing run supersedes a cancellation", checks: [{ ...check("CANCELLED"), id: 1 }, { ...check("FAILURE"), id: 2 }], kind: "check.failed", summary: /Check failed: lint/, action: true },
     { name: "unknown state is not an active rerun", checks: [check("MYSTERY")], kind: "check.unverified", summary: /UNVERIFIED/, action: false },
     { name: "workflow isolates a genuine failure", checks: [check("SUCCESS", "other"), check("FAILURE")], kind: "check.failed", summary: /Check failed: lint/, action: true },
   ]) {

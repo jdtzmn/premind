@@ -1,4 +1,5 @@
 import { PREMIND_VERSION_LABEL } from "../shared/version.ts";
+import { commandCapabilities } from "../shared/command-capabilities.ts";
 import {
 	GLOBAL_CONFIRMATION_DESCRIPTION,
 	globalControlRefusal,
@@ -17,6 +18,10 @@ import { Type } from "typebox";
 import { PremindDaemonClient } from "../client/daemon-client.ts";
 import { detectGitContext } from "../client/git-context.ts";
 import { ensureDaemonRunning } from "../plugin-opencode/daemon-launcher.ts";
+import {
+	daemonLockStatus,
+	formatDaemonLockStatus,
+} from "../shared/daemon-startup.ts";
 import type {
 	AckReminderPayload,
 	AckReminderBundlePayload,
@@ -112,6 +117,10 @@ const SESSION_SOURCE = "pi-extension";
 const DEFAULT_HEARTBEAT_MS = 10_000;
 const DEFAULT_STATUS_POLL_INTERVAL_MS = 15_000;
 const MIN_STATUS_POLL_INTERVAL_MS = 5_000;
+// A status poll still running after this long is treated as abandoned so one
+// stuck daemon request cannot end idle delivery for the rest of the session.
+// Daemon requests time out well before this, so it only trips on a true hang.
+export const STATUS_POLL_STALE_MS = 2 * 60_000;
 const REMINDER_VISIBLE_EVENT_LIMIT = 3;
 const PR_ICON = ""; // nf-oct-git_pull_request
 const STALE_EXTENSION_CONTEXT_PREFIX = "This extension ctx is stale";
@@ -309,7 +318,22 @@ export const createPremindPiExtension = (
 		let sessionClient: DaemonClientLike | undefined;
 		let heartbeatTimer: NodeJS.Timeout | undefined;
 		let statusPollTimer: NodeJS.Timeout | undefined;
-		let statusPollInFlight = false;
+		// Start time of the running status poll, or undefined when none is running.
+		let statusPollStartedAt: number | undefined;
+		let statusPollToken = 0;
+		let lastStatusPollCompletedAt: number | undefined;
+		let lastStatusPollError: string | undefined;
+
+		const describeStatusPoll = (now: number) => {
+			if (
+				statusPollStartedAt !== undefined &&
+				now - statusPollStartedAt >= STATUS_POLL_STALE_MS
+			)
+				return `stuck for ${Math.round((now - statusPollStartedAt) / 1000)}s; the next poll replaces it`;
+			if (lastStatusPollCompletedAt === undefined) return "no poll has completed yet";
+			const age = `last completed ${Math.round((now - lastStatusPollCompletedAt) / 1000)}s ago`;
+			return lastStatusPollError ? `${age} with an error: ${lastStatusPollError}` : age;
+		};
 		let deliveryInFlight = false;
 		let sessionGeneration = 0;
 		let config = normalizePremindPiConfig(dependencies.config);
@@ -378,10 +402,27 @@ export const createPremindPiExtension = (
 				`- status polling: ${config.statusPollIntervalMs === 0 ? "disabled" : `${config.statusPollIntervalMs}ms`}`,
 				`- session: ${currentSessionId ? `attached (${formatSessionId(currentSessionId)})` : "not attached"}`,
 				"- delivery: follow-up messages can wake an idle Pi session",
+				...(config.statusPollIntervalMs > 0
+					? [`- idle delivery poll: ${describeStatusPoll(Date.now())}`]
+					: []),
+				`- daemon lock: ${formatDaemonLockStatus(daemonLockStatus())}`,
 			];
 			try {
 				const status = await createDaemonClient().debugStatus();
 				lines.splice(2, 0, `- daemon: reachable (protocol ${status.daemon.protocolVersion})`);
+				// Idle sessions that still have reminders usually mean that session's
+				// idle delivery stopped; a message there delivers the backlog.
+				const stalled = status.sessions.filter(
+					(session) =>
+						session.busyState === "idle" && session.pendingReminderCount > 0,
+				);
+				lines.push(
+					stalled.length === 0
+						? "- idle sessions with pending reminders: none"
+						: `- idle sessions with pending reminders: ${stalled
+								.map((session) => `${formatSessionId(session.sessionId)} (${session.pendingReminderCount})`)
+								.join(", ")}`,
+				);
 			} catch (error) {
 				lines.splice(
 					2,
@@ -583,8 +624,18 @@ export const createPremindPiExtension = (
 			},
 			generation: number,
 		) => {
-			if (generation !== sessionGeneration || statusPollInFlight) return;
-			statusPollInFlight = true;
+			if (generation !== sessionGeneration) return;
+			const startedAt = Date.now();
+			if (
+				statusPollStartedAt !== undefined &&
+				startedAt - statusPollStartedAt < STATUS_POLL_STALE_MS
+			)
+				return;
+			// Owning the poll by token lets an abandoned poll finish late without
+			// clearing the marker of the poll that replaced it.
+			const token = ++statusPollToken;
+			statusPollStartedAt = startedAt;
+			let pollError: string | undefined;
 			try {
 				await refreshStatusbar(ctx, generation);
 				if (
@@ -600,13 +651,18 @@ export const createPremindPiExtension = (
 				if (generation === sessionGeneration && result.delivered)
 					setStatus(ctx, undefined);
 			} catch (error) {
+				pollError = error instanceof Error ? error.message : String(error);
 				if (
 					generation === sessionGeneration &&
 					!isStaleExtensionContextError(error)
 				)
 					setStatus(ctx, `${PR_ICON} error`);
 			} finally {
-				statusPollInFlight = false;
+				if (token === statusPollToken) {
+					statusPollStartedAt = undefined;
+					lastStatusPollCompletedAt = Date.now();
+					lastStatusPollError = pollError;
+				}
 			}
 		};
 
@@ -894,7 +950,7 @@ export const createPremindPiExtension = (
 		pi.registerTool({
 			name: "premind_set_active_checkout",
 			label: "Premind Set Active Checkout",
-			description: "Set the active Git checkout for the current premind session.",
+			description: `Set the active Git checkout for the current premind session. ${commandCapabilities["set-active-checkout"].toolGuidance}`,
 			promptSnippet: "Tell premind which Git checkout this session is actively using.",
 			promptGuidelines: [
 				"Call premind_set_active_checkout at the start of any PR work, including when already in the startup checkout, and again after switching branches before creating or following a PR.",
@@ -918,8 +974,7 @@ export const createPremindPiExtension = (
 		pi.registerTool({
 			name: "premind_subscribe",
 			label: "Premind Subscribe",
-			description:
-				"Mandatory PR tracking: Immediately call this tool after creating, opening, discovering, or beginning work on a pull request. Do this before reporting the PR URL or status to the user. Applies after gh pr create, gh stack submit, gh stack link, or any equivalent GitHub operation.",
+			description: commandCapabilities.subscribe.toolGuidance,
 			promptGuidelines: [
 				"Omit writePolicy to let Premind verify whether the authenticated GitHub user authored the PR on this session's active checkout. It remains observation-only until verified.",
 				"Use user-authorized only when the user explicitly authorizes work on this PR. Use observe-only to prevent automatic authority escalation.",
@@ -950,7 +1005,7 @@ export const createPremindPiExtension = (
 		pi.registerTool({
 			name: "premind_unsubscribe",
 			label: "Premind Unsubscribe",
-			description: "Unsubscribe the current session from a pull request.",
+			description: `Unsubscribe the current session from a pull request. ${commandCapabilities.unsubscribe.toolGuidance}`,
 			parameters: Type.Object({
 				prNumber: Type.Integer({ minimum: 1 }),
 				repo: Type.Optional(Type.String({ minLength: 1 })),
@@ -1002,8 +1057,7 @@ export const createPremindPiExtension = (
 		pi.registerTool({
 			name: "premind_deliver",
 			label: "Premind Deliver",
-			description:
-				"Deliver all pending premind reminders for the current session at the earliest safe boundary.",
+			description: commandCapabilities.deliver.toolGuidance,
 			parameters: Type.Object({}),
 			async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
 				const sessionId = currentSessionId ?? getPiSessionId(ctx);
@@ -1024,38 +1078,36 @@ export const createPremindPiExtension = (
 			},
 		});
 
-		for (const [name, label, action, alternative] of [
-			["premind_enable", "Premind Enable", "enable", "premind_resume"],
-			["premind_disable", "Premind Disable", "disable", "premind_pause"],
-		] as const) {
-			pi.registerTool({
-				name,
-				label,
-				description: globalControlToolDescription(action, alternative),
-				parameters: Type.Object({
-					confirmGlobal: Type.Boolean({ description: GLOBAL_CONFIRMATION_DESCRIPTION }),
-				}),
-				async execute(_toolCallId, params) {
-					if (params.confirmGlobal !== true) {
-						throw new Error(globalControlRefusal(action, alternative));
-					}
-					return {
-						content: [
-							{
-								type: "text" as const,
-								text: await setGlobalPolling(action === "disable"),
-							},
-						],
-						details: {},
-					};
-				},
-			});
-		}
+		pi.registerTool({
+			name: "premind_enable",
+			label: "Premind Enable",
+			description: `Enable premind polling. ${commandCapabilities.enable.toolGuidance}`,
+			parameters: Type.Object({}),
+			async execute() {
+				return {
+					content: [{ type: "text" as const, text: await setGlobalPolling(false) }],
+					details: {},
+				};
+			},
+		});
+
+		pi.registerTool({
+			name: "premind_disable",
+			label: "Premind Disable",
+			description: `Disable premind polling. ${commandCapabilities.disable.toolGuidance}`,
+			parameters: Type.Object({}),
+			async execute() {
+				return {
+					content: [{ type: "text" as const, text: await setGlobalPolling(true) }],
+					details: {},
+				};
+			},
+		});
 
 		pi.registerTool({
 			name: "premind_doctor",
 			label: "Premind Doctor",
-			description: "Diagnose premind extension, configuration, and daemon health.",
+			description: commandCapabilities.doctor.toolGuidance,
 			parameters: Type.Object({}),
 			async execute() {
 				return {
@@ -1068,8 +1120,7 @@ export const createPremindPiExtension = (
 		pi.registerTool({
 			name: "premind_status",
 			label: "Premind Status",
-			description:
-				"Show premind daemon status including active sessions, watchers, and pending reminder counts.",
+			description: `Show premind daemon status, active sessions, and watchers. ${commandCapabilities.status.toolGuidance}`,
 			promptSnippet: "Inspect premind PR reminder daemon status.",
 			promptGuidelines: [
 				"Use premind_status when the user asks about premind daemon state, PR reminder attachment, pending reminders, or watcher status.",

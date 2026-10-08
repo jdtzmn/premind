@@ -2,6 +2,7 @@
 
 // @ts-expect-error The shipped Claude hook runtime is plain JavaScript.
 import { handleHook } from "../../../../plugin-claude/bin/lib.mjs"
+import { harnessToolName } from "./tool-names.ts"
 import type { AdapterDriver, DeliveryCapture, StartIdleArgs } from "./types.ts"
 
 type HookOutput = {
@@ -65,7 +66,7 @@ const createClaudeHarness = ({ daemonClient, sessionId }: ClaudeHarnessArgs) => 
 					...(payload.error ? { error: payload.error } : {}),
 				})
 			default:
-				throw new Error(`unexpected Claude hook request: ${type}`)
+				return daemonClient.call(type, payload)
 		}
 	}
 	const stop = async (stopHookActive = false) => {
@@ -105,6 +106,42 @@ export const claudeDriver: AdapterDriver = {
 		return {
 			captured: harness.captured,
 			idleAgain: () => harness.stop(),
+		}
+	},
+
+	async createControls(args) {
+		const harness = createClaudeHarness(args)
+		const environment = { CLAUDE_CODE_SESSION_ID: args.sessionId }
+		// The SessionStart hook registers through real git detection, which the
+		// harness cannot stub, so send the registration it would have sent.
+		await args.daemonClient.call("registerClaudeSession", {
+			sessionId: args.sessionId,
+			hostSessionId: args.sessionId,
+			repo: "acme/repo",
+			branch: args.branch,
+			busyState: "idle",
+		})
+		return {
+			captured: harness.captured,
+			async invoke(capabilityId, params = {}) {
+				// Loaded lazily: the MCP server imports the built daemon launcher, which
+				// delivery-only suites (test:harness) intentionally run without.
+				// @ts-expect-error The shipped Claude MCP runtime is plain JavaScript.
+				const { handleMcpRequest } = await import("../../../../plugin-claude/bin/mcp-server.mjs")
+				const result = (await handleMcpRequest(
+					{
+						method: "tools/call",
+						params: { name: harnessToolName("claude", capabilityId), arguments: params },
+					},
+					(type: string, payload: unknown) => args.daemonClient.call(type, payload),
+					environment,
+				)) as { content: Array<{ text: string }>; isError?: boolean }
+				return {
+					text: result.content.map((part) => part.text).join("\n"),
+					isError: result.isError === true,
+				}
+			},
+			shutdown: async () => {},
 		}
 	},
 

@@ -6,6 +6,7 @@ import readline from "node:readline";
 import { fileURLToPath } from "node:url";
 import { request } from "./lib.mjs";
 import { ensureDaemonRunning } from "./ensure-daemon.mjs";
+import { daemonLockStatus } from "../generated/daemon-startup.mjs";
 
 const PLUGIN_VERSION = "0.2.0";
 const REQUIRED_NODE = { major: 22, minor: 13 };
@@ -26,24 +27,12 @@ const resolveConfigSource = (environment = process.env) => {
   return "schema defaults";
 };
 
-// Mirrors src/shared/global-control.ts; this plain-JS runtime cannot import TS.
-const globalControlSchema = {
-  type: "object",
-  properties: {
-    confirmGlobal: {
-      type: "boolean",
-      description:
-        "Must be true. Set it only after the user explicitly asked to change premind polling globally for every session and project.",
-    },
-  },
-  required: ["confirmGlobal"],
-  additionalProperties: false,
-};
-
+// Descriptions mirror `toolGuidance` in src/shared/command-capabilities.ts;
+// src/test/command-capability-contract.test.ts compares them.
 const tools = [
   {
     name: "status",
-    description: "Return redacted Premind aggregate status.",
+    description: "Return redacted Premind aggregate status. Inspect Premind status, including pending reminder counts.",
     inputSchema: {
       type: "object",
       properties: {},
@@ -53,7 +42,7 @@ const tools = [
   {
     name: "probe",
     description:
-      "Report Claude plugin, Node runtime, configuration, daemon, and delivery health without exposing session data.",
+      "Diagnose Premind adapter, configuration, and daemon health. Reports Claude plugin, Node runtime, configuration, daemon, and delivery health without exposing session data.",
     inputSchema: {
       type: "object",
       properties: {},
@@ -63,19 +52,27 @@ const tools = [
   {
     name: "enable",
     description:
-      "Enable Premind GitHub polling globally, resuming it for ALL sessions and projects. Call only when the user explicitly requested the global enable action, and pass confirmGlobal: true. Never use this to resume one session.",
-    inputSchema: globalControlSchema,
+      "Enable Premind polling. This enables Premind GitHub polling globally, for every session and project.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
   },
   {
     name: "disable",
     description:
-      "Disable Premind GitHub polling globally, stopping it for ALL sessions and projects. Call only when the user explicitly requested the global disable action, and pass confirmGlobal: true. Never use this to pause, mute, or quiet the current session.",
-    inputSchema: globalControlSchema,
+      "Disable Premind polling. This disables Premind GitHub polling globally, for every session and project.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
   },
   {
     name: "set_active_checkout",
     description:
-      "Set the active Git checkout for this Claude session. Call this at the start of any PR work, including when already in the startup checkout, and again after switching branches before creating or following a PR.",
+      "Set the active Git checkout for this Claude session. Call this at the start of any PR work, including when already in the startup checkout, and again after switching branches or worktrees before creating or following a PR.",
     inputSchema: {
       type: "object",
       properties: { path: { type: "string" } },
@@ -105,7 +102,7 @@ const tools = [
   },
   {
     name: "unsubscribe",
-    description: "Unsubscribe the current Claude session from a pull request.",
+    description: "Unsubscribe the current Claude session from a pull request. Use this only when the user asks to stop tracking a pull request.",
     inputSchema: {
       type: "object",
       properties: {
@@ -183,6 +180,7 @@ export const handleMcpRequest = async (
           protocolVersion: status?.daemon?.protocolVersion ?? null,
           globallyDisabled: disabled ? Boolean(disabled.disabled) : null,
           ...(reachable ? {} : { error: "Premind daemon is unavailable." }),
+          lock: daemonLockStatus(environment.PREMIND_STATE_DIR),
         },
         configSource: resolveConfigSource(environment),
         delivery:

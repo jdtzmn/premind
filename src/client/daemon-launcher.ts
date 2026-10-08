@@ -5,6 +5,8 @@ import { PREMIND_SOCKET_PATH, PREMIND_STATE_DIR } from "../shared/constants.ts";
 import {
   acquireDaemonStartLock,
   inspectDaemon,
+  isDaemonStarting,
+  readDaemonLockOwner,
   releaseDaemonStartLock,
   type DaemonProbeResult,
 } from "../shared/daemon-startup.ts";
@@ -139,6 +141,20 @@ export const createDaemonLauncher = (options: DaemonLauncherOptions) => {
         throw unresponsiveDaemonError(lockedProbe.reason);
       }
 
+      // A daemon that holds the daemon lock is starting up. Spawning another
+      // would only add load; wait for it instead.
+      if (isDaemonStarting(stateDir)) {
+        const waited = await waitForProbe(
+          socketPath,
+          requiredOperations,
+          startupTimeoutMs,
+          retryMs,
+        );
+        if (waited.status === "compatible") return;
+        if (waited.status === "incompatible") throw incompatibleDaemonError(waited);
+        throw new Error("Premind daemon is still starting; retry shortly");
+      }
+
       const runtime = resolveNodeRuntime({
         executable: options.nodeExecutable,
       });
@@ -213,7 +229,12 @@ export const createDaemonLauncher = (options: DaemonLauncherOptions) => {
         throw incompatibleDaemonError(probe);
       }
       if (probe.status !== "compatible") {
-        child.kill("SIGTERM");
+        // A child that holds the daemon lock is a slow but healthy daemon.
+        // Killing it mid-startup is what turned slow starts into a storm.
+        const childOwnsDaemonLock =
+          child.pid !== undefined &&
+          readDaemonLockOwner(stateDir)?.pid === child.pid;
+        if (!childOwnsDaemonLock) child.kill("SIGTERM");
         failureReported = true;
         options.onDiagnostic?.({
           phase: "daemon-start-failed",
