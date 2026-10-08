@@ -17,7 +17,10 @@ for using graph retrieval, focused source inspection, and verification.
 Premind supports four coding-agent harnesses: **Pi, Claude Code, OpenCode, and Codex**.
 
 - Every user-facing change (commands, tools, delivery or lifecycle behavior, agent-facing wording) must cover all four harnesses in the same change.
-- Never decide on your own that a change is "adapter-specific". A harness may be skipped only with explicit user approval, recorded as an `unsupported` or `deferred` exception in `src/shared/command-capabilities.ts`. A `deferred` exception must name a tracking issue or PR.
+- Never decide on your own that a change is "adapter-specific". A harness may be skipped only with explicit user approval, recorded as an exception in `src/shared/command-capabilities.ts`:
+  - `deferred` must name a tracking issue or PR.
+  - `unsupported` must reference an entry in `hostLimitations`: a real host limitation, not a scope decision. Never add a `hostLimitations` entry without explicit user approval.
+- When a capability test fails because a harness lacks a surface, implement the surface in that harness. Do not add an exception to make the test pass.
 - Every plan under `docs/plans/` must include a per-harness coverage table.
 - The guardrails are tests, not memory: `src/shared/command-capabilities.test.ts`, `src/test/command-capability-contract.test.ts`, and the cross-adapter scenarios under `src/test/` iterate every harness. Extend them for new capabilities instead of adding adapter-local checks only.
 - For each harness, check the lifecycle, not only the surface: whether reload or restart recreates the session, whether every delivery path honors session state, and whether reconnecting re-registers the session as active.

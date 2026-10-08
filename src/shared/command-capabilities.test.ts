@@ -4,13 +4,17 @@ import { describe, test } from "node:test";
 import {
 	type CommandCapability,
 	commandCapabilities,
+	harnessSkillExceptions,
+	hostLimitations,
 	expectedCapabilitySurface,
 	harnessSurface,
 	listCapabilityExceptions,
 	listParameterExceptions,
 	premindHarnesses,
+	premindHarnessLabels,
 	renderCommandCapabilityDocumentation,
 } from "./command-capabilities.ts";
+import { assertApprovedUnsupported } from "./host-limitations.test-helpers.ts";
 
 const capabilities = Object.entries(
 	commandCapabilities as Record<string, CommandCapability>,
@@ -41,7 +45,11 @@ describe("command capability contract", () => {
 					if (differs) {
 						assert.ok(
 							exception,
-							`${capabilityId}.${harness}.${kind} differs from the canonical surface and requires an unsupported, deferred, or host-naming exception`,
+							[
+								`${capabilityId} has no ${kind} in ${premindHarnessLabels[harness]}.`,
+								`Implement it in every supported harness (${premindHarnesses.map((h) => premindHarnessLabels[h]).join(", ")}); see AGENTS.md "Supported Harnesses".`,
+								"Do not add an exception to make this test pass. Skipping a harness needs the user's explicit approval first.",
+							].join(" "),
 						);
 					} else {
 						assert.equal(
@@ -66,6 +74,7 @@ describe("command capability contract", () => {
 					`${label} is deferred and must name a tracking issue or PR`,
 				);
 			}
+			assertApprovedUnsupported(exception, { label, harness, surface, capabilityId });
 			if (exception.kind === "host-naming") {
 				const surfaceNames = harnessSurface(
 					commandCapabilities[capabilityId as keyof typeof commandCapabilities],
@@ -90,6 +99,36 @@ describe("command capability contract", () => {
 			if (exception.kind === "deferred") {
 				assert.match(exception.tracking ?? "", /^(#\d+|https:\/\/github\.com\/\S+)$/);
 			}
+			assertApprovedUnsupported(exception, {
+				label,
+				harness,
+				surface: "parameters",
+				capabilityId,
+			});
+		}
+	});
+
+	test("skill exceptions use approved host limitations", () => {
+		for (const [harness, exception] of Object.entries(harnessSkillExceptions)) {
+			assertApprovedUnsupported(exception, {
+				label: `skills.${harness}`,
+				harness: harness as (typeof premindHarnesses)[number],
+				surface: "skills",
+			});
+		}
+	});
+
+	test("every approved host limitation is in use", () => {
+		const used = new Set(
+			[
+				...listCapabilityExceptions().map(({ exception }) => exception),
+				...Object.values(harnessSkillExceptions),
+			].flatMap((exception) =>
+				exception?.kind === "unsupported" ? [exception.limitation] : [],
+			),
+		);
+		for (const limitation of Object.keys(hostLimitations)) {
+			assert.ok(used.has(limitation as keyof typeof hostLimitations), `${limitation} is unused; remove it`);
 		}
 	});
 

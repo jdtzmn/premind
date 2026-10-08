@@ -22,19 +22,71 @@ export const premindHarnessLabels = {
 } as const satisfies Record<PremindHarness, string>;
 
 /**
- * - `unsupported`: the host cannot provide the canonical surface.
+ * The only reasons a harness may lack a canonical surface permanently. Each
+ * entry is a real limitation of the host, not a scope decision. An
+ * `unsupported` exception must name one of these, and only for the harness and
+ * surface it describes; tests reject anything else (#85).
+ *
+ * Adding an entry requires explicit user approval. If a harness can technically
+ * provide a surface, implement it there instead, or record a `deferred`
+ * exception that names a tracking issue.
+ */
+export const hostLimitations = {
+	"codex-no-slash-commands": {
+		harness: "codex",
+		surface: "commands",
+		reason: "Codex plugins expose MCP tools and skills, not slash commands.",
+	},
+	"claude-delivery-owned-by-stop-hook": {
+		harness: "claude",
+		surface: "tools",
+		capabilities: ["deliver"],
+		reason: "Claude delivery remains owned by the Stop hook.",
+	},
+	"opencode-no-skill-install": {
+		harness: "opencode",
+		surface: "skills",
+		reason:
+			"OpenCode's npm plugin cannot install into OpenCode's skill discovery directories.",
+	},
+} as const satisfies Record<
+	string,
+	{
+		harness: PremindHarness;
+		surface: CapabilitySurfaceKind | "skills" | "scenarios";
+		/** Limit the entry to these capabilities; omit when it applies to all. */
+		capabilities?: readonly string[];
+		reason: string;
+	}
+>;
+
+export type HostLimitationId = keyof typeof hostLimitations;
+
+/**
+ * - `unsupported`: the host cannot provide the surface. Must name an entry in
+ *   `hostLimitations`.
  * - `deferred`: the host could provide it but does not yet; must name a
  *   tracking issue or PR.
  * - `host-naming`: the surface exists under a host-specific name.
  */
 export type CapabilityExceptionKind = "unsupported" | "deferred" | "host-naming";
 
-export type CapabilityException = {
-	kind: CapabilityExceptionKind;
-	reason: string;
-	/** Required for `deferred`: an issue or PR reference such as `#77`. */
-	tracking?: string;
-};
+export type CapabilityException =
+	| { kind: "unsupported"; limitation: HostLimitationId; reason: string }
+	| {
+			kind: "deferred";
+			reason: string;
+			/** An issue or PR reference such as `#77`. */
+			tracking: string;
+	  }
+	| { kind: "host-naming"; reason: string };
+
+/** Builds an `unsupported` exception from an approved host limitation. */
+export const unsupported = (limitation: HostLimitationId): CapabilityException => ({
+	kind: "unsupported",
+	limitation,
+	reason: hostLimitations[limitation].reason,
+});
 
 export type HarnessCapabilityAliases = Partial<
 	Record<CapabilitySurfaceKind, readonly string[]>
@@ -77,10 +129,7 @@ const claudeToolNaming: CapabilityException = {
 	reason: "Claude MCP tools omit the premind_ prefix.",
 };
 
-const codexHasNoCommands: CapabilityException = {
-	kind: "unsupported",
-	reason: "Codex plugins expose MCP tools and skills, not slash commands.",
-};
+const codexHasNoCommands = unsupported("codex-no-slash-commands");
 
 const codexSessionHandle = (required: boolean) =>
 	({
@@ -189,10 +238,7 @@ export const commandCapabilities = {
 				commands: ["premind:deliver"],
 				tools: [],
 				exceptions: {
-					tools: {
-						kind: "unsupported",
-						reason: "Claude delivery remains owned by the Stop hook.",
-					},
+					tools: unsupported("claude-delivery-owned-by-stop-hook"),
 				},
 			},
 			opencode: {
@@ -489,11 +535,7 @@ export type CommandCapabilityId = keyof typeof commandCapabilities;
 export const harnessSkillExceptions: Partial<
 	Record<PremindHarness, CapabilityException>
 > = {
-	opencode: {
-		kind: "unsupported",
-		reason:
-			"OpenCode's npm plugin cannot install into OpenCode's skill discovery directories.",
-	},
+	opencode: unsupported("opencode-no-skill-install"),
 };
 
 export const harnessSurface = (
@@ -608,14 +650,16 @@ export const renderCommandCapabilityDocumentation = (): string => {
 	);
 	lines.push("", "## Deferred gaps", "");
 	if (deferredGaps.length === 0 && deferredParameters.length === 0) lines.push("None.");
+	const tracking = (exception: CapabilityException) =>
+		exception.kind === "deferred" ? exception.tracking : "";
 	for (const { capabilityId, harness, surface, exception } of deferredGaps) {
 		lines.push(
-			`- \`${capabilityId}\` / ${premindHarnessLabels[harness]} / ${surface}: ${exception.reason} (tracked in ${exception.tracking})`,
+			`- \`${capabilityId}\` / ${premindHarnessLabels[harness]} / ${surface}: ${exception.reason} (tracked in ${tracking(exception)})`,
 		);
 	}
 	for (const { capabilityId, harness, parameter, exception } of deferredParameters) {
 		lines.push(
-			`- \`${capabilityId}\` / ${premindHarnessLabels[harness]} / parameter \`${parameter}\`: ${exception.reason} (tracked in ${exception.tracking})`,
+			`- \`${capabilityId}\` / ${premindHarnessLabels[harness]} / parameter \`${parameter}\`: ${exception.reason} (tracked in ${tracking(exception)})`,
 		);
 	}
 	lines.push("", "## Other exceptions", "");
