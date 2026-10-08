@@ -1,4 +1,9 @@
 import assert from "node:assert/strict";
+import {
+	SESSION_PAUSED_DELIVERY_MESSAGE,
+	SESSION_PAUSED_MESSAGE,
+	SESSION_RESUMED_MESSAGE,
+} from "../../shared/session-pause.ts";
 import { describe, test } from "node:test";
 import {
 	createPremindPiExtension,
@@ -1036,8 +1041,8 @@ describe("premind Pi extension", () => {
 		assert.ok(enableTool);
 
 		for (const tool of [disableTool, enableTool]) {
-			assert.match(tool.description ?? "", /ALL sessions and projects/);
-			assert.match(tool.description ?? "", /explicitly requested/);
+			assert.match(tool.description ?? "", /globally, for every session and project/);
+			assert.match(tool.description ?? "", /only when the user explicitly asks/);
 			for (const params of [{}, { confirmGlobal: false }]) {
 				await assert.rejects(
 					tool.execute("tool-unconfirmed", params, undefined, undefined, {}),
@@ -1045,8 +1050,8 @@ describe("premind Pi extension", () => {
 				);
 			}
 		}
-		assert.match(disableTool.description ?? "", /use premind_pause instead/);
-		assert.match(enableTool.description ?? "", /use premind_resume instead/);
+		assert.match(disableTool.description ?? "", /use the session pause tool instead/);
+		assert.match(enableTool.description ?? "", /use the session resume tool instead/);
 		assert.deepEqual(client.operations, []);
 
 		await disable.handler("", createCommandContext(notifications));
@@ -1189,8 +1194,8 @@ describe("premind Pi extension", () => {
 		assert.ok(resume);
 		assert.ok(pauseTool);
 		assert.ok(resumeTool);
-		assert.match(pauseTool.description ?? "", /never premind_disable/);
-		assert.match(resumeTool.description ?? "", /never premind_enable/);
+		assert.match(pauseTool.description ?? "", /not the global disable tool/);
+		assert.match(resumeTool.description ?? "", /not the global enable tool/);
 
 		const ctx = createCommandContext(notifications);
 		await pause.handler("", ctx);
@@ -1208,10 +1213,8 @@ describe("premind Pi extension", () => {
 			"pauseSession:/tmp/session.jsonl",
 			"resumeSession:/tmp/session.jsonl",
 		]);
-		const pausedMessage =
-			"premind paused reminders for this session only. Subscriptions are unchanged and PR updates keep accumulating; run /premind:resume to deliver them.";
-		const resumedMessage =
-			"premind resumed reminders for this session. Subscriptions are unchanged; queued PR updates deliver at the next safe point.";
+		const pausedMessage = SESSION_PAUSED_MESSAGE;
+		const resumedMessage = SESSION_RESUMED_MESSAGE;
 		assert.deepEqual(
 			notifications.map(({ message }) => message),
 			[pausedMessage, pausedMessage, resumedMessage],
@@ -1244,7 +1247,7 @@ describe("premind Pi extension", () => {
 		assert.deepEqual(mock.sentMessages, []);
 		assert.equal(
 			notifications.at(-1)?.message,
-			"premind is paused for this session; run /premind:resume before delivering reminders.",
+			SESSION_PAUSED_DELIVERY_MESSAGE,
 		);
 	});
 

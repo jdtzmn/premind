@@ -27,8 +27,34 @@ const resolveConfigSource = (environment = process.env) => {
   return "schema defaults";
 };
 
-// Descriptions mirror `toolGuidance` in src/shared/command-capabilities.ts;
-// src/test/command-capability-contract.test.ts compares them.
+// This plain-JS runtime cannot import TypeScript, so it mirrors shared text:
+// - descriptions mirror `toolGuidance` in src/shared/command-capabilities.ts
+//   (compared by src/test/command-capability-contract.test.ts);
+// - confirmation, refusal, and result strings mirror src/shared/global-control.ts
+//   and src/shared/session-pause.ts (compared by plugin-claude/test/mcp-server.test.mjs).
+export const GLOBAL_CONFIRMATION_DESCRIPTION =
+  "Must be true. Set it only after the user explicitly asked to change premind polling globally for every session and project.";
+export const globalControlRefusal = (action) =>
+  `premind refused to ${action} polling globally: this affects every session and project. Ask the user to confirm the global ${action}, then call again with confirmGlobal: true. To change only this session, use the session ${action === "disable" ? "pause" : "resume"} tool.`;
+export const globalControlResult = (disabled) =>
+  `premind polling is ${disabled ? "disabled" : "enabled"} globally, across all sessions and projects.`;
+export const SESSION_PAUSED_MESSAGE =
+  "premind paused reminders for this session only. Subscriptions are unchanged and PR updates keep accumulating until you resume.";
+export const SESSION_RESUMED_MESSAGE =
+  "premind resumed reminders for this session. Subscriptions are unchanged; queued PR updates arrive at the next safe point.";
+
+const globalControlSchema = {
+  type: "object",
+  properties: {
+    confirmGlobal: {
+      type: "boolean",
+      description: GLOBAL_CONFIRMATION_DESCRIPTION,
+    },
+  },
+  required: ["confirmGlobal"],
+  additionalProperties: false,
+};
+
 const tools = [
   {
     name: "status",
@@ -52,7 +78,19 @@ const tools = [
   {
     name: "enable",
     description:
-      "Enable Premind polling. This enables Premind GitHub polling globally, for every session and project.",
+      "Enable Premind polling. This enables Premind GitHub polling globally, for every session and project. Call it only when the user explicitly asks for the global enable, and pass confirmGlobal: true. To resume only this session, use the session resume tool instead.",
+    inputSchema: globalControlSchema,
+  },
+  {
+    name: "disable",
+    description:
+      "Disable Premind polling. This disables Premind GitHub polling globally, for every session and project. Call it only when the user explicitly asks for the global disable, and pass confirmGlobal: true. To pause, mute, or quiet only this session, use the session pause tool instead.",
+    inputSchema: globalControlSchema,
+  },
+  {
+    name: "pause",
+    description:
+      "Pause Premind reminders for this session only. Subscriptions, watchers, and queued PR updates are kept, and the pause lasts until the session resume tool is called. Use this, not the global disable tool, to pause, mute, or quiet Premind.",
     inputSchema: {
       type: "object",
       properties: {},
@@ -60,9 +98,9 @@ const tools = [
     },
   },
   {
-    name: "disable",
+    name: "resume",
     description:
-      "Disable Premind polling. This disables Premind GitHub polling globally, for every session and project.",
+      "Resume Premind reminders for this session without changing subscriptions. Queued PR updates arrive at the next safe boundary. Use this, not the global enable tool, to undo a session pause.",
     inputSchema: {
       type: "object",
       properties: {},
@@ -190,23 +228,20 @@ export const handleMcpRequest = async (
   }
   if (name === "enable" || name === "disable") {
     if (args.confirmGlobal !== true) {
-      return {
-        ...text(
-          `premind refused to ${name} polling globally: this affects every session and project. Ask the user to confirm the global ${name}, then call again with confirmGlobal: true.`,
-        ),
-        isError: true,
-      };
+      return { ...text(globalControlRefusal(name)), isError: true };
     }
     const result = await ipc("setGlobalDisabled", {
       disabled: name === "disable",
     });
-    return text(
-      `Premind polling is ${result.disabled ? "disabled" : "enabled"} globally, across all sessions and projects.`,
-    );
+    return text(globalControlResult(Boolean(result.disabled)));
   }
 
   const sessionId = getBoundClaudeSessionId(environment);
   if (!sessionId) return bindingError();
+  if (name === "pause" || name === "resume") {
+    await ipc(name === "pause" ? "pauseSession" : "resumeSession", { sessionId });
+    return text(name === "pause" ? SESSION_PAUSED_MESSAGE : SESSION_RESUMED_MESSAGE);
+  }
   if (name === "set_active_checkout") {
     const result = await ipc("activateWorktree", {
       sessionId,

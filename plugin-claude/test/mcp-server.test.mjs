@@ -75,8 +75,8 @@ test("global controls refuse calls without explicit global confirmation", async 
   const listed = await handleMcpRequest({ method: "tools/list" });
   for (const name of ["enable", "disable"]) {
     const definition = listed.tools.find((tool) => tool.name === name);
-    assert.match(definition.description, /ALL sessions and projects/);
-    assert.match(definition.description, /explicitly requested/);
+    assert.match(definition.description, /globally, for every session and project/);
+    assert.match(definition.description, /only when the user explicitly asks/);
     assert.deepEqual(definition.inputSchema.required, ["confirmGlobal"]);
     for (const args of [{}, { confirmGlobal: false }]) {
       const result = await handleMcpRequest(
@@ -88,6 +88,38 @@ test("global controls refuse calls without explicit global confirmation", async 
       assert.match(result.content[0].text, /refused to (enable|disable) polling globally.*confirmGlobal: true/);
     }
   }
+});
+
+test("pause and resume act only on the bound Claude session", async () => {
+  const calls = [];
+  const ipc = async (type, payload) => {
+    calls.push({ type, payload });
+    return {};
+  };
+  const environment = { CLAUDE_CODE_SESSION_ID: "claude-session" };
+  const paused = await handleMcpRequest(
+    { method: "tools/call", params: { name: "pause", arguments: {} } },
+    ipc,
+    environment,
+  );
+  const resumed = await handleMcpRequest(
+    { method: "tools/call", params: { name: "resume", arguments: {} } },
+    ipc,
+    environment,
+  );
+  assert.deepEqual(calls, [
+    { type: "pauseSession", payload: { sessionId: "claude-session" } },
+    { type: "resumeSession", payload: { sessionId: "claude-session" } },
+  ]);
+  assert.match(paused.content[0].text, /this session only/);
+  assert.match(resumed.content[0].text, /Subscriptions are unchanged/);
+
+  const unbound = await handleMcpRequest(
+    { method: "tools/call", params: { name: "pause", arguments: {} } },
+    async () => assert.fail("unbound pause reached the daemon"),
+    {},
+  );
+  assert.match(unbound.content[0].text, /cannot verify this Claude session/);
 });
 
 test("global controls are model-callable and describe their daemon-wide effect", async () => {

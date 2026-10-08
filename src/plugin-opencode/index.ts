@@ -3,6 +3,8 @@ import { PREMIND_CLIENT_HEARTBEAT_MS, PREMIND_IDLE_DELIVERY_THRESHOLD_MS } from 
 import type { PremindConfig } from "../shared/schema.ts"
 import { PREMIND_VERSION_LABEL } from "../shared/version.ts"
 import { commandCapabilities } from "../shared/command-capabilities.ts"
+import { GLOBAL_CONFIRMATION_DESCRIPTION, globalControlRefusal } from "../shared/global-control.ts"
+import { SESSION_PAUSED_DELIVERY_MESSAGE, SESSION_PAUSED_MESSAGE, SESSION_RESUMED_MESSAGE } from "../shared/session-pause.ts"
 import { ensureUserConfigTemplate, getDefaultUserConfigPath, getLegacyUserConfigPath, loadPremindConfig } from "../shared/config-loader.ts"
 import { PremindDaemonClient } from "../client/daemon-client.ts"
 import { renderPremindStatus } from "./commands.ts"
@@ -17,6 +19,8 @@ const COMMAND_MARKERS = {
   sendNow: "[PREMIND_SEND_NOW]",
   disable: "[PREMIND_DISABLE]",
   enable: "[PREMIND_ENABLE]",
+  pause: "[PREMIND_PAUSE]",
+  resume: "[PREMIND_RESUME]",
 } as const
 
 const ABORT_SENTINEL = "__PREMIND_HANDLED__"
@@ -765,9 +769,42 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
   }
 
 
+  const isSessionPaused = async (sessionID: string) => {
+    const status = await daemon.debugStatus().catch(() => undefined)
+    return status?.sessions?.some(
+      (session: { sessionId: string; status: string }) =>
+        session.sessionId === sessionID && session.status === "paused",
+    ) ?? false
+  }
+
+  const setSessionPaused = async (sessionID: string, paused: boolean) => {
+    ownedSessions.add(sessionID)
+    const updated = await withReattach(sessionID, () =>
+      paused ? daemon.pauseSession(sessionID) : daemon.resumeSession(sessionID),
+    )
+    if (!updated) return `premind ${paused ? "pause" : "resume"} failed for session ${sessionID}`
+    if (paused) {
+      stopToastCountdown(sessionID)
+      cancelDelivery(sessionID)
+    }
+    return paused ? SESSION_PAUSED_MESSAGE : SESSION_RESUMED_MESSAGE
+  }
+
+  const handleSessionPauseCommand = async (
+    sessionID: string,
+    paused: boolean,
+    inputRef?: { agent?: string; model?: { providerID: string; modelID: string } },
+  ) => {
+    await injectResponse(sessionID, await setSessionPaused(sessionID, paused), inputRef)
+  }
+
   const deliverPendingNow = async (sessionID: string) => {
     const pending = await daemon.getPendingReminder(sessionID)
-    if (!pending.batch) return "premind: no pending PR updates to deliver"
+    if (!pending.batch) {
+      return (await isSessionPaused(sessionID))
+        ? SESSION_PAUSED_DELIVERY_MESSAGE
+        : "premind: no pending PR updates to deliver"
+    }
     stopToastCountdown(sessionID)
     cancelDelivery(sessionID)
     await deliverPendingReminder(sessionID)
@@ -866,6 +903,14 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
         template: COMMAND_MARKERS.disable,
         description: "Disable premind globally (stops GitHub polling across all sessions and projects)",
       }
+      configInput.command["premind:pause"] = {
+        template: COMMAND_MARKERS.pause,
+        description: "Pause premind reminders for this session only; subscriptions keep being watched",
+      }
+      configInput.command["premind:resume"] = {
+        template: COMMAND_MARKERS.resume,
+        description: "Resume premind reminders for this session without changing subscriptions",
+      }
       configInput.command["premind-enable"] = {
         template: COMMAND_MARKERS.enable,
         description: "Re-enable premind globally (resumes GitHub polling across all sessions and projects)",
@@ -943,18 +988,42 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
       }),
       premind_deliver: deliverTool,
       premind_send_now: deliverTool,
+      premind_pause: tool({
+        description: commandCapabilities.pause.toolGuidance,
+        args: {},
+        async execute(_args, ctx) {
+          const sessionId = ctx.sessionID ?? lastPrimarySessionId
+          if (!sessionId) return "premind pause failed: no active session"
+          return setSessionPaused(sessionId, true)
+        },
+      }),
+      premind_resume: tool({
+        description: commandCapabilities.resume.toolGuidance,
+        args: {},
+        async execute(_args, ctx) {
+          const sessionId = ctx.sessionID ?? lastPrimarySessionId
+          if (!sessionId) return "premind resume failed: no active session"
+          return setSessionPaused(sessionId, false)
+        },
+      }),
       premind_disable: tool({
         description: `Disable premind polling. ${commandCapabilities.disable.toolGuidance} The daemon stays up so sessions keep registering; useful for avoiding GitHub API rate limits.`,
-        args: {},
-        async execute() {
+        args: {
+          confirmGlobal: tool.schema.boolean().describe(GLOBAL_CONFIRMATION_DESCRIPTION),
+        },
+        async execute(args) {
+          if (args.confirmGlobal !== true) return globalControlRefusal("disable")
           await daemon.setGlobalDisabled(true)
           return "premind disabled globally. GitHub polling is stopped across all sessions and projects."
         },
       }),
       premind_enable: tool({
         description: `Re-enable premind polling after premind_disable. ${commandCapabilities.enable.toolGuidance} Polling resumes on the next scheduler tick.`,
-        args: {},
-        async execute() {
+        args: {
+          confirmGlobal: tool.schema.boolean().describe(GLOBAL_CONFIRMATION_DESCRIPTION),
+        },
+        async execute(args) {
+          if (args.confirmGlobal !== true) return globalControlRefusal("enable")
           await daemon.setGlobalDisabled(false)
           return "premind re-enabled globally. GitHub polling will resume on the next scheduler tick across all sessions and projects."
         },
@@ -1082,6 +1151,12 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
       }
       if (outputText.includes(COMMAND_MARKERS.enable)) {
         await handleEnableCommand(input.sessionID, inputRef)
+      }
+      if (outputText.includes(COMMAND_MARKERS.pause)) {
+        await handleSessionPauseCommand(input.sessionID, true, inputRef)
+      }
+      if (outputText.includes(COMMAND_MARKERS.resume)) {
+        await handleSessionPauseCommand(input.sessionID, false, inputRef)
       }
     },
   }
