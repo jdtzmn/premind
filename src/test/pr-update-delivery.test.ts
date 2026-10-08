@@ -14,6 +14,7 @@
 import assert from "node:assert/strict"
 import { describe, test } from "node:test"
 import { ADAPTER_DRIVERS } from "./harness/adapters/index.ts"
+import { premindHarnesses } from "../shared/command-capabilities.ts"
 import { createRouterDaemonClient } from "./harness/router-daemon-client.ts"
 import {
 	createPrUpdateScenario,
@@ -32,6 +33,13 @@ const HOST_CONTRACT: Record<string, (capture: DeliveryCapture) => void> = {
 			capture.text,
 			/cannot wake an otherwise inactive session/i,
 			"claude documents its next-boundary delivery limitation",
+		)
+	},
+	codex: (capture) => {
+		assert.match(
+			String(capture.meta?.hookEventName),
+			/^(SessionStart|UserPromptSubmit|Stop)$/,
+			"codex delivers only at its lifecycle hook boundaries",
 		)
 	},
 	opencode: () => {
@@ -166,8 +174,8 @@ describe("PR update fan-out", () => {
 		// Guards against a new production adapter shipping without fan-out proof.
 		assert.deepEqual(
 			ADAPTER_DRIVERS.map((driver) => driver.key).sort(),
-			["claude", "opencode", "pi"],
-			"update the driver registry when an adapter is added or removed",
+			[...premindHarnesses].sort(),
+			"every supported harness in command-capabilities.ts needs an adapter driver",
 		)
 	})
 })
@@ -245,19 +253,38 @@ describe("late-arriving update liveness", () => {
 
 				await idleHandle.afterUpdate()
 
-				assert.equal(
-					idleHandle.captured.length,
-					1,
-					`${driver.key} should inject one host message for all pending batches`,
-				)
-				const [capture] = idleHandle.captured
-				assert.equal(capture.sessionId, session.sessionId)
-				assert.ok(capture.text.includes(owed.reminderText))
-				assert.ok(
-					capture.text.includes(bundledBatch.reminderText),
-					`${driver.key} delivered pending batches as separate host messages`,
-				)
-				HOST_CONTRACT[driver.key]?.(capture)
+				const separateDelivery = driver.scenarioExceptions?.bundlesPendingBatches
+				if (separateDelivery) {
+					// Declared deferred gap: this host hands off one batch per boundary.
+					await idleHandle.afterUpdate()
+					assert.equal(
+						idleHandle.captured.length,
+						2,
+						`${driver.key} should deliver each pending batch at successive boundaries`,
+					)
+					const delivered = idleHandle.captured.map((capture) => capture.text).join("\n")
+					assert.ok(delivered.includes(owed.reminderText))
+					assert.ok(delivered.includes(bundledBatch.reminderText))
+					for (const capture of idleHandle.captured) {
+						assert.equal(capture.sessionId, session.sessionId)
+						HOST_CONTRACT[driver.key]?.(capture)
+					}
+				} else {
+					assert.equal(
+						idleHandle.captured.length,
+						1,
+						`${driver.key} should inject one host message for all pending batches`,
+					)
+					const [capture] = idleHandle.captured
+					assert.equal(capture.sessionId, session.sessionId)
+					assert.ok(capture.text.includes(owed.reminderText))
+					assert.ok(
+						capture.text.includes(bundledBatch.reminderText),
+						`${driver.key} delivered pending batches as separate host messages`,
+					)
+					HOST_CONTRACT[driver.key]?.(capture)
+				}
+				const deliveredCount = idleHandle.captured.length
 				assert.equal(
 					scenario.store.getReminderBatchRecord(owed.batchId),
 					null,
@@ -281,7 +308,11 @@ describe("late-arriving update liveness", () => {
 				)
 
 				await idleHandle.idleAgain()
-				assert.equal(idleHandle.captured.length, 1, `${driver.key} re-delivered the late reminder`)
+				assert.equal(
+					idleHandle.captured.length,
+					deliveredCount,
+					`${driver.key} re-delivered the late reminder`,
+				)
 			} catch (error) {
 				console.error(
 					`[late-arrival harness:${driver.key}] scenario state at failure:\n`,

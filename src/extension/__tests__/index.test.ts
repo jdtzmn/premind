@@ -1,9 +1,15 @@
 import assert from "node:assert/strict";
+import {
+	SESSION_PAUSED_DELIVERY_MESSAGE,
+	SESSION_PAUSED_MESSAGE,
+	SESSION_RESUMED_MESSAGE,
+} from "../../shared/session-pause.ts";
 import { describe, test } from "node:test";
 import {
 	createPremindPiExtension,
 	renderPremindPiStatus,
 	renderPremindReminderText,
+	STATUS_POLL_STALE_MS,
 } from "../index.ts";
 import type {
 	DebugStatusResponse,
@@ -227,8 +233,8 @@ const createClient = (
 			}) => {
 				operations.push(`ensureSessionControl:${sessionId}:${paused}`);
 			},
-			unregisterSession: async (sessionId: string) => {
-				operations.push(`unregisterSession:${sessionId}`);
+			releaseSessionOwner: async (sessionId: string) => {
+				operations.push(`releaseSessionOwner:${sessionId}`);
 			},
 			pauseSession: async (sessionId: string) => {
 				operations.push(`pauseSession:${sessionId}`);
@@ -341,12 +347,12 @@ describe("premind Pi extension", () => {
 		assert.equal(mock.commands.has("premind:activate-worktree"), false);
 		assert.ok(mock.commands.has("premind:subscribe"));
 		assert.ok(mock.commands.has("premind:unsubscribe"));
-		assert.equal(mock.commands.has("premind:pause"), false);
-		assert.equal(mock.commands.has("premind:resume"), false);
+		assert.ok(mock.commands.has("premind:pause"));
+		assert.ok(mock.commands.has("premind:resume"));
 		assert.ok(mock.commands.has("premind:deliver"));
 		assert.ok(mock.commands.has("premind:flush"));
-		assert.equal(mock.tools.has("premind_pause"), false);
-		assert.equal(mock.tools.has("premind_resume"), false);
+		assert.ok(mock.tools.has("premind_pause"));
+		assert.ok(mock.tools.has("premind_resume"));
 		assert.ok(mock.tools.has("premind_deliver"));
 		assert.ok(mock.tools.has("premind_doctor"));
 		assert.ok(mock.tools.has("premind_enable"));
@@ -360,7 +366,7 @@ describe("premind Pi extension", () => {
 		assert.ok(activeCheckoutTool);
 		assert.equal(
 			activeCheckoutTool.description,
-			"Set the active Git checkout for the current premind session.",
+			"Set the active Git checkout for the current premind session. Call this at the start of any PR work, including when already in the startup checkout, and again after switching branches or worktrees before creating or following a PR.",
 		);
 		assert.deepEqual(activeCheckoutTool.promptGuidelines, [
 			"Call premind_set_active_checkout at the start of any PR work, including when already in the startup checkout, and again after switching branches before creating or following a PR.",
@@ -553,7 +559,7 @@ describe("premind Pi extension", () => {
 		assert.deepEqual(statuses.at(-1), { key: "premind", value: " 4 pending" });
 	});
 
-	test("session_shutdown unregisters the Pi session and releases the client", async () => {
+	test("session_shutdown keeps the Pi session (dormant) and releases the client", async () => {
 		const mock = createMockPi();
 		const client = createClient();
 		const { ctx, statuses } = createEventContext();
@@ -568,13 +574,18 @@ describe("premind Pi extension", () => {
 		assert.ok(start);
 		assert.ok(shutdown);
 		await start({}, ctx);
-		await shutdown({}, ctx);
+		await shutdown({ reason: "reload" }, ctx);
 
+		assert.equal(
+			client.operations.some((operation) => operation.startsWith("unregisterSession")),
+			false,
+			"a reload must not delete the session and cascade its subscriptions away",
+		);
 		assert.deepEqual(client.operations, [
 			"registerClient:/tmp/project:pi-extension",
 			"registerSession:/tmp/session.jsonl:owner/repo:feature/pi",
 			"activateWorktree:/tmp/session.jsonl:/tmp/project",
-			"unregisterSession:/tmp/session.jsonl",
+			"releaseSessionOwner:/tmp/session.jsonl",
 			"release",
 		]);
 		assert.deepEqual(statuses.at(-1), { key: "premind", value: undefined });
@@ -698,6 +709,47 @@ describe("premind Pi extension", () => {
 				"ackReminderBundle:/tmp/session.jsonl:confirmed",
 			),
 		);
+		await shutdown({}, ctx);
+	});
+
+	test("status polling recovers after a daemon request that never settles", async (t) => {
+		t.mock.timers.enable({ apis: ["setInterval", "Date"] });
+		const mock = createMockPi();
+		const client = createClient({ pendingBatch: reminderBatch });
+		const { ctx } = createEventContext();
+		let statusCalls = 0;
+		client.client.debugStatus = async () => {
+			statusCalls++;
+			// The first poll's request is lost with its daemon and never settles.
+			if (statusCalls === 2) return new Promise<DebugStatusResponse>(() => {});
+			return status;
+		};
+		createPremindPiExtension({
+			createDaemonClient: () => client.client,
+			config: { statusPollIntervalMs: 5_000 },
+			detectGit: async () => ({ repo: "owner/repo", branch: "feature/pi" }),
+		})(mock.pi as never);
+
+		const start = mock.events.get("session_start");
+		const shutdown = mock.events.get("session_shutdown");
+		assert.ok(start);
+		assert.ok(shutdown);
+		await start({}, ctx);
+
+		t.mock.timers.tick(5_000);
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		assert.equal(statusCalls, 2);
+
+		// While the stuck poll is still recent, later ticks must not overlap it.
+		t.mock.timers.tick(5_000);
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		assert.equal(statusCalls, 2);
+		assert.equal(mock.sentMessages.length, 0);
+
+		// Once the stuck poll is stale, polling resumes and delivers.
+		t.mock.timers.tick(STATUS_POLL_STALE_MS);
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		assert.equal(mock.sentMessages.length, 1);
 		await shutdown({}, ctx);
 	});
 
@@ -957,6 +1009,53 @@ test("Pi interactive status colors Unicode signals without styling tool text", a
 		assert.match(notifications[0]?.message ?? "", /host: pi/);
 		assert.match(notifications[0]?.message ?? "", /daemon: reachable \(protocol 1\)/);
 		assert.match(notifications[0]?.message ?? "", /follow-up messages can wake an idle Pi session/);
+		assert.match(notifications[0]?.message ?? "", /daemon lock: /);
+		assert.match(notifications[0]?.message ?? "", /idle sessions with pending reminders: /);
+	});
+
+	test("/premind:doctor flags idle sessions holding reminders and a stuck idle poll", async (t) => {
+		t.mock.timers.enable({ apis: ["setInterval", "Date"] });
+		const mock = createMockPi();
+		const client = createClient();
+		let statusCalls = 0;
+		const stalledStatus: DebugStatusResponse = {
+			...status,
+			sessions: status.sessions.map((session) => ({
+				...session,
+				busyState: "idle" as const,
+				pendingReminderCount: 48,
+			})),
+		};
+		client.client.debugStatus = async () => {
+			statusCalls++;
+			if (statusCalls === 2) return new Promise<DebugStatusResponse>(() => {});
+			return stalledStatus;
+		};
+		const notifications: Array<{ message: string; level: string }> = [];
+		createPremindPiExtension({
+			createDaemonClient: () => client.client,
+			config: { statusPollIntervalMs: 5_000 },
+			detectGit: async () => ({ repo: "owner/repo", branch: "feature/pi" }),
+		})(mock.pi as never);
+		const start = mock.events.get("session_start");
+		const shutdown = mock.events.get("session_shutdown");
+		assert.ok(start);
+		assert.ok(shutdown);
+		const { ctx } = createEventContext();
+		await start({}, ctx);
+		t.mock.timers.tick(5_000);
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		// Move the clock past the stale threshold without firing the next poll.
+		t.mock.timers.setTime(Date.now() + STATUS_POLL_STALE_MS);
+
+		const command = mock.commands.get("premind:doctor");
+		assert.ok(command);
+		await command.handler("", createCommandContext(notifications));
+
+		const message = notifications[0]?.message ?? "";
+		assert.match(message, /idle delivery poll: stuck for \d+s/);
+		assert.match(message, /idle sessions with pending reminders: .+\(48\)/);
+		await shutdown({}, ctx);
 	});
 
 	test("global polling commands and tools target the daemon-wide switch", async () => {
@@ -977,10 +1076,30 @@ test("Pi interactive status colors Unicode signals without styling tool text", a
 		assert.ok(disableTool);
 		assert.ok(enableTool);
 
+		for (const tool of [disableTool, enableTool]) {
+			assert.match(tool.description ?? "", /globally, for every session and project/);
+			assert.match(tool.description ?? "", /only when the user explicitly asks/);
+			for (const params of [{}, { confirmGlobal: false }]) {
+				await assert.rejects(
+					tool.execute("tool-unconfirmed", params, undefined, undefined, {}),
+					/refused to (disable|enable) polling globally.*confirmGlobal: true/,
+				);
+			}
+		}
+		assert.match(disableTool.description ?? "", /use the session pause tool instead/);
+		assert.match(enableTool.description ?? "", /use the session resume tool instead/);
+		assert.deepEqual(client.operations, []);
+
 		await disable.handler("", createCommandContext(notifications));
 		await enable.handler("", createCommandContext(notifications));
-		await disableTool.execute("tool-1", {}, undefined, undefined, {});
-		await enableTool.execute("tool-2", {}, undefined, undefined, {});
+		const disabled = await disableTool.execute(
+			"tool-1",
+			{ confirmGlobal: true },
+			undefined,
+			undefined,
+			{},
+		);
+		await enableTool.execute("tool-2", { confirmGlobal: true }, undefined, undefined, {});
 
 		assert.deepEqual(client.operations, [
 			"setGlobalDisabled:true",
@@ -991,9 +1110,13 @@ test("Pi interactive status colors Unicode signals without styling tool text", a
 		assert.deepEqual(
 			notifications.map(({ message }) => message),
 			[
-				"premind polling is disabled globally.",
-				"premind polling is enabled globally.",
+				"premind polling is disabled globally, across all sessions and projects.",
+				"premind polling is enabled globally, across all sessions and projects.",
 			],
+		);
+		assert.equal(
+			disabled.content[0]?.text,
+			"premind polling is disabled globally, across all sessions and projects.",
 		);
 	});
 
@@ -1086,6 +1209,81 @@ test("Pi interactive status colors Unicode signals without styling tool text", a
 				"premind subscribed to owner/repo#42.",
 				"premind unsubscribed from owner/repo#42.",
 			],
+		);
+	});
+
+	test("pause and resume control only the current session's delivery", async () => {
+		const mock = createMockPi();
+		const client = createClient();
+		const notifications: Array<{ message: string; level: string }> = [];
+		createPremindPiExtension({
+			createDaemonClient: () => client.client,
+			config: { statusPollIntervalMs: 0 },
+			detectGit: async () => ({ repo: "owner/repo", branch: "feature/pi" }),
+		})(mock.pi as never);
+
+		const pause = mock.commands.get("premind:pause");
+		const resume = mock.commands.get("premind:resume");
+		const pauseTool = mock.tools.get("premind_pause");
+		const resumeTool = mock.tools.get("premind_resume");
+		assert.ok(pause);
+		assert.ok(resume);
+		assert.ok(pauseTool);
+		assert.ok(resumeTool);
+		assert.match(pauseTool.description ?? "", /not the global disable tool/);
+		assert.match(resumeTool.description ?? "", /not the global enable tool/);
+
+		const ctx = createCommandContext(notifications);
+		await pause.handler("", ctx);
+		await pause.handler("", ctx);
+		await resume.handler("", ctx);
+		const paused = await pauseTool.execute("tool-1", {}, undefined, undefined, ctx);
+		const resumed = await resumeTool.execute("tool-2", {}, undefined, undefined, ctx);
+
+		assert.deepEqual(client.operations, [
+			"registerClient:/tmp/project:pi-extension",
+			"registerSession:/tmp/session.jsonl:owner/repo:feature/pi",
+			"pauseSession:/tmp/session.jsonl",
+			"pauseSession:/tmp/session.jsonl",
+			"resumeSession:/tmp/session.jsonl",
+			"pauseSession:/tmp/session.jsonl",
+			"resumeSession:/tmp/session.jsonl",
+		]);
+		const pausedMessage = SESSION_PAUSED_MESSAGE;
+		const resumedMessage = SESSION_RESUMED_MESSAGE;
+		assert.deepEqual(
+			notifications.map(({ message }) => message),
+			[pausedMessage, pausedMessage, resumedMessage],
+		);
+		assert.equal(paused.content[0]?.text, pausedMessage);
+		assert.equal(resumed.content[0]?.text, resumedMessage);
+	});
+
+	test("/premind:deliver explains that a paused session withholds reminders", async () => {
+		const mock = createMockPi();
+		const client = createClient({
+			statusResult: {
+				...status,
+				sessions: [
+					{ ...status.sessions[0], sessionId: "/tmp/session.jsonl", status: "paused" },
+				],
+			},
+		});
+		const notifications: Array<{ message: string; level: string }> = [];
+		createPremindPiExtension({
+			createDaemonClient: () => client.client,
+			config: { statusPollIntervalMs: 0 },
+			detectGit: async () => ({ repo: "owner/repo", branch: "feature/pi" }),
+		})(mock.pi as never);
+
+		const ctx = createCommandContext(notifications);
+		await mock.commands.get("premind:pause")?.handler("", ctx);
+		await mock.commands.get("premind:deliver")?.handler("", ctx);
+
+		assert.deepEqual(mock.sentMessages, []);
+		assert.equal(
+			notifications.at(-1)?.message,
+			SESSION_PAUSED_DELIVERY_MESSAGE,
 		);
 	});
 

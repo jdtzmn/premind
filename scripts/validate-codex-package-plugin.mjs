@@ -84,6 +84,8 @@ try {
 		"plugins/premind/hooks/hooks.json",
 		"plugins/premind/mcp.json",
 		"plugins/premind/skills/premind/SKILL.md",
+		"plugins/premind/skills/premind/references/subscriptions.md",
+		"plugins/premind/skills/premind/references/reminders.md",
 		"plugins/premind/generated/premind-daemon.mjs",
 		"plugins/premind/generated/premind-hook.mjs",
 		"plugins/premind/generated/premind-mcp.mjs",
@@ -91,9 +93,17 @@ try {
 		"plugins/codex/premind/.mcp.json",
 		"plugins/codex/premind/hooks/hooks.json",
 		"plugins/codex/premind/skills/premind/SKILL.md",
+		"plugins/codex/premind/skills/premind/references/subscriptions.md",
+		"plugins/codex/premind/skills/premind/references/reminders.md",
 		"plugins/codex/premind/generated/premind-daemon.mjs",
 		"plugins/codex/premind/generated/premind-hook.mjs",
 		"plugins/codex/premind/generated/premind-mcp.mjs",
+		"skills/premind/SKILL.md",
+		"skills/premind/references/subscriptions.md",
+		"skills/premind/references/reminders.md",
+		"plugin-claude/skills/premind/SKILL.md",
+		"plugin-claude/skills/premind/references/subscriptions.md",
+		"plugin-claude/skills/premind/references/reminders.md",
 	]) {
 		assert.ok(files.has(file), `npm package is missing ${file}`);
 	}

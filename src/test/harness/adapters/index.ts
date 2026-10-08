@@ -9,11 +9,12 @@
  */
 
 import { claudeDriver } from "./claude.ts"
+import { codexDriver } from "./codex.ts"
 import { opencodeDriver } from "./opencode.ts"
 import { piDriver } from "./pi.ts"
 import type { AdapterDriver } from "./types.ts"
 
-export const ADAPTER_DRIVERS: AdapterDriver[] = [claudeDriver, opencodeDriver, piDriver]
+export const ADAPTER_DRIVERS: AdapterDriver[] = [claudeDriver, codexDriver, opencodeDriver, piDriver]
 
 export type {
 	AdapterDriver,

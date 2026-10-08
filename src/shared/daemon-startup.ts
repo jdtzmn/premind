@@ -128,6 +128,128 @@ export const releaseDaemonStartLock = (lock: DaemonStartLock) => {
   }
 };
 
+// The daemon lock is held by one daemon for its entire lifetime, from before
+// startup work until shutdown. Unlike the short-lived start lock, it proves a
+// daemon exists even while that daemon is too busy starting to answer probes,
+// which is what stops launchers and new daemons from piling on.
+const DAEMON_LOCK_FILE = "daemon.lock";
+// A live owner this young is treated as starting, even if it is unreachable.
+export const DAEMON_STARTUP_GRACE_MS = 60_000;
+const DAEMON_LOCK_SERVING_PROBE_MS = 1_000;
+
+export type DaemonLock = DaemonStartLock;
+export type DaemonLockOwner = StartLockOwner;
+
+const daemonLockPath = (stateDir: string) => path.join(stateDir, DAEMON_LOCK_FILE);
+
+export const readDaemonLockOwner = (
+  stateDir = PREMIND_STATE_DIR,
+): DaemonLockOwner | undefined => readLockOwner(daemonLockPath(stateDir));
+
+/**
+ * True while a live process holds the daemon lock and is still inside its
+ * startup grace period. Launchers wait for such a daemon instead of spawning.
+ */
+export const isDaemonStarting = (
+  stateDir = PREMIND_STATE_DIR,
+  now = Date.now(),
+  startupGraceMs = DAEMON_STARTUP_GRACE_MS,
+) => {
+  const owner = readDaemonLockOwner(stateDir);
+  return (
+    owner !== undefined &&
+    isProcessAlive(owner.pid) &&
+    now - owner.createdAt < startupGraceMs
+  );
+};
+
+/** True when `lock` is still the daemon lock on disk. */
+export const holdsDaemonLock = (lock: DaemonLock) =>
+  readLockOwner(lock.path)?.token === lock.token;
+
+/**
+ * Acquires the daemon lock, or returns undefined when another daemon owns it.
+ * A dead owner is reclaimed. A live owner past the startup grace period is
+ * reclaimed only when nothing answers on the socket, because its PID may have
+ * been reused or the daemon may be wedged. A wedged daemon notices the
+ * takeover through `holdsDaemonLock` and exits.
+ */
+export const acquireDaemonLock = async ({
+  stateDir = PREMIND_STATE_DIR,
+  socketPath = PREMIND_SOCKET_PATH,
+  startupGraceMs = DAEMON_STARTUP_GRACE_MS,
+  isServing = () => isSocketReachable(socketPath, DAEMON_LOCK_SERVING_PROBE_MS),
+}: {
+  stateDir?: string;
+  socketPath?: string;
+  startupGraceMs?: number;
+  isServing?: () => Promise<boolean>;
+} = {}): Promise<DaemonLock | undefined> => {
+  fs.mkdirSync(stateDir, { recursive: true });
+  const lockPath = daemonLockPath(stateDir);
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const fd = fs.openSync(lockPath, "wx");
+      const owner = {
+        pid: process.pid,
+        createdAt: Date.now(),
+        token: randomUUID(),
+      };
+      fs.writeFileSync(fd, `${owner.pid}:${owner.createdAt}:${owner.token}`);
+      return { ...owner, fd, path: lockPath };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
+
+    const owner = readLockOwner(lockPath);
+    if (owner === undefined) {
+      // Another daemon may be between creating and writing the lock.
+      if (!lockIsStale(lockPath, DEFAULT_STALE_LOCK_MS)) return undefined;
+    } else if (isProcessAlive(owner.pid)) {
+      if (Date.now() - owner.createdAt < startupGraceMs) return undefined;
+      if (await isServing()) return undefined;
+    }
+
+    // Only remove the lock we judged stale, never one that replaced it since.
+    if (readLockOwner(lockPath)?.token !== owner?.token) return undefined;
+    try {
+      fs.unlinkSync(lockPath);
+    } catch (unlinkError) {
+      if ((unlinkError as NodeJS.ErrnoException).code !== "ENOENT")
+        return undefined;
+    }
+  }
+
+  return undefined;
+};
+
+export const releaseDaemonLock = (lock: DaemonLock) => releaseDaemonStartLock(lock);
+
+export type DaemonLockStatus = {
+  pid: number;
+  alive: boolean;
+  heldSince: string;
+} | null;
+
+/** Who holds the daemon lock, for doctor output. */
+export const daemonLockStatus = (
+  stateDir = PREMIND_STATE_DIR,
+): DaemonLockStatus => {
+  const owner = readDaemonLockOwner(stateDir);
+  if (!owner) return null;
+  return {
+    pid: owner.pid,
+    alive: isProcessAlive(owner.pid),
+    heldSince: new Date(owner.createdAt).toISOString(),
+  };
+};
+
+export const formatDaemonLockStatus = (status: DaemonLockStatus) =>
+  status === null
+    ? "not held (no daemon running, or one predating the daemon lock)"
+    : `held by pid ${status.pid}${status.alive ? "" : " (process gone)"} since ${status.heldSince}`;
+
 export const isSocketReachable = (
   socketPath = PREMIND_SOCKET_PATH,
   timeoutMs = DEFAULT_PROBE_TIMEOUT_MS,

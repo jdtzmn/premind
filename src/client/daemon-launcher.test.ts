@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
@@ -8,6 +8,7 @@ import { afterEach, test } from "node:test";
 import {
   CODEX_REQUIRED_DAEMON_OPERATIONS,
   inspectDaemon,
+  readDaemonLockOwner,
 } from "../shared/daemon-startup.ts";
 import {
   createDaemonLauncher,
@@ -208,4 +209,48 @@ process.stdout.write(JSON.stringify(diagnostics.find((entry) => entry.phase === 
     (await inspectDaemon(socketPath, CODEX_REQUIRED_DAEMON_OPERATIONS)).status,
     "compatible",
   );
+});
+
+test("concurrent daemon starts leave exactly one daemon running", async () => {
+  const dir = createTempDir();
+  const daemonEntry = path.join(dir, "premind-daemon.mjs");
+  fs.copyFileSync(
+    path.resolve("plugins", "premind", "generated", "premind-daemon.mjs"),
+    daemonEntry,
+  );
+  const socketPath = path.join(dir, "premind.sock");
+  const stateDir = path.join(dir, "state");
+  const env = {
+    ...process.env,
+    NODE_PATH: "",
+    PREMIND_SOCKET_PATH: socketPath,
+    PREMIND_STATE_DIR: stateDir,
+  };
+
+  // Several hosts noticing a missing daemon at once is how the start storm began.
+  const children = Array.from({ length: 5 }, () =>
+    spawn(process.execPath, [daemonEntry], { cwd: dir, env, stdio: "ignore" }),
+  );
+  const exited = new Set<number>();
+  for (const child of children) {
+    assert.ok(child.pid);
+    childPids.push(child.pid);
+    child.once("exit", () => exited.add(child.pid!));
+  }
+
+  const deadline = Date.now() + 10_000;
+  while (
+    Date.now() < deadline &&
+    (await inspectDaemon(socketPath)).status !== "compatible"
+  ) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  assert.equal((await inspectDaemon(socketPath)).status, "compatible");
+  while (Date.now() < deadline && exited.size < children.length - 1) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+
+  const running = children.filter((child) => !exited.has(child.pid!));
+  assert.equal(running.length, 1);
+  assert.equal(readDaemonLockOwner(stateDir)?.pid, running[0].pid);
 });

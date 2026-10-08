@@ -2,6 +2,9 @@ import { tool, type Plugin } from "@opencode-ai/plugin"
 import { PREMIND_CLIENT_HEARTBEAT_MS, PREMIND_IDLE_DELIVERY_THRESHOLD_MS } from "../shared/constants.ts"
 import type { PremindConfig } from "../shared/schema.ts"
 import { PREMIND_VERSION_LABEL } from "../shared/version.ts"
+import { commandCapabilities } from "../shared/command-capabilities.ts"
+import { GLOBAL_CONFIRMATION_DESCRIPTION, globalControlRefusal } from "../shared/global-control.ts"
+import { SESSION_PAUSED_DELIVERY_MESSAGE, SESSION_PAUSED_MESSAGE, SESSION_RESUMED_MESSAGE } from "../shared/session-pause.ts"
 import { ensureUserConfigTemplate, getDefaultUserConfigPath, getLegacyUserConfigPath, loadPremindConfig } from "../shared/config-loader.ts"
 import { PremindDaemonClient } from "../client/daemon-client.ts"
 import { renderPremindStatus } from "./commands.ts"
@@ -9,6 +12,7 @@ import { renderCurrentStatus } from "../shared/status-view.ts";
 import { getPluginRuntimeStatePath, readPluginInstances, readPluginRuntimeState, registerPluginInstance, writePluginRuntimeState } from "./debug-state.ts"
 import { detectGitContext } from "../client/git-context.ts"
 import { ensureDaemonRunning } from "./daemon-launcher.ts"
+import { daemonLockStatus, formatDaemonLockStatus } from "../shared/daemon-startup.ts"
 
 const COMMAND_MARKERS = {
   status: "[PREMIND_STATUS]",
@@ -17,6 +21,8 @@ const COMMAND_MARKERS = {
   sendNow: "[PREMIND_SEND_NOW]",
   disable: "[PREMIND_DISABLE]",
   enable: "[PREMIND_ENABLE]",
+  pause: "[PREMIND_PAUSE]",
+  resume: "[PREMIND_RESUME]",
 } as const
 
 const ABORT_SENTINEL = "__PREMIND_HANDLED__"
@@ -769,9 +775,42 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
     await injectResponse(sessionID, renderPremindStatus(await daemon.debugStatus(), Date.now(), PREMIND_VERSION_LABEL, sessionID), inputRef)
   }
 
+  const isSessionPaused = async (sessionID: string) => {
+    const status = await daemon.debugStatus().catch(() => undefined)
+    return status?.sessions?.some(
+      (session: { sessionId: string; status: string }) =>
+        session.sessionId === sessionID && session.status === "paused",
+    ) ?? false
+  }
+
+  const setSessionPaused = async (sessionID: string, paused: boolean) => {
+    ownedSessions.add(sessionID)
+    const updated = await withReattach(sessionID, () =>
+      paused ? daemon.pauseSession(sessionID) : daemon.resumeSession(sessionID),
+    )
+    if (!updated) return `premind ${paused ? "pause" : "resume"} failed for session ${sessionID}`
+    if (paused) {
+      stopToastCountdown(sessionID)
+      cancelDelivery(sessionID)
+    }
+    return paused ? SESSION_PAUSED_MESSAGE : SESSION_RESUMED_MESSAGE
+  }
+
+  const handleSessionPauseCommand = async (
+    sessionID: string,
+    paused: boolean,
+    inputRef?: { agent?: string; model?: { providerID: string; modelID: string } },
+  ) => {
+    await injectResponse(sessionID, await setSessionPaused(sessionID, paused), inputRef)
+  }
+
   const deliverPendingNow = async (sessionID: string) => {
     const pending = await daemon.getPendingReminder(sessionID)
-    if (!pending.batch) return "premind: no pending PR updates to deliver"
+    if (!pending.batch) {
+      return (await isSessionPaused(sessionID))
+        ? SESSION_PAUSED_DELIVERY_MESSAGE
+        : "premind: no pending PR updates to deliver"
+    }
     stopToastCountdown(sessionID)
     cancelDelivery(sessionID)
     await deliverPendingReminder(sessionID)
@@ -795,7 +834,7 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
     await daemon.setGlobalDisabled(false)
     await injectResponse(
       sessionID,
-      "premind re-enabled globally. GitHub polling will resume on the next scheduler tick.",
+      "premind re-enabled globally. GitHub polling will resume on the next scheduler tick across all sessions and projects.",
       inputRef,
     )
   }
@@ -814,6 +853,7 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
       `- client registered: ${state.clientRegistered === true ? "yes" : state.clientRegistered === false ? "no" : "unknown"}`,
       `- commands registered: ${state.commandsRegistered === true ? "yes" : state.commandsRegistered === false ? "no" : "unknown"}`,
       `- idle delivery threshold: ${idleDeliveryThreshold}ms`,
+      `- daemon lock: ${formatDaemonLockStatus(daemonLockStatus())}`,
       `- root: ${state.root ?? "unknown"}`,
       `- last session: ${state.lastSessionId ?? "none"}`,
       `- updated at: ${state.updatedAt ?? "unknown"}`,
@@ -829,7 +869,7 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
   }
 
   const deliverTool = tool({
-    description: "Deliver pending PR updates to the current session immediately, without waiting for the idle countdown",
+    description: `${commandCapabilities.deliver.toolGuidance} Skips the idle countdown.`,
     args: {},
     async execute(_args, ctx) {
       const sessionId = ctx.sessionID ?? lastPrimarySessionId
@@ -873,9 +913,17 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
         template: COMMAND_MARKERS.disable,
         description: "Disable premind globally (stops GitHub polling across all sessions and projects)",
       }
+      configInput.command["premind:pause"] = {
+        template: COMMAND_MARKERS.pause,
+        description: "Pause premind reminders for this session only; subscriptions keep being watched",
+      }
+      configInput.command["premind:resume"] = {
+        template: COMMAND_MARKERS.resume,
+        description: "Resume premind reminders for this session without changing subscriptions",
+      }
       configInput.command["premind-enable"] = {
         template: COMMAND_MARKERS.enable,
-        description: "Re-enable premind globally (resumes GitHub polling)",
+        description: "Re-enable premind globally (resumes GitHub polling across all sessions and projects)",
       }
 
       // Keep the heartbeat alive for the lifetime of the plugin instance.
@@ -891,7 +939,7 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
     // Register tools so the model can also call them.
     tool: {
       premind_status: tool({
-        description: "Show the current session's watched PR links, pending reminders, and premind health",
+        description: `Show the current session's watched PR links, pending reminders, and premind health. ${commandCapabilities.status.toolGuidance}`,
         args: {},
         async execute(_args, ctx) {
           const status = await daemon.debugStatus({ includeSnapshots: true })
@@ -899,14 +947,14 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
         },
       }),
       premind_debug_status: tool({
-        description: "Show the full premind daemon and all-session diagnostic inventory",
+        description: `Show the full premind daemon and all-session diagnostic inventory. ${commandCapabilities["debug-status"].toolGuidance}`,
         args: {},
         async execute(_args, ctx) {
           return renderPremindStatus(await daemon.debugStatus(), Date.now(), PREMIND_VERSION_LABEL, ctx.sessionID)
         },
       }),
       premind_set_active_checkout: tool({
-        description: "Set the active Git checkout for this session. Call premind_set_active_checkout at the start of any PR work, including when already in the startup checkout, and again after switching branches before creating or following a PR.",
+        description: `Set the active Git checkout for this session. ${commandCapabilities["set-active-checkout"].toolGuidance}`,
         args: {
           path: tool.schema.string().min(1).describe("Absolute or project-relative path to the Git checkout"),
         },
@@ -922,7 +970,7 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
         },
       }),
       premind_subscribe: tool({
-        description: "Mandatory PR tracking: Immediately call this tool after creating, opening, discovering, or beginning work on a pull request. Do this before reporting the PR URL or status to the user. Applies after gh pr create, gh stack submit, gh stack link, or any equivalent GitHub operation.",
+        description: commandCapabilities.subscribe.toolGuidance,
         args: {
           prNumber: tool.schema.number().int().positive().describe("Pull request number"),
           repo: tool.schema.string().min(1).optional().describe("Optional owner/repository; defaults to the active worktree repository"),
@@ -939,7 +987,7 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
         },
       }),
       premind_unsubscribe: tool({
-        description: "Unsubscribe the current premind session from a pull request.",
+        description: `Unsubscribe the current premind session from a pull request. ${commandCapabilities.unsubscribe.toolGuidance}`,
         args: {
           prNumber: tool.schema.number().int().positive().describe("Pull request number"),
           repo: tool.schema.string().min(1).optional().describe("Optional owner/repository; defaults to the active worktree repository"),
@@ -957,24 +1005,48 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
       }),
       premind_deliver: deliverTool,
       premind_send_now: deliverTool,
-      premind_disable: tool({
-        description: "Disable premind globally. Stops GitHub polling across all sessions and projects; the daemon stays up so sessions keep registering. Useful for avoiding GitHub API rate limits.",
+      premind_pause: tool({
+        description: commandCapabilities.pause.toolGuidance,
         args: {},
-        async execute() {
+        async execute(_args, ctx) {
+          const sessionId = ctx.sessionID ?? lastPrimarySessionId
+          if (!sessionId) return "premind pause failed: no active session"
+          return setSessionPaused(sessionId, true)
+        },
+      }),
+      premind_resume: tool({
+        description: commandCapabilities.resume.toolGuidance,
+        args: {},
+        async execute(_args, ctx) {
+          const sessionId = ctx.sessionID ?? lastPrimarySessionId
+          if (!sessionId) return "premind resume failed: no active session"
+          return setSessionPaused(sessionId, false)
+        },
+      }),
+      premind_disable: tool({
+        description: `Disable premind polling. ${commandCapabilities.disable.toolGuidance} The daemon stays up so sessions keep registering; useful for avoiding GitHub API rate limits.`,
+        args: {
+          confirmGlobal: tool.schema.boolean().describe(GLOBAL_CONFIRMATION_DESCRIPTION),
+        },
+        async execute(args) {
+          if (args.confirmGlobal !== true) return globalControlRefusal("disable")
           await daemon.setGlobalDisabled(true)
           return "premind disabled globally. GitHub polling is stopped across all sessions and projects."
         },
       }),
       premind_enable: tool({
-        description: "Re-enable premind globally after premind_disable. GitHub polling resumes on the next scheduler tick.",
-        args: {},
-        async execute() {
+        description: `Re-enable premind polling after premind_disable. ${commandCapabilities.enable.toolGuidance} Polling resumes on the next scheduler tick.`,
+        args: {
+          confirmGlobal: tool.schema.boolean().describe(GLOBAL_CONFIRMATION_DESCRIPTION),
+        },
+        async execute(args) {
+          if (args.confirmGlobal !== true) return globalControlRefusal("enable")
           await daemon.setGlobalDisabled(false)
-          return "premind re-enabled globally. GitHub polling will resume on the next scheduler tick."
+          return "premind re-enabled globally. GitHub polling will resume on the next scheduler tick across all sessions and projects."
         },
       }),
       premind_probe: tool({
-        description: "Verify premind plugin initialization and return runtime diagnostics for this instance and all other live instances",
+        description: `${commandCapabilities.doctor.toolGuidance} Verifies plugin initialization and returns runtime diagnostics for this instance and all other live instances.`,
         args: {},
         async execute() {
           return getDoctorText()
@@ -1099,6 +1171,12 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
       }
       if (outputText.includes(COMMAND_MARKERS.enable)) {
         await handleEnableCommand(input.sessionID, inputRef)
+      }
+      if (outputText.includes(COMMAND_MARKERS.pause)) {
+        await handleSessionPauseCommand(input.sessionID, true, inputRef)
+      }
+      if (outputText.includes(COMMAND_MARKERS.resume)) {
+        await handleSessionPauseCommand(input.sessionID, false, inputRef)
       }
     },
   }

@@ -6,9 +6,15 @@ import { afterEach, test } from "node:test";
 import {
   CLAUDE_REQUIRED_DAEMON_OPERATIONS,
   CODEX_REQUIRED_DAEMON_OPERATIONS,
+  acquireDaemonLock,
   acquireDaemonStartLock,
+  daemonLockStatus,
+  formatDaemonLockStatus,
+  holdsDaemonLock,
   inspectDaemon,
+  isDaemonStarting,
   probeDaemon,
+  releaseDaemonLock,
   releaseDaemonStartLock,
 } from "./daemon-startup.ts";
 
@@ -58,6 +64,74 @@ test("daemon start lock is shared and releases only its own acquisition", () => 
   const second = acquireDaemonStartLock({ stateDir });
   assert.ok(second);
   releaseDaemonStartLock(second);
+});
+
+// A PID far above any macOS or Linux default limit is never a live process.
+const DEAD_PID = 2 ** 30;
+
+const writeDaemonLock = (stateDir: string, pid: number, createdAt: number) =>
+  fs.writeFileSync(
+    path.join(stateDir, "daemon.lock"),
+    `${pid}:${createdAt}:previous-owner`,
+  );
+
+test("only one daemon holds the daemon lock while it is alive", async () => {
+  const stateDir = createTempDir();
+  const first = await acquireDaemonLock({ stateDir });
+  assert.ok(first);
+  assert.equal(isDaemonStarting(stateDir), true);
+  // A second daemon must lose even though the first is not serving yet.
+  assert.equal(
+    await acquireDaemonLock({ stateDir, isServing: async () => false }),
+    undefined,
+  );
+
+  releaseDaemonLock(first);
+  assert.equal(isDaemonStarting(stateDir), false);
+  const second = await acquireDaemonLock({ stateDir });
+  assert.ok(second);
+  releaseDaemonLock(second);
+});
+
+test("reclaims the daemon lock from a dead owner", async () => {
+  const stateDir = createTempDir();
+  writeDaemonLock(stateDir, DEAD_PID, Date.now());
+  assert.equal(isDaemonStarting(stateDir), false);
+
+  const lock = await acquireDaemonLock({ stateDir });
+  assert.ok(lock);
+  assert.equal(holdsDaemonLock(lock), true);
+  releaseDaemonLock(lock);
+});
+
+test("reclaims a live owner past its startup grace only when nothing serves", async () => {
+  const stateDir = createTempDir();
+  const longAgo = Date.now() - 10 * 60_000;
+  writeDaemonLock(stateDir, process.pid, longAgo);
+
+  assert.equal(
+    await acquireDaemonLock({ stateDir, isServing: async () => true }),
+    undefined,
+  );
+
+  const lock = await acquireDaemonLock({ stateDir, isServing: async () => false });
+  assert.ok(lock);
+  releaseDaemonLock(lock);
+});
+
+test("a daemon notices when its lock was taken over", async () => {
+  const stateDir = createTempDir();
+  const original = await acquireDaemonLock({ stateDir });
+  assert.ok(original);
+  writeDaemonLock(stateDir, DEAD_PID, Date.now());
+  const takeover = await acquireDaemonLock({ stateDir });
+  assert.ok(takeover);
+
+  assert.equal(holdsDaemonLock(original), false);
+  // Releasing the stale handle must not remove the new owner's lock.
+  releaseDaemonLock(original);
+  assert.equal(holdsDaemonLock(takeover), true);
+  releaseDaemonLock(takeover);
 });
 
 test("classifies unreachable, malformed, and capability-incompatible daemons", async () => {
@@ -204,4 +278,21 @@ test("Codex probe rejects daemons without atomic claim capabilities", async () =
       compatibleServer.close(() => resolve()),
     );
   }
+});
+
+test("describes the daemon lock holder for doctor output", async () => {
+  const stateDir = createTempDir();
+  assert.equal(daemonLockStatus(stateDir), null);
+  assert.match(formatDaemonLockStatus(null), /not held/);
+
+  const lock = await acquireDaemonLock({ stateDir });
+  assert.ok(lock);
+  const held = daemonLockStatus(stateDir);
+  assert.equal(held?.pid, process.pid);
+  assert.equal(held?.alive, true);
+  assert.match(formatDaemonLockStatus(held), new RegExp(`held by pid ${process.pid} since`));
+  releaseDaemonLock(lock);
+
+  writeDaemonLock(stateDir, DEAD_PID, Date.now());
+  assert.match(formatDaemonLockStatus(daemonLockStatus(stateDir)), /process gone/);
 });

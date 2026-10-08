@@ -564,7 +564,7 @@ describe("chat.message session registration", () => {
     // The session must have been registered BEFORE the status command ran.
     assert.ok(operations.includes("register:fresh-session"), "session must be registered even when first message is a slash command")
     // And the status response was injected.
-    assert.ok(syncPrompts.some((p) => p.sessionId === "fresh-session" && p.text.includes("premind status")), "status response must have been injected")
+    assert.ok(syncPrompts.some((p) => p.sessionId === "fresh-session" && p.text.startsWith("premind · ")), "status response must have been injected")
   })
 })
 

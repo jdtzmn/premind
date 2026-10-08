@@ -69,7 +69,7 @@ The plugin requires **Node 22.13+** for `node:sqlite`. Its hooks start or reuse 
 
 Claude reminders are delivered only at a `Stop` boundary. A delivered batch is confirmed on Claude's next continuation Stop hook; interrupted handoffs become retryable, so duplicates are preferred to lost reminders. Inactive Claude sessions are not woken in v0.2.
 
-The plugin exposes namespaced MCP tools for `status`, `probe`, global `enable`/`disable`, and session-scoped `set_active_checkout`, `subscribe`, and `unsubscribe`. Set the active checkout at the start of any PR work—including when already in the startup checkout—and again after switching branches before creating or following a PR. Session-scoped tools derive the session solely from `CLAUDE_CODE_SESSION_ID`; missing or mismatched hook/MCP identity fails closed and asks you to reload the plugin. Claude commands are `/premind:status`, `/premind:doctor`, `/premind:deliver`, `/premind:enable`, `/premind:disable`, `/premind:subscribe`, and `/premind:unsubscribe`. `/premind:deliver` ends its command turn immediately so the normal Stop hook can deliver queued reminders safely.
+The plugin exposes namespaced MCP tools for `status`, `probe`, global `enable`/`disable`, and session-scoped `pause`, `resume`, `set_active_checkout`, `subscribe`, and `unsubscribe`. Set the active checkout at the start of any PR work—including when already in the startup checkout—and again after switching branches before creating or following a PR. Session-scoped tools derive the session solely from `CLAUDE_CODE_SESSION_ID`; missing or mismatched hook/MCP identity fails closed and asks you to reload the plugin. Claude commands are `/premind:status`, `/premind:doctor`, `/premind:deliver`, `/premind:pause`, `/premind:resume`, `/premind:enable`, `/premind:disable`, `/premind:subscribe`, and `/premind:unsubscribe`. `/premind:deliver` ends its command turn immediately so the normal Stop hook can deliver queued reminders safely.
 
 For an opt-in authenticated Claude CLI compatibility check (not part of CI), run:
 
@@ -98,6 +98,14 @@ Codex cannot wake an already-idle stock CLI thread. Updates found while idle rem
 
 After changing a local checkout, refresh the marketplace/plugin installation and re-review hooks. Remove the plugin with `codex plugin remove premind@premind`, then remove its marketplace source if it is no longer needed.
 For a source checkout modified locally, run `bun run build:runtime` before refreshing so the marketplace sees updated bundles.
+
+### Agent skills
+
+Premind ships task-scoped Agent Skills for Codex (portable and compatibility plugins), Pi (`skills/premind` in the Pi package), and the Claude Code plugin (`plugin-claude/skills/premind`). Each `SKILL.md` loads subscription and reminder guidance from its own `references/` only when relevant. OpenCode's npm plugin does not install into OpenCode's project/global skill discovery directories, so it does not claim an automatically installed skill.
+
+These files are generated, not hand-edited. After changing host control metadata in `src/shared/command-capabilities.ts` or `src/codex/mcp-server.ts`, or updating the shared guidance in `scripts/generate-premind-skills.ts`, run `bun run generate:skill` and `bun run test:skills` and commit the output. CI checks for drift.
+
+For an opt-in model-based check of triggering and selective reference reads, run `bun run test:skills:live` (or append `codex` / `claude` to test those files through Pi's read-only skill runner). It uses an authenticated Pi model, makes no Premind tool calls, and is not a substitute for native Claude/Codex installation checks.
 
 ## How it works
 
@@ -157,14 +165,18 @@ The server plugin registers these slash commands; the colored `/premind:status` 
 - `/premind:doctor` — diagnose plugin, configuration, and daemon health
 - `/premind:deliver` — deliver queued PR updates immediately at the earliest safe harness boundary
 - `/premind-send-now` — deprecated OpenCode alias for `/premind:deliver`
+- `/premind:pause` — pause reminders for this session only; subscriptions keep being watched
+- `/premind:resume` — resume reminders for this session without changing subscriptions
 - `/premind-disable` — disable GitHub polling globally
 - `/premind-enable` — re-enable GitHub polling globally
 
 The complete cross-harness command and tool matrix, including intentional exceptions, is documented in [Command Capabilities](docs/command-capabilities.md).
 
-Checkout and subscription lifecycle replaces per-session pause/resume. OpenCode exposes `premind_set_active_checkout`, `premind_subscribe`, and `premind_unsubscribe` model tools. The Pi package exposes the same tools plus `/premind:set-active-checkout`, `/premind:subscribe`, and `/premind:unsubscribe` commands. Set the active checkout at the start of any PR work—including when already in the startup checkout—and again after switching branches before creating or following a PR. Automatic watches are limited to PRs authored by Premind's authenticated GitHub account. Manual subscriptions may intentionally target an external `owner/repo`; their reminders include a guard that changes require explicit user instruction, and status/reminders use fully qualified `owner/repo#number` identities.
+OpenCode exposes `premind_set_active_checkout`, `premind_subscribe`, and `premind_unsubscribe` model tools. The Pi package exposes the same tools plus `/premind:set-active-checkout`, `/premind:subscribe`, and `/premind:unsubscribe` commands. Set the active checkout at the start of any PR work—including when already in the startup checkout—and again after switching branches before creating or following a PR. Automatic watches are limited to PRs authored by Premind's authenticated GitHub account. Manual subscriptions may intentionally target an external `owner/repo`; their reminders include a guard that changes require explicit user instruction, and status/reminders use fully qualified `owner/repo#number` identities.
 
-`/premind-disable` is a daemon-wide kill switch: the daemon stays up and sessions keep registering, but no GitHub API calls are made until you re-enable. The flag is persisted in SQLite, so it survives daemon restarts. Queued events are preserved and delivered as normal once you re-enable.
+Every harness can pause and resume one session. Pi, Claude Code, and OpenCode provide `/premind:pause` and `/premind:resume`. Every harness provides model tools: `premind_pause` and `premind_resume`, or `pause` and `resume` in Claude Code's MCP server. Codex's tools take the session handle from lifecycle context. Pausing withholds reminders from the current session only. Every subscription stays watched, PR updates keep accumulating, and the pause lasts until you resume, including across a host reload or restart. Pause is not a substitute for the global `disable` / `enable` controls.
+
+The global `enable` / `disable` model tools require `confirmGlobal: true` and refuse unconfirmed calls, so agents cannot mistake them for session controls. Codex does not have these tools yet (#77). `/premind-disable` is a daemon-wide kill switch: the daemon stays up and sessions keep registering, but no GitHub API calls are made until you re-enable. The flag is persisted in SQLite, so it survives daemon restarts. Queued events are preserved and delivered as normal once you re-enable.
 
 premind also exposes a `premind_probe` tool that returns runtime diagnostics. This is useful if you want to verify that the plugin actually initialized even when slash commands are not showing up yet.
 

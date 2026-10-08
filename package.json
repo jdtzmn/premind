@@ -14,7 +14,8 @@
     "docs",
     "extensions",
     "plugin-claude",
-    "plugins"
+    "plugins",
+    "skills"
   ],
   "scripts": {
     "build": "bun run build:runtime && tsc -p tsconfig.json",
@@ -22,20 +23,23 @@
     "validate:package-runtime": "node scripts/validate-package-runtime-artifacts.mjs",
     "build:claude-runtime": "bun run build:runtime",
     "check": "tsc -p tsconfig.json --noEmit",
+    "generate:skill": "node --import tsx scripts/generate-premind-skills.ts",
+    "test:skills": "node --import tsx --test scripts/generate-premind-skills.test.ts",
+    "test:skills:live": "node scripts/evaluate-premind-skill.mjs",
     "daemon": "tsx src/daemon/index.ts",
     "prepack": "node scripts/generate-version.mjs && bun run build:runtime",
     "postpack": "node scripts/generate-version.mjs --restore",
-    "test": "node --import tsx --test src/shared/config-loader.test.ts src/shared/command-capabilities.test.ts src/shared/status-signal.test.ts src/shared/status-view.test.ts src/shared/version.test.ts src/daemon/github/client.test.ts src/daemon/github/diff.test.ts src/daemon/github/graphql.test.ts src/daemon/github/http.test.ts src/daemon/github/ratelimit.test.ts src/daemon/ipc/router.test.ts src/daemon/lifecycle/daemon-machine.test.ts src/daemon/lifecycle/daemon-lifecycle-runtime.test.ts src/daemon/persistence/store.test.ts src/daemon/watchers/adaptive-schedule.test.ts src/daemon/watchers/disable-gate.test.ts src/daemon/watchers/integration.test.ts src/daemon/watchers/pr-watcher-registry.test.ts src/daemon/watchers/poll-scheduler.test.ts src/daemon/worktrees/git-resolver.test.ts src/daemon/worktrees/worktree-binding-registry.test.ts src/daemon/worktrees/worktree-binding.test.ts src/daemon/reminders/detail-files.test.ts src/daemon/reminders/reminder-handoff-registry.test.ts src/daemon/reminders/render-reminder.test.ts src/extension/__tests__/index.test.ts src/client/daemon-client.test.ts src/client/node-runtime.test.ts src/client/daemon-launcher.test.ts src/plugin-opencode/__tests__/commands.test.ts src/plugin-opencode/__tests__/compatibility.test.ts src/plugin-opencode/__tests__/config-integration.test.ts src/plugin-opencode/__tests__/cross-session.test.ts src/plugin-opencode/__tests__/debug-state.test.ts src/plugin-opencode/__tests__/idle-delivery.test.ts src/plugin-opencode/__tests__/packaging.test.ts src/plugin-opencode/__tests__/reattach.test.ts src/plugin-opencode/__tests__/tui-status.test.ts src/codex/__tests__/contract-fixture.test.ts src/daemon/logging/logger.test.ts src/test/command-capability-contract.test.ts src/test/delivery-reliability.test.ts plugin-claude/test/*.test.mjs src/test/pr-update-delivery.test.ts src/test/delivery-conservation.test.ts",
-    "test:compat": "node --import tsx --test src/plugin-opencode/__tests__/compatibility.test.ts",
-    "test:claude": "node --test plugin-claude/test/*.test.mjs",
+    "test": "node --import tsx --import ./src/test/isolate-state-dir.mjs --test src/shared/config-loader.test.ts src/shared/command-capabilities.test.ts src/shared/status-signal.test.ts src/shared/status-view.test.ts src/shared/version.test.ts src/daemon/github/client.test.ts src/daemon/github/diff.test.ts src/daemon/github/graphql.test.ts src/daemon/github/http.test.ts src/daemon/github/ratelimit.test.ts src/daemon/ipc/router.test.ts src/daemon/ipc/server.test.ts src/daemon/lifecycle/daemon-machine.test.ts src/daemon/lifecycle/daemon-lifecycle-runtime.test.ts src/daemon/persistence/store.test.ts src/daemon/watchers/adaptive-schedule.test.ts src/daemon/watchers/disable-gate.test.ts src/daemon/watchers/integration.test.ts src/daemon/watchers/pr-watcher-registry.test.ts src/daemon/watchers/poll-scheduler.test.ts src/daemon/worktrees/git-resolver.test.ts src/daemon/worktrees/worktree-binding-registry.test.ts src/daemon/worktrees/worktree-binding.test.ts src/daemon/reminders/detail-files.test.ts src/daemon/reminders/reminder-handoff-registry.test.ts src/daemon/reminders/render-reminder.test.ts src/extension/__tests__/index.test.ts src/client/daemon-client.test.ts src/client/node-runtime.test.ts src/client/daemon-launcher.test.ts src/plugin-opencode/__tests__/commands.test.ts src/plugin-opencode/__tests__/compatibility.test.ts src/plugin-opencode/__tests__/config-integration.test.ts src/plugin-opencode/__tests__/cross-session.test.ts src/plugin-opencode/__tests__/debug-state.test.ts src/plugin-opencode/__tests__/idle-delivery.test.ts src/plugin-opencode/__tests__/packaging.test.ts src/plugin-opencode/__tests__/reattach.test.ts src/plugin-opencode/__tests__/tui-status.test.ts src/codex/__tests__/contract-fixture.test.ts src/daemon/logging/logger.test.ts src/test/command-capability-contract.test.ts src/test/capability-scenarios.test.ts src/test/delivery-reliability.test.ts plugin-claude/test/*.test.mjs src/test/pr-update-delivery.test.ts src/test/delivery-conservation.test.ts",
+    "test:compat": "node --import tsx --import ./src/test/isolate-state-dir.mjs --test src/plugin-opencode/__tests__/compatibility.test.ts",
+    "test:claude": "node --import ./src/test/isolate-state-dir.mjs --test plugin-claude/test/*.test.mjs",
     "test:claude:live-contract": "node plugin-claude/live/session-id-contract.mjs",
-    "test:codex:contract": "node --import tsx --test --test-concurrency=1 scripts/codex-version.test.mjs src/codex/__tests__/*.test.ts",
+    "test:codex:contract": "node --import tsx --import ./src/test/isolate-state-dir.mjs --test --test-concurrency=1 scripts/codex-version.test.mjs src/codex/__tests__/*.test.ts",
     "test:codex:install": "node scripts/validate-codex-contract-fixture.mjs",
     "test:codex:package": "node scripts/validate-codex-package-plugin.mjs",
     "test:codex:live": "node scripts/validate-codex-live-contract.mjs",
     "test:live": "node --import tsx src/test/live-validation.ts",
     "test:live:contract": "node --import tsx src/test/live-validation.ts --contract-only",
-    "test:harness": "node --import tsx --test src/test/delivery-reliability.test.ts src/test/pr-update-delivery.test.ts src/test/delivery-conservation.test.ts"
+    "test:harness": "node --import tsx --import ./src/test/isolate-state-dir.mjs --test src/test/delivery-reliability.test.ts src/test/pr-update-delivery.test.ts src/test/delivery-conservation.test.ts"
   },
   "keywords": [
     "pi-package",
@@ -66,6 +70,9 @@
   "pi": {
     "extensions": [
       "./extensions/premind.ts"
+    ],
+    "skills": [
+      "./skills/premind"
     ]
   },
   "peerDependencies": {
