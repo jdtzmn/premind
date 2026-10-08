@@ -19,7 +19,11 @@ import {
 	type ToolParameter,
 } from "../shared/command-capabilities.ts";
 // @ts-expect-error The shipped Claude MCP runtime is plain JavaScript.
-import { handleMcpRequest } from "../../plugin-claude/bin/mcp-server.mjs";
+import * as claudeMcp from "../../plugin-claude/bin/mcp-server.mjs";
+import * as globalControl from "../shared/global-control.ts";
+import * as sessionPause from "../shared/session-pause.ts";
+
+const { handleMcpRequest } = claudeMcp;
 
 const sorted = (values: Iterable<string>) => [...values].sort();
 
@@ -293,5 +297,26 @@ describe("adapter command capability contract", () => {
 				}
 			}
 		}
+	});
+
+	test("the Claude MCP server mirrors the shared control text exactly", () => {
+		assert.equal(
+			claudeMcp.GLOBAL_CONFIRMATION_DESCRIPTION,
+			globalControl.GLOBAL_CONFIRMATION_DESCRIPTION,
+		);
+		for (const action of ["enable", "disable"] as const) {
+			assert.equal(
+				claudeMcp.globalControlRefusal(action),
+				globalControl.globalControlRefusal(action),
+			);
+		}
+		for (const disabled of [true, false]) {
+			assert.equal(
+				claudeMcp.globalControlResult(disabled),
+				globalControl.globalControlResult(disabled),
+			);
+		}
+		assert.equal(claudeMcp.SESSION_PAUSED_MESSAGE, sessionPause.SESSION_PAUSED_MESSAGE);
+		assert.equal(claudeMcp.SESSION_RESUMED_MESSAGE, sessionPause.SESSION_RESUMED_MESSAGE);
 	});
 });

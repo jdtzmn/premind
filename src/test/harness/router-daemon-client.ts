@@ -152,10 +152,10 @@ export const createRouterDaemonClient = (
 			await request("unregisterSession", { sessionId })
 		},
 		pauseSession: async (sessionId: string) => {
-			await request("updateSessionState", { sessionId, status: "paused" })
+			await request("pauseSession", { sessionId })
 		},
 		resumeSession: async (sessionId: string) => {
-			await request("updateSessionState", { sessionId, status: "active" })
+			await request("resumeSession", { sessionId })
 		},
 		// Return router results so adapters that read them (OpenCode, Codex MCP) see real data.
 		activateWorktree: async (payload: { sessionId: string; path: string }) =>
