@@ -124,7 +124,7 @@ test("discovers only the four supported Codex controls", async () => {
 		),
 		[
 			"premind_status",
-			"premind_activate_worktree",
+			"premind_set_active_checkout",
 			"premind_subscribe",
 			"premind_unsubscribe",
 		],

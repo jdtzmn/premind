@@ -361,7 +361,7 @@ describe("premind Pi extension", () => {
 		assert.ok(activeCheckoutTool);
 		assert.equal(
 			activeCheckoutTool.description,
-			"Set the active Git checkout for the current premind session.",
+			"Set the active Git checkout for the current premind session. Call this at the start of any PR work, including when already in the startup checkout, and again after switching branches or worktrees before creating or following a PR.",
 		);
 		assert.deepEqual(activeCheckoutTool.promptGuidelines, [
 			"Call premind_set_active_checkout at the start of any PR work, including when already in the startup checkout, and again after switching branches before creating or following a PR.",

@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
+import { commandCapabilities } from "../shared/command-capabilities.ts";
 import { z } from "zod";
 import { PremindDaemonClient } from "../client/daemon-client.ts";
 import { createDaemonLauncher } from "../client/daemon-launcher.ts";
@@ -89,7 +90,7 @@ const tools = [
 	{
 		name: "premind_status",
 		description:
-			"Return redacted Premind status and, when resolvable, status for the current Codex session.",
+			`Return redacted Premind status and, when resolvable, status for the current Codex session. ${commandCapabilities.status.toolGuidance}`,
 		inputSchema: {
 			type: "object",
 			properties: { sessionHandle: { type: "string", format: "uuid" } },
@@ -97,8 +98,9 @@ const tools = [
 		},
 	},
 	{
-		name: "premind_activate_worktree",
-		description: "Bind this Codex session to a linked or nested worktree path.",
+		name: "premind_set_active_checkout",
+		description:
+			`Set the active Git checkout for this Codex session. ${commandCapabilities["set-active-checkout"].toolGuidance}`,
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -111,7 +113,7 @@ const tools = [
 	},
 	{
 		name: "premind_subscribe",
-		description: "Subscribe this Codex session to a pull request.",
+		description: `Subscribe this Codex session to a pull request. ${commandCapabilities.subscribe.toolGuidance}`,
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -125,7 +127,7 @@ const tools = [
 	},
 	{
 		name: "premind_unsubscribe",
-		description: "Unsubscribe this Codex session from a pull request.",
+		description: `Unsubscribe this Codex session from a pull request. ${commandCapabilities.unsubscribe.toolGuidance}`,
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -210,7 +212,7 @@ const requireBinding = async (
 type ParsedToolCall =
 	| { name: "premind_status"; args: z.infer<typeof statusArgumentsSchema> }
 	| {
-			name: "premind_activate_worktree";
+			name: "premind_set_active_checkout";
 			args: z.infer<typeof activateArgumentsSchema>;
 	  }
 	| {
@@ -230,7 +232,7 @@ const parseToolCall = (params: unknown): ParsedToolCall => {
 			if (!args.success) throw new JsonRpcError(-32602, "Invalid tool arguments");
 			return { name: call.data.name, args: args.data };
 		}
-		case "premind_activate_worktree": {
+		case "premind_set_active_checkout": {
 			const args = activateArgumentsSchema.safeParse(rawArguments);
 			if (!args.success) throw new JsonRpcError(-32602, "Invalid tool arguments");
 			return { name: call.data.name, args: args.data };
@@ -281,7 +283,7 @@ const callTool = async (
 		}
 
 		const binding = await requireBinding(dependencies, tool.args.sessionHandle);
-		if (tool.name === "premind_activate_worktree") {
+		if (tool.name === "premind_set_active_checkout") {
 			const result = await dependencies.client.activateWorktree({
 				sessionId: binding.sessionId,
 				path: tool.args.path,

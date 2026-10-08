@@ -4,7 +4,7 @@
 
 Use the exact `Premind session handle` supplied by lifecycle context for session-scoped tools. Never invent one or reuse another session's handle.
 
-- After moving work into a linked or nested Git worktree, call `premind_activate_worktree` with the current handle and new path.
+- After moving work into a linked or nested Git worktree, call `premind_set_active_checkout` with the current handle and new path.
 - Use `premind_subscribe` or `premind_unsubscribe` only when the user asks to change tracking; pass `repo` as `owner/name` for a PR outside the current repository.
 - Use `premind_status` to inspect redacted state. If multiple sessions share a working directory, supply the current handle rather than guessing.
 
