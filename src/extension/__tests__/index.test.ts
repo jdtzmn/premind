@@ -233,8 +233,8 @@ const createClient = (
 			}) => {
 				operations.push(`ensureSessionControl:${sessionId}:${paused}`);
 			},
-			unregisterSession: async (sessionId: string) => {
-				operations.push(`unregisterSession:${sessionId}`);
+			releaseSessionOwner: async (sessionId: string) => {
+				operations.push(`releaseSessionOwner:${sessionId}`);
 			},
 			pauseSession: async (sessionId: string) => {
 				operations.push(`pauseSession:${sessionId}`);
@@ -558,7 +558,7 @@ describe("premind Pi extension", () => {
 		assert.deepEqual(statuses.at(-1), { key: "premind", value: " 4 pending" });
 	});
 
-	test("session_shutdown unregisters the Pi session and releases the client", async () => {
+	test("session_shutdown keeps the Pi session (dormant) and releases the client", async () => {
 		const mock = createMockPi();
 		const client = createClient();
 		const { ctx, statuses } = createEventContext();
@@ -573,13 +573,18 @@ describe("premind Pi extension", () => {
 		assert.ok(start);
 		assert.ok(shutdown);
 		await start({}, ctx);
-		await shutdown({}, ctx);
+		await shutdown({ reason: "reload" }, ctx);
 
+		assert.equal(
+			client.operations.some((operation) => operation.startsWith("unregisterSession")),
+			false,
+			"a reload must not delete the session and cascade its subscriptions away",
+		);
 		assert.deepEqual(client.operations, [
 			"registerClient:/tmp/project:pi-extension",
 			"registerSession:/tmp/session.jsonl:owner/repo:feature/pi",
 			"activateWorktree:/tmp/session.jsonl:/tmp/project",
-			"unregisterSession:/tmp/session.jsonl",
+			"releaseSessionOwner:/tmp/session.jsonl",
 			"release",
 		]);
 		assert.deepEqual(statuses.at(-1), { key: "premind", value: undefined });
