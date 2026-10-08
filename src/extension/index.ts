@@ -1,4 +1,16 @@
 import { PREMIND_VERSION_LABEL } from "../shared/version.ts";
+import { renderCurrentStatus } from "../shared/status-view.ts";
+import { commandCapabilities } from "../shared/command-capabilities.ts";
+import {
+	GLOBAL_CONFIRMATION_DESCRIPTION,
+	globalControlRefusal,
+	globalControlResult,
+} from "../shared/global-control.ts";
+import {
+	SESSION_PAUSED_DELIVERY_MESSAGE,
+	SESSION_PAUSED_MESSAGE,
+	SESSION_RESUMED_MESSAGE,
+} from "../shared/session-pause.ts";
 import {
 	CONFIG_DIR_NAME,
 	type ExtensionAPI,
@@ -6,11 +18,15 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { Text } from "@earendil-works/pi-tui";
+import { Text, Key, matchesKey } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { PremindDaemonClient } from "../client/daemon-client.ts";
 import { detectGitContext } from "../client/git-context.ts";
 import { ensureDaemonRunning } from "../plugin-opencode/daemon-launcher.ts";
+import {
+	daemonLockStatus,
+	formatDaemonLockStatus,
+} from "../shared/daemon-startup.ts";
 import type {
 	AckReminderPayload,
 	AckReminderBundlePayload,
@@ -42,7 +58,7 @@ type DaemonClientLike = {
 	registerSession: (
 		payload: Omit<RegisterSessionPayload, "clientId">,
 	) => Promise<unknown>;
-	unregisterSession: (sessionId: string) => Promise<unknown>;
+	releaseSessionOwner: (sessionId: string) => Promise<unknown>;
 	ensureSessionControl: (
 		payload: Omit<EnsureSessionControlPayload, "clientId">,
 	) => Promise<unknown>;
@@ -70,7 +86,7 @@ type DaemonClientLike = {
 		sessionId: string,
 	) => Promise<{ batch: ReminderBatch | null }>;
 	ackReminder: (payload: AckReminderPayload) => Promise<unknown>;
-	debugStatus: () => Promise<DebugStatusResponse>;
+	debugStatus: (options?: { includeSnapshots?: boolean }) => Promise<DebugStatusResponse>;
 	pruneClosedSessions: () => Promise<unknown>;
 };
 
@@ -97,10 +113,15 @@ const PRUNE_ERROR_PREFIX = "premind prune failed";
 const DELIVER_ERROR_PREFIX = "premind deliver failed";
 const CHECKOUT_ERROR_PREFIX = "premind active checkout update failed";
 const SUBSCRIPTION_ERROR_PREFIX = "premind subscription update failed";
+const SESSION_CONTROL_ERROR_PREFIX = "premind session control failed";
 const SESSION_SOURCE = "pi-extension";
 const DEFAULT_HEARTBEAT_MS = 10_000;
 const DEFAULT_STATUS_POLL_INTERVAL_MS = 15_000;
 const MIN_STATUS_POLL_INTERVAL_MS = 5_000;
+// A status poll still running after this long is treated as abandoned so one
+// stuck daemon request cannot end idle delivery for the rest of the session.
+// Daemon requests time out well before this, so it only trips on a true hang.
+export const STATUS_POLL_STALE_MS = 2 * 60_000;
 const REMINDER_VISIBLE_EVENT_LIMIT = 3;
 const PR_ICON = ""; // nf-oct-git_pull_request
 const STALE_EXTENSION_CONTEXT_PREFIX = "This extension ctx is stale";
@@ -191,6 +212,7 @@ const formatSessionId = (sessionId: string) => {
 export const renderPremindPiStatus = (
 	status: DebugStatusResponse,
 	versionLabel = PREMIND_VERSION_LABEL,
+	currentSessionId?: string,
 ) => {
 	const activeLabel = `${status.activeSessions} active session${status.activeSessions === 1 ? "" : "s"}`;
 	const header = `premind: ${versionLabel} · ${activeLabel}`;
@@ -208,7 +230,7 @@ export const renderPremindPiStatus = (
 		const subscriptionSummary = subscriptions
 			? ` | subscriptions ${subscriptions}`
 			: "";
-		return `- ${session.repo} @ ${session.branch}${pr} | ${session.status}/${session.busyState} | pending ${session.pendingReminderCount}${worktree}${subscriptionSummary} | session ${formatSessionId(session.sessionId)}`;
+		return `- ${session.repo} @ ${session.branch}${pr} | ${session.status}/${session.busyState} | pending ${session.pendingReminderCount}${worktree}${subscriptionSummary} | session ${formatSessionId(session.sessionId)}${session.sessionId === currentSessionId ? " (current)" : ""}`;
 	});
 	return [
 		header,
@@ -298,7 +320,22 @@ export const createPremindPiExtension = (
 		let sessionClient: DaemonClientLike | undefined;
 		let heartbeatTimer: NodeJS.Timeout | undefined;
 		let statusPollTimer: NodeJS.Timeout | undefined;
-		let statusPollInFlight = false;
+		// Start time of the running status poll, or undefined when none is running.
+		let statusPollStartedAt: number | undefined;
+		let statusPollToken = 0;
+		let lastStatusPollCompletedAt: number | undefined;
+		let lastStatusPollError: string | undefined;
+
+		const describeStatusPoll = (now: number) => {
+			if (
+				statusPollStartedAt !== undefined &&
+				now - statusPollStartedAt >= STATUS_POLL_STALE_MS
+			)
+				return `stuck for ${Math.round((now - statusPollStartedAt) / 1000)}s; the next poll replaces it`;
+			if (lastStatusPollCompletedAt === undefined) return "no poll has completed yet";
+			const age = `last completed ${Math.round((now - lastStatusPollCompletedAt) / 1000)}s ago`;
+			return lastStatusPollError ? `${age} with an error: ${lastStatusPollError}` : age;
+		};
 		let deliveryInFlight = false;
 		let sessionGeneration = 0;
 		let config = normalizePremindPiConfig(dependencies.config);
@@ -353,10 +390,12 @@ export const createPremindPiExtension = (
 			return attachPiSession(ctx);
 		};
 
-		const getStatusText = async () => {
-			const status = await createDaemonClient().debugStatus();
-			return renderPremindPiStatus(status);
+		const getStatusText = async (ctx: { cwd: string; sessionManager?: { getSessionFile?: () => string | undefined } }) => {
+			const status = await createDaemonClient().debugStatus({ includeSnapshots: true });
+			return renderCurrentStatus(status, currentSessionId ?? getPiSessionId(ctx));
 		};
+		const getDebugStatusText = async (ctx: { cwd: string; sessionManager?: { getSessionFile?: () => string | undefined } }) =>
+			renderPremindPiStatus(await createDaemonClient().debugStatus(), PREMIND_VERSION_LABEL, currentSessionId ?? getPiSessionId(ctx));
 
 		const getDoctorText = async () => {
 			const lines = [
@@ -367,10 +406,27 @@ export const createPremindPiExtension = (
 				`- status polling: ${config.statusPollIntervalMs === 0 ? "disabled" : `${config.statusPollIntervalMs}ms`}`,
 				`- session: ${currentSessionId ? `attached (${formatSessionId(currentSessionId)})` : "not attached"}`,
 				"- delivery: follow-up messages can wake an idle Pi session",
+				...(config.statusPollIntervalMs > 0
+					? [`- idle delivery poll: ${describeStatusPoll(Date.now())}`]
+					: []),
+				`- daemon lock: ${formatDaemonLockStatus(daemonLockStatus())}`,
 			];
 			try {
 				const status = await createDaemonClient().debugStatus();
 				lines.splice(2, 0, `- daemon: reachable (protocol ${status.daemon.protocolVersion})`);
+				// Idle sessions that still have reminders usually mean that session's
+				// idle delivery stopped; a message there delivers the backlog.
+				const stalled = status.sessions.filter(
+					(session) =>
+						session.busyState === "idle" && session.pendingReminderCount > 0,
+				);
+				lines.push(
+					stalled.length === 0
+						? "- idle sessions with pending reminders: none"
+						: `- idle sessions with pending reminders: ${stalled
+								.map((session) => `${formatSessionId(session.sessionId)} (${session.pendingReminderCount})`)
+								.join(", ")}`,
+				);
 			} catch (error) {
 				lines.splice(
 					2,
@@ -386,9 +442,36 @@ export const createPremindPiExtension = (
 			return result as PruneClosedSessionsResult;
 		};
 
+		const setCurrentSessionPaused = async (
+			ctx: {
+				cwd: string;
+				sessionManager?: { getSessionFile?: () => string | undefined };
+			},
+			paused: boolean,
+		) => {
+			const { client, sessionId } = await ensurePiSessionAttached(ctx);
+			if (paused) await client.pauseSession(sessionId);
+			else await client.resumeSession(sessionId);
+			return paused ? SESSION_PAUSED_MESSAGE : SESSION_RESUMED_MESSAGE;
+		};
+
+		const isCurrentSessionPaused = async () => {
+			if (!currentSessionId) return false;
+			const status = await getClient().debugStatus();
+			return status.sessions.some(
+				(session) =>
+					session.sessionId === currentSessionId && session.status === "paused",
+			);
+		};
+
+		const describeUndelivered = async () =>
+			(await isCurrentSessionPaused().catch(() => false))
+				? SESSION_PAUSED_DELIVERY_MESSAGE
+				: "premind has no pending reminders for this session.";
+
 		const setGlobalPolling = async (disabled: boolean) => {
 			const result = await createDaemonClient().setGlobalDisabled(disabled);
-			return `premind polling is ${result.disabled ? "disabled" : "enabled"} globally.`;
+			return globalControlResult(result.disabled);
 		};
 
 		const setStatus = (
@@ -545,8 +628,18 @@ export const createPremindPiExtension = (
 			},
 			generation: number,
 		) => {
-			if (generation !== sessionGeneration || statusPollInFlight) return;
-			statusPollInFlight = true;
+			if (generation !== sessionGeneration) return;
+			const startedAt = Date.now();
+			if (
+				statusPollStartedAt !== undefined &&
+				startedAt - statusPollStartedAt < STATUS_POLL_STALE_MS
+			)
+				return;
+			// Owning the poll by token lets an abandoned poll finish late without
+			// clearing the marker of the poll that replaced it.
+			const token = ++statusPollToken;
+			statusPollStartedAt = startedAt;
+			let pollError: string | undefined;
 			try {
 				await refreshStatusbar(ctx, generation);
 				if (
@@ -562,13 +655,18 @@ export const createPremindPiExtension = (
 				if (generation === sessionGeneration && result.delivered)
 					setStatus(ctx, undefined);
 			} catch (error) {
+				pollError = error instanceof Error ? error.message : String(error);
 				if (
 					generation === sessionGeneration &&
 					!isStaleExtensionContextError(error)
 				)
 					setStatus(ctx, `${PR_ICON} error`);
 			} finally {
-				statusPollInFlight = false;
+				if (token === statusPollToken) {
+					statusPollStartedAt = undefined;
+					lastStatusPollCompletedAt = Date.now();
+					lastStatusPollError = pollError;
+				}
 			}
 		};
 
@@ -675,7 +773,16 @@ export const createPremindPiExtension = (
 
 			if (!client) return;
 			try {
-				if (sessionId) await client.unregisterSession(sessionId);
+				// Pi fires session_shutdown for reload, quit, new, resume, and fork.
+				// Release ownership instead of deleting the session: a dormant
+				// session keeps its subscriptions, cursors, worktree binding, and
+				// opt-outs, and the next session_start for the same session file
+				// reactivates it. Deleting it cascaded all of that away (#86).
+				if (sessionId) await client.releaseSessionOwner(sessionId);
+			} catch {
+				// Best-effort: the session may already be closed by stale-session reaping.
+			}
+			try {
 				await client.release();
 			} catch {
 				// Shutdown must be best-effort; stale sessions can be cleaned by /premind:prune.
@@ -684,15 +791,65 @@ export const createPremindPiExtension = (
 
 		pi.registerCommand("premind:status", {
 			description:
-				"Show premind daemon status, attached sessions, and pending reminders",
+				"Show the current session's watched PRs and premind health",
 			handler: async (_args, ctx) => {
 				try {
-					ctx.ui.notify(await getStatusText(), "info");
+					const status = await createDaemonClient().debugStatus({ includeSnapshots: true });
+					const sessionId = currentSessionId ?? getPiSessionId(ctx);
+					if (ctx.hasUI && typeof ctx.ui.custom === "function") {
+						await ctx.ui.custom<void>((_tui, theme, _keys, done) => {
+							const display = new Text();
+							const hint = new Text("Esc or Enter to close");
+							const colors = {
+								error: "error",
+								warning: "warning",
+								success: "success",
+								merged: "accent",
+								muted: "muted",
+								unknown: "muted",
+							} as const;
+							return {
+								render(width: number) {
+									const useColor = !("NO_COLOR" in process.env);
+									const text = renderCurrentStatus(status, sessionId, {
+										style: (signalText, signal) =>
+											useColor ? theme.fg(colors[signal], signalText) : signalText,
+									});
+									display.setText(text);
+									const hintLines = hint.render(width);
+									const styledHint = useColor
+										? hintLines.map((line) => theme.fg("dim", line))
+										: hintLines;
+									return [...display.render(width), "", ...styledHint];
+								},
+								invalidate() {
+									display.invalidate();
+									hint.invalidate();
+								},
+								handleInput(data: string) {
+									if (matchesKey(data, Key.escape) || matchesKey(data, Key.enter)) done();
+								},
+							};
+						});
+					} else {
+						ctx.ui.notify(renderCurrentStatus(status, sessionId), "info");
+					}
 				} catch (error) {
 					ctx.ui.notify(
 						`${STATUS_ERROR_PREFIX}: ${error instanceof Error ? error.message : String(error)}`,
 						"error",
 					);
+				}
+			},
+		});
+
+		pi.registerCommand("premind:debug-status", {
+			description: "Show the full premind daemon and all-session diagnostic inventory",
+			handler: async (_args, ctx) => {
+				try {
+					ctx.ui.notify(await getDebugStatusText(ctx), "info");
+				} catch (error) {
+					ctx.ui.notify(`${STATUS_ERROR_PREFIX}: ${error instanceof Error ? error.message : String(error)}`, "error");
 				}
 			},
 		});
@@ -705,14 +862,16 @@ export const createPremindPiExtension = (
 		});
 
 		pi.registerCommand("premind:enable", {
-			description: "Enable premind GitHub polling globally",
+			description:
+				"Enable premind GitHub polling globally, across all sessions and projects",
 			handler: async (_args, ctx) => {
 				ctx.ui.notify(await setGlobalPolling(false), "info");
 			},
 		});
 
 		pi.registerCommand("premind:disable", {
-			description: "Disable premind GitHub polling globally",
+			description:
+				"Disable premind GitHub polling globally, across all sessions and projects (use /premind:pause for this session only)",
 			handler: async (_args, ctx) => {
 				ctx.ui.notify(await setGlobalPolling(true), "info");
 			},
@@ -794,6 +953,30 @@ export const createPremindPiExtension = (
 			},
 		});
 
+		for (const [name, paused] of [
+			["premind:pause", true],
+			["premind:resume", false],
+		] as const) {
+			pi.registerCommand(name, {
+				description: paused
+					? "Pause premind reminders for this session only; subscriptions keep being watched"
+					: "Resume premind reminders for this session without changing subscriptions",
+				handler: async (_args, ctx) => {
+					try {
+						const message = await setCurrentSessionPaused(ctx, paused);
+						if (paused) setStatus(ctx, `${PR_ICON} paused`);
+						else await refreshStatusbar(ctx);
+						ctx.ui.notify(message, "info");
+					} catch (error) {
+						ctx.ui.notify(
+							`${SESSION_CONTROL_ERROR_PREFIX}: ${error instanceof Error ? error.message : String(error)}`,
+							"error",
+						);
+					}
+				},
+			});
+		}
+
 		const deliverCommand = {
 			description:
 				"Deliver all pending premind reminders for the current session, if any",
@@ -810,7 +993,7 @@ export const createPremindPiExtension = (
 					ctx.ui.notify(
 						result.delivered
 							? `premind delivered ${result.batches.length} reminder batch${result.batches.length === 1 ? "" : "es"}.`
-							: "premind has no pending reminders for this session.",
+							: await describeUndelivered(),
 						"info",
 					);
 				} catch (error) {
@@ -830,7 +1013,7 @@ export const createPremindPiExtension = (
 		pi.registerTool({
 			name: "premind_set_active_checkout",
 			label: "Premind Set Active Checkout",
-			description: "Set the active Git checkout for the current premind session.",
+			description: `Set the active Git checkout for the current premind session. ${commandCapabilities["set-active-checkout"].toolGuidance}`,
 			promptSnippet: "Tell premind which Git checkout this session is actively using.",
 			promptGuidelines: [
 				"Call premind_set_active_checkout at the start of any PR work, including when already in the startup checkout, and again after switching branches before creating or following a PR.",
@@ -854,8 +1037,7 @@ export const createPremindPiExtension = (
 		pi.registerTool({
 			name: "premind_subscribe",
 			label: "Premind Subscribe",
-			description:
-				"Mandatory PR tracking: Immediately call this tool after creating, opening, discovering, or beginning work on a pull request. Do this before reporting the PR URL or status to the user. Applies after gh pr create, gh stack submit, gh stack link, or any equivalent GitHub operation.",
+			description: commandCapabilities.subscribe.toolGuidance,
 			promptGuidelines: [
 				"Omit writePolicy to let Premind verify whether the authenticated GitHub user authored the PR on this session's active checkout. It remains observation-only until verified.",
 				"Use user-authorized only when the user explicitly authorizes work on this PR. Use observe-only to prevent automatic authority escalation.",
@@ -886,7 +1068,7 @@ export const createPremindPiExtension = (
 		pi.registerTool({
 			name: "premind_unsubscribe",
 			label: "Premind Unsubscribe",
-			description: "Unsubscribe the current session from a pull request.",
+			description: `Unsubscribe the current session from a pull request. ${commandCapabilities.unsubscribe.toolGuidance}`,
 			parameters: Type.Object({
 				prNumber: Type.Integer({ minimum: 1 }),
 				repo: Type.Optional(Type.String({ minLength: 1 })),
@@ -904,11 +1086,31 @@ export const createPremindPiExtension = (
 			},
 		});
 
+		for (const [name, label, paused, description] of [
+			["premind_pause", "Premind Pause", true, commandCapabilities.pause.toolGuidance],
+			["premind_resume", "Premind Resume", false, commandCapabilities.resume.toolGuidance],
+		] as const) {
+			pi.registerTool({
+				name,
+				label,
+				description,
+				parameters: Type.Object({}),
+				async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+					const text = await setCurrentSessionPaused(ctx, paused);
+					if (paused) setStatus(ctx, `${PR_ICON} paused`);
+					else await refreshStatusbar(ctx);
+					return {
+						content: [{ type: "text" as const, text }],
+						details: {},
+					};
+				},
+			});
+		}
+
 		pi.registerTool({
 			name: "premind_deliver",
 			label: "Premind Deliver",
-			description:
-				"Deliver all pending premind reminders for the current session at the earliest safe boundary.",
+			description: commandCapabilities.deliver.toolGuidance,
 			parameters: Type.Object({}),
 			async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
 				const sessionId = currentSessionId ?? getPiSessionId(ctx);
@@ -921,7 +1123,7 @@ export const createPremindPiExtension = (
 				else await refreshStatusbar(ctx);
 				const text = result.delivered
 					? `premind delivered ${result.batches.length} reminder batch${result.batches.length === 1 ? "" : "es"}.`
-					: "premind has no pending reminders for this session.";
+					: await describeUndelivered();
 				return {
 					content: [{ type: "text" as const, text }],
 					details: {},
@@ -929,36 +1131,38 @@ export const createPremindPiExtension = (
 			},
 		});
 
-		pi.registerTool({
-			name: "premind_enable",
-			label: "Premind Enable",
-			description: "Enable premind GitHub polling globally.",
-			parameters: Type.Object({}),
-			async execute() {
-				return {
-					content: [{ type: "text" as const, text: await setGlobalPolling(false) }],
-					details: {},
-				};
-			},
-		});
-
-		pi.registerTool({
-			name: "premind_disable",
-			label: "Premind Disable",
-			description: "Disable premind GitHub polling globally.",
-			parameters: Type.Object({}),
-			async execute() {
-				return {
-					content: [{ type: "text" as const, text: await setGlobalPolling(true) }],
-					details: {},
-				};
-			},
-		});
+		for (const [name, label, action] of [
+			["premind_enable", "Premind Enable", "enable"],
+			["premind_disable", "Premind Disable", "disable"],
+		] as const) {
+			pi.registerTool({
+				name,
+				label,
+				description: `${action === "enable" ? "Enable" : "Disable"} premind polling. ${commandCapabilities[action].toolGuidance}`,
+				parameters: Type.Object({
+					confirmGlobal: Type.Boolean({ description: GLOBAL_CONFIRMATION_DESCRIPTION }),
+				}),
+				async execute(_toolCallId, params) {
+					if (params.confirmGlobal !== true) {
+						throw new Error(globalControlRefusal(action));
+					}
+					return {
+						content: [
+							{
+								type: "text" as const,
+								text: await setGlobalPolling(action === "disable"),
+							},
+						],
+						details: {},
+					};
+				},
+			});
+		}
 
 		pi.registerTool({
 			name: "premind_doctor",
 			label: "Premind Doctor",
-			description: "Diagnose premind extension, configuration, and daemon health.",
+			description: commandCapabilities.doctor.toolGuidance,
 			parameters: Type.Object({}),
 			async execute() {
 				return {
@@ -971,17 +1175,16 @@ export const createPremindPiExtension = (
 		pi.registerTool({
 			name: "premind_status",
 			label: "Premind Status",
-			description:
-				"Show premind daemon status including active sessions, watchers, and pending reminder counts.",
+			description: `Show the current premind session's branch, watched PR links, health, and pending reminders. ${commandCapabilities.status.toolGuidance}`,
 			promptSnippet: "Inspect premind PR reminder daemon status.",
 			promptGuidelines: [
-				"Use premind_status when the user asks about premind daemon state, PR reminder attachment, pending reminders, or watcher status.",
+				"Use premind_status for the current session's watched PRs or health; use premind_debug_status to inspect all sessions.",
 			],
 			parameters: Type.Object({}),
-			async execute() {
+			async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
 				try {
 					return {
-						content: [{ type: "text" as const, text: await getStatusText() }],
+						content: [{ type: "text" as const, text: await getStatusText(ctx) }],
 						details: {},
 					};
 				} catch (error) {
@@ -997,6 +1200,16 @@ export const createPremindPiExtension = (
 				}
 			},
 		});
+		pi.registerTool({
+			name: "premind_debug_status",
+			label: "Premind Debug Status",
+			description: `Inspect the full daemon and all premind sessions. ${commandCapabilities["debug-status"].toolGuidance}`,
+			parameters: Type.Object({}),
+			async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+				return { content: [{ type: "text" as const, text: await getDebugStatusText(ctx) }], details: {} };
+			},
+		});
+
 	};
 };
 

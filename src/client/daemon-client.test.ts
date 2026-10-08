@@ -4,7 +4,10 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { describe, test } from "node:test";
-import { PremindDaemonClient } from "./daemon-client.ts";
+import {
+  DEFAULT_REQUEST_TIMEOUT_MS,
+  PremindDaemonClient,
+} from "./daemon-client.ts";
 import type { ReminderBatch } from "../shared/schema.ts";
 
 type Request = { type: string; payload: Record<string, unknown> };
@@ -70,6 +73,29 @@ describe("PremindDaemonClient.ensureSessionControl", () => {
       }),
       /CLIENT_NOT_FOUND/,
     );
+  });
+});
+
+describe("debug status snapshot opt-in compatibility", () => {
+  const response = { daemon: { protocolVersion: 1, heartbeatMs: 10_000, leaseTtlMs: 30_000, idleShutdownGraceMs: 15_000 }, globallyDisabled: false, activeClients: 0, activeSessions: 0, closedSessions: 0, activeWatchers: 0, lastReapAt: null, lastReapCount: 0, sessions: [] };
+  test("requests snapshots only when opted in, then falls back on an older daemon", async () => {
+    const client = createClient();
+    const requests: Request[] = [];
+    (client as unknown as { requestWithRetry: (request: Request) => Promise<unknown> }).requestWithRetry = async (request) => {
+      requests.push(request);
+      if (request.payload.includeSnapshots) throw new Error("BAD_REQUEST: unsupported payload");
+      return response;
+    };
+    assert.deepEqual(await client.debugStatus({ includeSnapshots: true }), response);
+    assert.deepEqual(requests.map((request) => request.payload), [{ includeSnapshots: true }, {}]);
+    requests.length = 0;
+    await client.debugStatus();
+    assert.deepEqual(requests.map((request) => request.payload), [{}]);
+  });
+  test("non-compatibility errors are not masked by a retry", async () => {
+    const client = createClient();
+    (client as unknown as { requestWithRetry: (request: Request) => Promise<unknown> }).requestWithRetry = async () => { throw new Error("AUTH_FAILED: token invalid"); };
+    await assert.rejects(client.debugStatus({ includeSnapshots: true }), /AUTH_FAILED/);
   });
 });
 
@@ -283,39 +309,27 @@ describe("PremindDaemonClient Codex operations", () => {
     }
   });
 
-  test("leaves ordinary operations without a client deadline", async () => {
-    const directory = fs.mkdtempSync(
-      path.join(os.tmpdir(), "premind-client-slow-operation-"),
+  test("bounds ordinary operations with a default deadline", async () => {
+    await withSocketServer(
+      (socket) => {
+        socket.once("data", () => {
+          setTimeout(() => socket.end(okResponse()), 50);
+        });
+      },
+      async (socketPath) => {
+        const client = new PremindDaemonClient({
+          socketPath,
+          ensureDaemon: async () => undefined,
+          maxRetries: 0,
+        });
+        assert.equal(
+          (client as unknown as { requestTimeoutMs: number }).requestTimeoutMs,
+          DEFAULT_REQUEST_TIMEOUT_MS,
+        );
+        // A slow daemon that answers inside the deadline still succeeds.
+        await client.heartbeat();
+      },
     );
-    const socketPath = path.join(directory, "premind.sock");
-    const server = net.createServer((socket) => {
-      socket.once("data", () => {
-        setTimeout(() => {
-          socket.end(
-            `${JSON.stringify({ ok: true, protocolVersion: 1, result: {} })}\n`,
-          );
-        }, 50);
-      });
-    });
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(socketPath, resolve);
-    });
-    try {
-      const client = new PremindDaemonClient({
-        socketPath,
-        ensureDaemon: async () => undefined,
-        maxRetries: 0,
-      });
-      assert.equal(
-        (client as unknown as { requestTimeoutMs?: number }).requestTimeoutMs,
-        undefined,
-      );
-      await client.heartbeat();
-    } finally {
-      await new Promise<void>((resolve) => server.close(() => resolve()));
-      fs.rmSync(directory, { recursive: true, force: true });
-    }
   });
 });
 
@@ -486,3 +500,95 @@ describe("protocol-v1 response compatibility", () => {
     assert.equal(result.sessions[0]?.sessionId, "session-pre-host");
   });
 });
+
+describe("PremindDaemonClient connection loss", () => {
+  test("rejects when the daemon closes the connection without replying", async () => {
+    await withSocketServer(
+      (socket) => socket.once("data", () => socket.end()),
+      async (socketPath) => {
+        const client = new PremindDaemonClient({
+          socketPath,
+          ensureDaemon: async () => undefined,
+          maxRetries: 0,
+        });
+        await assert.rejects(
+          client.debugStatus(),
+          /closed the connection before replying/,
+        );
+      },
+    );
+  });
+
+  test("retries through ensureDaemon after the daemon drops a request", async () => {
+    let connections = 0;
+    await withSocketServer(
+      (socket) => {
+        connections++;
+        const attempt = connections;
+        socket.once("data", () => {
+          // The first request dies with its daemon; later ones are answered.
+          if (attempt === 1) socket.destroy();
+          else socket.end(okResponse());
+        });
+      },
+      async (socketPath) => {
+        let ensureCalls = 0;
+        const client = new PremindDaemonClient({
+          socketPath,
+          ensureDaemon: async () => {
+            ensureCalls++;
+          },
+          maxRetries: 1,
+          retryDelayMs: 0,
+        });
+        await client.heartbeat();
+        assert.equal(ensureCalls, 1);
+      },
+    );
+  });
+
+  test("does not retry a timed-out request or probe for a new daemon", async () => {
+    await withSocketServer(
+      (socket) => socket.once("data", () => undefined),
+      async (socketPath) => {
+        let ensureCalls = 0;
+        const client = new PremindDaemonClient({
+          socketPath,
+          ensureDaemon: async () => {
+            ensureCalls++;
+          },
+          maxRetries: 3,
+          retryDelayMs: 0,
+          requestTimeoutMs: 25,
+        });
+        const startedAt = Date.now();
+        await assert.rejects(client.debugStatus(), /timed out after 25ms/);
+        assert.ok(Date.now() - startedAt < 200);
+        assert.equal(ensureCalls, 0);
+      },
+    );
+  });
+});
+
+const okResponse = () =>
+  `${JSON.stringify({ ok: true, protocolVersion: 1, result: {} })}\n`;
+
+const withSocketServer = async (
+  onConnection: (socket: net.Socket) => void,
+  run: (socketPath: string) => Promise<void>,
+) => {
+  const temporaryRoot = process.platform === "win32" ? os.tmpdir() : "/tmp";
+  const directory = fs.mkdtempSync(path.join(temporaryRoot, "premind-client-"));
+  const socketPath = path.join(directory, "premind.sock");
+  const server = net.createServer(onConnection);
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(socketPath, resolve);
+  });
+  try {
+    await run(socketPath);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+};

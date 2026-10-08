@@ -28,6 +28,7 @@ import type {
 	UpdateSessionStatePayload,
 	SubscriptionWritePolicy as SharedSubscriptionWritePolicy,
 } from "../../shared/schema.ts";
+import { cachedPrStatusSnapshotSchema } from "../../shared/schema.ts";
 import type {
 	NormalizedPrEvent,
 	PullRequestSnapshot,
@@ -965,7 +966,8 @@ export class StateStore {
 	): { created: boolean; superseded: number } {
 		return this.transaction(() => {
 			const existing = this.getSession(payload.sessionId);
-			const status = payload.paused ? "paused" : "active";
+			// Pause is stored separately from lifecycle status; see setSessionPaused.
+			const status = "active";
 			const contextChanged =
 				existing !== undefined &&
 				(existing.repo !== payload.repo || existing.branch !== payload.branch);
@@ -1061,6 +1063,7 @@ export class StateStore {
 			}
 
 			this.touchBranchWatcher(payload.repo, payload.branch, now);
+			this.writeSessionPause(payload.sessionId, payload.paused, now);
 			// Preserve the main-compatible response shape without closing peer sessions.
 			return { created: !existing, superseded: 0 };
 		});
@@ -1796,6 +1799,14 @@ export class StateStore {
 				`DELETE FROM sessions WHERE status = 'closed' AND updated_at < :cutoff`,
 			)
 			.run({ cutoff });
+		// Drop pauses whose session never came back within the same retention.
+		this.db
+			.prepare(
+				`DELETE FROM session_pauses
+				 WHERE paused_at < :cutoff
+				   AND session_id NOT IN (SELECT session_id FROM sessions)`,
+			)
+			.run({ cutoff });
 		return result.changes as number;
 	}
 
@@ -1915,7 +1926,7 @@ export class StateStore {
 			.get(sessionId) as SessionRow | undefined;
 	}
 
-	listSessionSummaries() {
+	listSessionSummaries(includeSnapshots = false) {
 		const sessions = this.db
 			.prepare(
 				`SELECT session_id, host, repo, branch, pr_number, status, busy_state, last_delivered_event_seq FROM sessions WHERE status != 'closed' ORDER BY updated_at DESC`,
@@ -1947,6 +1958,7 @@ export class StateStore {
 									subscription.lastDeliveredEventSeq,
 								)
 							: 0,
+					...(includeSnapshots ? { snapshot: subscription.state === "active" ? this.getStatusSnapshot(subscription.repo, subscription.prNumber) : null } : {}),
 				}),
 			);
 			const pendingReminderCount =
@@ -1972,7 +1984,10 @@ export class StateStore {
 				repo: session.repo,
 				branch: session.branch,
 				prNumber: session.pr_number,
-				status: session.status,
+				status:
+					session.status === "active" && this.isSessionPaused(session.session_id)
+						? "paused"
+						: session.status,
 				busyState: session.busy_state,
 				pendingReminderCount,
 				worktreeBinding: binding
@@ -2005,14 +2020,44 @@ export class StateStore {
 		).count;
 	}
 
+	/**
+	 * A paused session stays registered and watched, and keeps accumulating
+	 * events, but no reminder is handed to it. The pause lives in
+	 * `session_pauses`, not in `sessions.status`, so lifecycle transitions
+	 * (Pi reload delete/re-register, Claude suspend, Codex dormancy, stale
+	 * reaping) never lift it. Only an explicit resume does.
+	 */
+	isSessionPaused(sessionId: string) {
+		const paused = this.db
+			.prepare(`SELECT 1 FROM session_pauses WHERE session_id = ?`)
+			.get(sessionId);
+		// `status = 'paused'` is the pre-session_pauses representation.
+		return paused !== undefined || this.getSession(sessionId)?.status === "paused";
+	}
+
 	setSessionPaused(sessionId: string, paused: boolean, now = Date.now()) {
-		const status = paused ? "paused" : "active";
-		const result = this.db
+		if (!this.getSession(sessionId)) return false;
+		this.writeSessionPause(sessionId, paused, now);
+		return true;
+	}
+
+	private writeSessionPause(sessionId: string, paused: boolean, now: number) {
+		if (paused) {
+			this.db
+				.prepare(
+					`INSERT INTO session_pauses (session_id, paused_at) VALUES (:sessionId, :now)
+					 ON CONFLICT(session_id) DO NOTHING`,
+				)
+				.run({ sessionId, now });
+			return;
+		}
+		this.db.prepare(`DELETE FROM session_pauses WHERE session_id = ?`).run(sessionId);
+		this.db
 			.prepare(
-				`UPDATE sessions SET status = :status, updated_at = :now WHERE session_id = :sessionId`,
+				`UPDATE sessions SET status = 'active', updated_at = :now
+				 WHERE session_id = :sessionId AND status = 'paused'`,
 			)
-			.run({ status, now, sessionId });
-		return (result.changes as number) > 0;
+			.run({ sessionId, now });
 	}
 
 	isGloballyDisabled(): boolean {
@@ -2220,6 +2265,22 @@ export class StateStore {
 		if (prNumber !== null) {
 			this.touchPrWatcher(repo, prNumber, checkedAt);
 		}
+	}
+
+	private getStatusSnapshot(repo: string, prNumber: number) {
+		const snapshot = this.getSnapshot(repo, prNumber);
+		if (!snapshot?.core || !Array.isArray(snapshot.checks)) return null;
+		const projected = {
+			title: snapshot.core.title,
+			url: snapshot.core.url,
+			state: snapshot.core.state,
+			isDraft: snapshot.core.isDraft,
+			mergeStateStatus: snapshot.core.mergeStateStatus,
+			...(snapshot.core.reviewDecision !== undefined ? { reviewDecision: snapshot.core.reviewDecision } : {}),
+			checks: snapshot.checks.map((check) => ({ state: check?.state })),
+			fetchedAt: snapshot.fetchedAt,
+		};
+		return cachedPrStatusSnapshotSchema.safeParse(projected).data ?? null;
 	}
 
 	getSnapshot(repo: string, prNumber: number) {
@@ -2658,7 +2719,11 @@ export class StateStore {
 	}
 
 
-	/** Atomically claims every currently deliverable batch for a session. */
+	/**
+	 * Atomically claims every currently deliverable batch for a session.
+	 * Paused sessions keep their subscriptions, events, and pending batches but
+	 * cannot hand any of them to an adapter until resumed.
+	 */
 	claimReminderBundle(
 		sessionId: string,
 		now = Date.now(),
@@ -2669,7 +2734,8 @@ export class StateStore {
 	): ReminderBundleClaim | null {
 		return this.transaction(() => {
 			const session = this.getSession(sessionId);
-			if (!session || session.status !== "active") return null;
+			if (!session || session.status !== "active" || this.isSessionPaused(sessionId))
+				return null;
 			this.expireStaleHandoffs(undefined, now);
 			if (this.listInFlightReminderBatchRecords(sessionId).length > 0) return null;
 
@@ -2844,6 +2910,7 @@ export class StateStore {
 		leaseMs = PREMIND_REMINDER_CLAIM_LEASE_MS,
 	): ReminderClaim | null {
 		return this.transaction(() => {
+			if (this.isSessionPaused(sessionId)) return null;
 			this.expireStaleHandoffs(undefined, now);
 			const activeClaim = this.db
 				.prepare(
@@ -3542,6 +3609,8 @@ export class StateStore {
 
 		switch (payload.state) {
 			case "handed_off":
+				// A batch fetched before a pause must not be handed off after it.
+				if (this.isSessionPaused(payload.sessionId)) return false;
 				return this.transitionReminderBatchState(
 					payload.batchId,
 					payload.sessionId,
@@ -3581,7 +3650,7 @@ export class StateStore {
 		subscriptionId?: string,
 	): ReminderBatch | null {
 		const session = this.getSession(sessionId);
-		if (!session || session.status !== "active") return null;
+		if (!session || session.status !== "active" || this.isSessionPaused(sessionId)) return null;
 
 		const subscription = subscriptionId
 			? this.getSubscriptionById(subscriptionId)
@@ -4002,6 +4071,13 @@ export class StateStore {
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL,
         updated_at INTEGER NOT NULL
+      );
+
+      -- No foreign key: a pause must outlive the session row (Pi deletes and
+      -- re-registers its session on reload). Orphans are pruned with closed sessions.
+      CREATE TABLE IF NOT EXISTS session_pauses (
+        session_id TEXT PRIMARY KEY,
+        paused_at INTEGER NOT NULL
       );
     `);
 

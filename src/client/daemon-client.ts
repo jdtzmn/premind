@@ -63,6 +63,13 @@ const SESSION_LEASE_EXEMPT_OPERATIONS = new Set([
   "releaseSessionOwner",
 ]);
 
+// Every request gets a hard deadline so a stalled or vanished daemon can never
+// leave a caller (for example, the Pi idle-delivery poll) awaiting forever.
+export const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+const CONNECTION_CLOSED_MESSAGE =
+  "premind daemon closed the connection before replying";
+const isUnsupportedOperation = (error: unknown) =>
+  error instanceof Error && error.message.startsWith("BAD_REQUEST:");
 export type PremindDaemonClientOptions = {
   host?: SessionHost;
   socketPath?: string;
@@ -82,7 +89,7 @@ export class PremindDaemonClient {
   private readonly ensureDaemon: () => Promise<void>;
   private readonly maxRetries: number;
   private readonly retryDelayMs: number;
-  private readonly requestTimeoutMs: number | undefined;
+  private readonly requestTimeoutMs: number;
   private protocolVersion: 1 | typeof PROTOCOL_V2 = PREMIND_PROTOCOL_VERSION;
   private initialized = false;
 
@@ -96,14 +103,14 @@ export class PremindDaemonClient {
     this.ensureDaemon = options.ensureDaemon;
     this.maxRetries = options.maxRetries ?? MAX_RETRIES;
     this.retryDelayMs = options.retryDelayMs ?? RETRY_DELAY_MS;
-    this.requestTimeoutMs = options.requestTimeoutMs;
+    this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
     if (
       !Number.isInteger(this.maxRetries) ||
       this.maxRetries < 0 ||
       !Number.isFinite(this.retryDelayMs) ||
       this.retryDelayMs < 0 ||
-      (this.requestTimeoutMs !== undefined &&
-        (!Number.isFinite(this.requestTimeoutMs) || this.requestTimeoutMs <= 0))
+      !Number.isFinite(this.requestTimeoutMs) ||
+      this.requestTimeoutMs <= 0
     ) {
       throw new Error("Invalid premind daemon client retry or timeout options");
     }
@@ -424,12 +431,23 @@ export class PremindDaemonClient {
     return globalDisabledResponseSchema.parse(response);
   }
 
-  async debugStatus() {
-    const response = await this.requestWithRetry({
-      type: "debugStatus",
-      protocolVersion: PREMIND_PROTOCOL_VERSION,
-      payload: {},
-    });
+  async debugStatus(options: { includeSnapshots?: boolean } = {}) {
+    let response: unknown;
+    try {
+      response = await this.requestWithRetry({
+        type: "debugStatus",
+        protocolVersion: PREMIND_PROTOCOL_VERSION,
+        payload: options.includeSnapshots ? { includeSnapshots: true } : {},
+      });
+    } catch (error) {
+      if (!options.includeSnapshots || !isUnsupportedOperation(error)) throw error;
+      // An older daemon understands only the empty payload; keep status available.
+      response = await this.requestWithRetry({
+        type: "debugStatus",
+        protocolVersion: PREMIND_PROTOCOL_VERSION,
+        payload: {},
+      });
+    }
     return decodeV1DebugStatusResponse(response);
   }
 
@@ -575,12 +593,10 @@ export class PremindDaemonClient {
       return;
     }
 
+    // Any protocol-v1 envelope comes from a daemon that predates bootstrap
+    // (normally a BAD_REQUEST rejection of `initialize`): keep speaking v1.
     const legacy = responseSchema.safeParse(response);
-    if (
-      legacy.success &&
-      !legacy.data.ok &&
-      legacy.data.error.code === "BAD_REQUEST"
-    ) {
+    if (legacy.success) {
       this.protocolVersion = PREMIND_PROTOCOL_VERSION;
       this.daemonInstanceId = undefined;
       this.supportedOperations.clear();
@@ -649,8 +665,15 @@ export class PremindDaemonClient {
         ("code" in error ||
           error.message.includes("ECONNREFUSED") ||
           error.message.includes("ENOENT"));
+      // A timeout means a daemon is alive but busy. Retrying would stack more
+      // work on it, and the ensureDaemon probe could misjudge it as dead and
+      // start a competing daemon. Let the caller retry on its own schedule.
+      const isTimeout =
+        error instanceof Error &&
+        "code" in error &&
+        error.code === "ETIMEDOUT";
 
-      if (!isSocketError) throw error;
+      if (!isSocketError || isTimeout) throw error;
 
       // Startup errors (including unsupported Node and incompatible daemons)
       // are actionable and must not be hidden behind a later socket retry.
@@ -709,31 +732,52 @@ export class PremindDaemonClient {
     const line = await new Promise<string>((resolve, reject) => {
       const socket = net.createConnection(socketPath);
       let buffer = "";
+      let settled = false;
 
-      socket.setEncoding("utf8");
-      if (this.requestTimeoutMs !== undefined) {
-        socket.setTimeout(this.requestTimeoutMs, () => {
-          const error = Object.assign(
+      const settle = (error: Error | null, result = "") => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(deadline);
+        if (error) {
+          socket.destroy();
+          reject(error);
+        } else {
+          socket.end();
+          resolve(result);
+        }
+      };
+
+      // A hard deadline, unlike socket.setTimeout, also bounds a daemon that
+      // accepted the connection but never answers.
+      const deadline = setTimeout(() => {
+        settle(
+          Object.assign(
             new Error(
               `Premind daemon request timed out after ${this.requestTimeoutMs}ms`,
             ),
             { code: "ETIMEDOUT" },
-          );
-          socket.destroy(error);
-        });
-      }
-      socket.once("error", reject);
+          ),
+        );
+      }, this.requestTimeoutMs);
+
+      socket.setEncoding("utf8");
+      socket.once("error", (error) => settle(error));
+      // A daemon that exits mid-request closes the socket without an error.
+      // Without this, the request would never settle.
+      socket.once("close", () => {
+        settle(
+          Object.assign(new Error(CONNECTION_CLOSED_MESSAGE), {
+            code: "ECONNRESET",
+          }),
+        );
+      });
       socket.once("connect", () => {
         socket.write(`${JSON.stringify(message)}\n`);
       });
       socket.on("data", (chunk) => {
         buffer += chunk;
         const newlineIndex = buffer.indexOf("\n");
-        if (newlineIndex >= 0) {
-          const result = buffer.slice(0, newlineIndex);
-          socket.end();
-          resolve(result);
-        }
+        if (newlineIndex >= 0) settle(null, buffer.slice(0, newlineIndex));
       });
     });
 

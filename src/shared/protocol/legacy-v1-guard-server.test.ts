@@ -33,6 +33,30 @@ const request = (socketPath: string, value: string): Promise<unknown> =>
   });
 
 describe("legacy protocol-v1 guard server", () => {
+  test("closing leaves a historical socket that another daemon has since bound", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "premind-v1-guard-test-"));
+    directories.push(directory);
+    const socketPath = path.join(directory, "premind.sock");
+    const store = new StateStore(path.join(directory, "modern.db"));
+    const router = new Router(store);
+    const guard = new LegacyV1GuardServer(
+      new LegacyV1ProxyRouter(store, "daemon-a", (routed) => router.handle(routed)),
+    );
+    await guard.listen(socketPath);
+    assert.equal(fs.statSync(socketPath).mode & 0o777, 0o600);
+    // Another daemon replaced the socket file, stranding this guard.
+    fs.rmSync(socketPath);
+    const owner = net.createServer();
+    await new Promise<void>((resolve) => owner.listen(socketPath, resolve));
+    try {
+      await guard.close();
+      assert.equal(fs.existsSync(socketPath), true);
+    } finally {
+      await new Promise<void>((resolve) => owner.close(() => resolve()));
+      store.close();
+    }
+  });
+
   test("binds the historical socket and returns parseable frozen errors", async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "premind-v1-guard-test-"));
     directories.push(directory);

@@ -213,7 +213,7 @@ export const requestSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("pruneClosedSessions"),
     protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION),
-    payload: debugStatusPayloadSchema,
+    payload: getGlobalDisabledPayloadSchema,
   }),
 ]);
 

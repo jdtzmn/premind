@@ -37,6 +37,7 @@ export class ReminderHandoffRegistry {
     sessionId: string,
     now = Date.now(),
   ): ReminderBatch | null {
+    if (this.store.isSessionPaused(sessionId)) return null;
     // An adapter that died mid-handoff leaves its batch invisible to the query
     // below and holding the subscription's only batch slot. Reclaim abandoned
     // handoffs first so delivery resumes without waiting for a daemon restart.

@@ -431,7 +431,7 @@ export class Router {
 							activeWatchers: this.store.countActiveWatchers(),
 							lastReapAt: this.store.getLastReapAt(),
 							lastReapCount: this.store.getLastReapCount(),
-							sessions: this.store.listSessionSummaries(),
+							sessions: this.store.listSessionSummaries(request.payload.includeSnapshots === true),
 						}),
 					);
 				case "pruneClosedSessions":

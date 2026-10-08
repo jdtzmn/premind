@@ -7,6 +7,7 @@ import {
   acquireDaemonStartLock,
   DAEMON_START_LOCK_TOKEN_ENV,
   probeDaemon,
+  isDaemonStarting,
   releaseDaemonStartLock,
   waitForDaemon,
 } from "../shared/daemon-startup.ts";
@@ -53,6 +54,12 @@ export async function ensureDaemonRunning(socketPath = PREMIND_SOCKET_PATH) {
 
   try {
     if (await isDaemonRunning(socketPath)) return;
+    // A daemon that holds the daemon lock is starting up. Spawning another
+    // would only add load; wait for it instead.
+    if (isDaemonStarting()) {
+      if (await waitForSocket(socketPath)) return;
+      throw new Error("premind daemon is still starting; retry shortly");
+    }
 
     const runner = findRunner();
     if (!runner) {

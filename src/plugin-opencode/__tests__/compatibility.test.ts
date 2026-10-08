@@ -118,8 +118,8 @@ describe("premind plugin compatibility harness", () => {
     assert.ok(commands["premind:doctor"], "should register premind:doctor command")
     assert.ok(commands["premind:deliver"], "should register premind:deliver command")
     assert.ok(commands["premind-send-now"], "should retain premind-send-now alias")
-    assert.equal(commands["premind-pause"], undefined)
-    assert.equal(commands["premind-resume"], undefined)
+    assert.ok(commands["premind:pause"], "should register premind:pause command")
+    assert.ok(commands["premind:resume"], "should register premind:resume command")
     assert.ok(commands["premind-disable"], "should register premind-disable command")
     assert.ok(commands["premind-enable"], "should register premind-enable command")
 
@@ -153,9 +153,21 @@ describe("premind plugin compatibility harness", () => {
     } catch (error) {
       assert.match((error as Error).message, /PREMIND_HANDLED/)
     }
-    const statusPrompt = syncPrompts.find((p) => p.text.includes("premind status"))
+    const statusPrompt = syncPrompts.find((p) => p.text.includes("premind · running"))
     assert.ok(statusPrompt, "should have injected status response")
     assert.equal(statusPrompt.noReply, true, "status response should be noReply")
+
+    const debugMarker = commands["premind:debug-status"].template
+    try {
+      await runtime["chat.message"](
+        { sessionID: "session-1" },
+        { message: { parts: [{ type: "text", text: debugMarker }] }, parts: [{ type: "text", text: debugMarker }] },
+      )
+      assert.fail("expected handled debug command")
+    } catch (error) {
+      assert.match((error as Error).message, /PREMIND_HANDLED/)
+    }
+    assert.ok(syncPrompts.some((prompt) => prompt.text.includes("premind status v")))
 
 
     const doctorMarker = commands["premind:doctor"].template
@@ -170,6 +182,7 @@ describe("premind plugin compatibility harness", () => {
     }
     const doctorPrompt = syncPrompts.find((prompt) => prompt.text.includes("premind doctor"))
     assert.ok(doctorPrompt, "should have injected doctor response")
+    assert.match(doctorPrompt.text, /daemon lock: /)
     assert.match(doctorPrompt.text, /host: opencode/)
 
 
@@ -214,12 +227,28 @@ describe("premind plugin compatibility harness", () => {
     }
     assert.ok(operations.includes("setGlobalDisabled:false"))
 
+    // 7c. Slash commands via chat.message: premind:pause and premind:resume.
+    for (const name of ["premind:pause", "premind:resume"]) {
+      const marker = commands[name].template
+      try {
+        await runtime["chat.message"](
+          { sessionID: "session-1" },
+          { message: { parts: [{ type: "text", text: marker }] }, parts: [{ type: "text", text: marker }] },
+        )
+        assert.fail("expected throw for handled command")
+      } catch (error) {
+        assert.match((error as Error).message, /PREMIND_HANDLED/)
+      }
+    }
+    assert.ok(operations.includes("pause:session-1"))
+    assert.ok(operations.includes("resume:session-1"))
+
     // 8. Tools are registered and callable.
     assert.ok(runtime.tool.premind_status, "premind_status tool should exist")
     assert.ok(runtime.tool.premind_deliver, "premind_deliver tool should exist")
     assert.ok(runtime.tool.premind_send_now, "premind_send_now alias should exist")
-    assert.equal(runtime.tool.premind_pause, undefined)
-    assert.equal(runtime.tool.premind_resume, undefined)
+    assert.ok(runtime.tool.premind_pause, "premind_pause tool should exist")
+    assert.ok(runtime.tool.premind_resume, "premind_resume tool should exist")
     assert.ok(runtime.tool.premind_set_active_checkout, "premind_set_active_checkout tool should exist")
     assert.equal(runtime.tool.premind_activate_worktree, undefined)
     assert.ok(runtime.tool.premind_subscribe, "premind_subscribe tool should exist")
@@ -233,7 +262,8 @@ describe("premind plugin compatibility harness", () => {
     assert.ok(runtime.tool.premind_probe, "premind_probe tool should exist")
 
     const toolStatusResult = await runtime.tool.premind_status.execute({}, { sessionID: "session-1" })
-    assert.match(toolStatusResult, /premind status/)
+    assert.match(toolStatusResult, /premind · running/)
+    assert.match(await runtime.tool.premind_debug_status.execute({}, { sessionID: "session-1" }), /premind status v/)
 
     const toolDeliverResult = await runtime.tool.premind_deliver.execute({}, { sessionID: "session-1" })
     assert.match(toolDeliverResult, /delivering PR updates now/)
@@ -259,10 +289,24 @@ describe("premind plugin compatibility harness", () => {
     assert.ok(operations.includes("subscribe:session-1:acme/repo:13"))
     assert.ok(operations.includes("unsubscribe:session-1:acme/repo:13"))
 
-    const toolDisableResult = await runtime.tool.premind_disable.execute({}, { sessionID: "session-1" })
+    for (const name of ["premind_disable", "premind_enable"] as const) {
+      assert.match(runtime.tool[name].description ?? "", /globally, for every session and project/)
+      assert.match(runtime.tool[name].description ?? "", /only when the user explicitly asks/)
+      const globalOperationCount = operations.filter((operation) => operation.startsWith("setGlobalDisabled:")).length
+      for (const args of [{}, { confirmGlobal: false }]) {
+        const refused = await runtime.tool[name].execute(args, { sessionID: "session-1" })
+        assert.match(refused, /refused to (disable|enable) polling globally.*confirmGlobal: true/)
+      }
+      assert.equal(
+        operations.filter((operation) => operation.startsWith("setGlobalDisabled:")).length,
+        globalOperationCount,
+      )
+    }
+
+    const toolDisableResult = await runtime.tool.premind_disable.execute({ confirmGlobal: true }, { sessionID: "session-1" })
     assert.match(toolDisableResult, /premind disabled globally/)
 
-    const toolEnableResult = await runtime.tool.premind_enable.execute({}, { sessionID: "session-1" })
+    const toolEnableResult = await runtime.tool.premind_enable.execute({ confirmGlobal: true }, { sessionID: "session-1" })
     assert.match(toolEnableResult, /premind re-enabled globally/)
 
     const toolProbeResult = await runtime.tool.premind_probe.execute({}, { sessionID: "session-1" })

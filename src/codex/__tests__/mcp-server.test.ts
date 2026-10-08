@@ -37,6 +37,8 @@ const unusedDependencies = (): CodexMcpDependencies => {
 			debugStatus: unused,
 			subscribe: unused,
 			unsubscribe: unused,
+			pauseSession: unused,
+			resumeSession: unused,
 		},
 		pluginData: "/unused",
 		cwd: "/unused",
@@ -113,7 +115,7 @@ test("negotiates current and legacy MCP protocol versions", async () => {
 	);
 });
 
-test("discovers only the four supported Codex controls", async () => {
+test("discovers only the supported Codex controls", async () => {
 	const result = await handleCodexMcpRequest(
 		{ jsonrpc: "2.0", id: 1, method: "tools/list" },
 		unusedDependencies(),
@@ -124,9 +126,12 @@ test("discovers only the four supported Codex controls", async () => {
 		),
 		[
 			"premind_status",
-			"premind_activate_worktree",
+			"premind_debug_status",
+			"premind_set_active_checkout",
 			"premind_subscribe",
 			"premind_unsubscribe",
+			"premind_pause",
+			"premind_resume",
 		],
 	);
 });
@@ -205,6 +210,8 @@ test("round-trips explicit handles without cross-routing sessions in one cwd", a
 			},
 			subscribe: client.subscribe.bind(client),
 			unsubscribe: client.unsubscribe.bind(client),
+			pauseSession: client.pauseSession.bind(client),
+			resumeSession: client.resumeSession.bind(client),
 		} satisfies CodexMcpDependencies["client"];
 		const raced = await handleCodexMcpRequest(
 			call("premind_subscribe", {
@@ -286,6 +293,14 @@ test("rejects unknown session handles before mutation IPC", async () => {
 			mutationCalled = true;
 			throw new Error("unexpected mutation");
 		},
+		async pauseSession() {
+			mutationCalled = true;
+			throw new Error("unexpected mutation");
+		},
+		async resumeSession() {
+			mutationCalled = true;
+			throw new Error("unexpected mutation");
+		},
 	} satisfies CodexMcpDependencies["client"];
 	const result = await handleCodexMcpRequest(
 		call("premind_subscribe", {
@@ -318,6 +333,12 @@ test("returns standard JSON-RPC errors without starting the daemon", async () =>
 				throw new Error("unused");
 			},
 			async unsubscribe() {
+				throw new Error("unused");
+			},
+			async pauseSession() {
+				throw new Error("unused");
+			},
+			async resumeSession() {
 				throw new Error("unused");
 			},
 		},
@@ -383,6 +404,8 @@ test("returns prerequisite remediation as a server error", async () => {
 			debugStatus: unused,
 			subscribe: unused,
 			unsubscribe: unused,
+			pauseSession: unused,
+			resumeSession: unused,
 		},
 		pluginData: "/unused",
 		cwd: "/unused",
@@ -473,6 +496,12 @@ test("redacts daemon internals and returns execution failures as tool results", 
 				async unsubscribe() {
 					throw new Error("unused");
 				},
+				async pauseSession() {
+					throw new Error("unused");
+				},
+				async resumeSession() {
+					throw new Error("unused");
+				},
 			},
 			pluginData,
 			cwd: pluginData,
@@ -488,6 +517,12 @@ test("redacts daemon internals and returns execution failures as tool results", 
 		assert.equal(output.includes("/private/worktree"), false);
 		assert.equal(output.includes("/private/git"), false);
 
+		const debug = await handleCodexMcpRequest(
+			call("premind_debug_status", { sessionHandle: binding.sessionHandle }),
+			dependencies,
+		);
+		assert.match(JSON.stringify(debug), /premind status v/);
+		assert.match(JSON.stringify(debug), /codex:thread-1/);
 		const failed = await handleCodexMcpRequest(
 			call("premind_status", { sessionHandle: binding.sessionHandle }),
 			{

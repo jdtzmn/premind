@@ -1,10 +1,19 @@
 import fs from "node:fs";
 import net from "node:net";
 import type { LegacyV1ProxyRouter } from "./legacy-v1-proxy.ts";
-import { isSocketReachable } from "../daemon-startup.ts";
+import { isSocketReachable, SOCKET_TAKEOVER_PROBE_MS } from "../daemon-startup.ts";
+
+const socketInode = (socketPath: string): number | undefined => {
+  try {
+    return fs.statSync(socketPath).ino;
+  } catch {
+    return undefined;
+  }
+};
 
 export class LegacyV1GuardServer {
   private socketPath?: string;
+  private socketInode?: number;
   private readonly server: net.Server;
 
   constructor(
@@ -34,7 +43,7 @@ export class LegacyV1GuardServer {
   }
 
   async listen(socketPath: string): Promise<void> {
-    if (await isSocketReachable(socketPath)) {
+    if (await isSocketReachable(socketPath, SOCKET_TAKEOVER_PROBE_MS)) {
       throw new Error(`LEGACY_SOCKET_BUSY: ${socketPath}`);
     }
     fs.rmSync(socketPath, { force: true });
@@ -49,14 +58,27 @@ export class LegacyV1GuardServer {
     // Owner-only: the historical path is predictable, so restrict who connects.
     fs.chmodSync(socketPath, 0o600);
     this.socketPath = socketPath;
+    this.socketInode = socketInode(socketPath);
   }
 
   async close(): Promise<void> {
-    await new Promise<void>((resolve, reject) => {
-      this.server.close((error) => (error ? reject(error) : resolve()));
-    });
-    if (this.socketPath) fs.rmSync(this.socketPath, { force: true });
+    // Closing a listening Unix socket unlinks its path. If another daemon has
+    // since rebound the historical path, leave it alone and just let this
+    // handle die with the process.
+    const ownsSocket =
+      this.socketPath !== undefined &&
+      this.socketInode !== undefined &&
+      socketInode(this.socketPath) === this.socketInode;
+    if (this.socketPath === undefined || ownsSocket) {
+      await new Promise<void>((resolve, reject) => {
+        this.server.close((error) => (error ? reject(error) : resolve()));
+      });
+      if (this.socketPath) fs.rmSync(this.socketPath, { force: true });
+    } else {
+      this.server.unref();
+    }
     this.socketPath = undefined;
+    this.socketInode = undefined;
   }
 
   private async handleLine(line: string) {

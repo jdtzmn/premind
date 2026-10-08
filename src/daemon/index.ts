@@ -14,7 +14,14 @@ import {
   PREMIND_SESSION_STALE_MS,
 } from "../shared/constants.ts"
 import path from "node:path"
-import { DAEMON_START_LOCK_TOKEN_ENV, isSocketReachable } from "../shared/daemon-startup.ts"
+import {
+  acquireDaemonLock,
+  DAEMON_START_LOCK_TOKEN_ENV,
+  holdsDaemonLock,
+  isSocketReachable,
+  releaseDaemonLock,
+  type DaemonLock,
+} from "../shared/daemon-startup.ts"
 import {
   instanceSocketPath,
   pruneUnreachableInstances,
@@ -48,11 +55,31 @@ const logger = createLogger("daemon")
 let abortStartup: (() => Promise<void>) | undefined
 
 const STALENESS_SWEEP_INTERVAL_MS = 5 * 60 * 1000
+// How often a running daemon confirms it still owns the daemon lock.
+const DAEMON_LOCK_CHECK_INTERVAL_MS = 15 * 1000
 
 async function main() {
   logger.info("daemon starting", { pid: process.pid, logFile: PREMIND_DAEMON_LOG_PATH })
+  // Claim the daemon lock before any startup work, so a daemon that loses the
+  // race exits immediately instead of competing for the database and socket.
+  const lock = await acquireDaemonLock()
+  if (!lock) {
+    logger.info("daemon startup skipped; another daemon holds the daemon lock")
+    return
+  }
+  try {
+    await startDaemon(lock)
+  } catch (error) {
+    releaseDaemonLock(lock)
+    throw error
+  }
+}
+
+async function startDaemon(lock: DaemonLock) {
+  // A daemon from before the daemon lock existed may still own the socket.
   if (await isSocketReachable()) {
     logger.info("daemon startup skipped; another process owns the socket")
+    releaseDaemonLock(lock)
     return
   }
   const compatibility = reconcileCompatibilityMarker({
@@ -196,6 +223,15 @@ async function main() {
     logger.info("detail file cleanup", { removed: cleanedFiles })
   }
 
+  // Startup work can take seconds under load. If the lock was reclaimed in the
+  // meantime, another daemon is taking over: leave the socket to it.
+  if (!holdsDaemonLock(lock)) {
+    logger.warn("daemon lock lost during startup; exiting before listening")
+    await abortStartup?.()
+    abortStartup = undefined
+    server.store.close()
+    return
+  }
   await server.listen(instanceSocket)
   const publishDescriptor = () => {
     try {
@@ -328,10 +364,21 @@ async function main() {
     pullRequestWatcher.close()
     void guard.close()
       .then(() => server.close(instanceSocket))
-      .finally(withdrawDescriptor)
+      .finally(() => {
+        withdrawDescriptor()
+        releaseDaemonLock(lock)
+      })
       .finally(() => process.exit(1))
   }, 10_000)
   if (typeof authorityInterval.unref === "function") authorityInterval.unref()
+  // A daemon whose lock was reclaimed (for example after it stopped answering)
+  // must stop polling and writing so two daemons never run side by side.
+  const lockCheckInterval = setInterval(() => {
+    if (holdsDaemonLock(lock)) return
+    logger.warn("daemon lock taken over by another daemon; shutting down")
+    lifecycle.requestStop("lock-lost")
+  }, DAEMON_LOCK_CHECK_INTERVAL_MS)
+  if (typeof lockCheckInterval.unref === "function") lockCheckInterval.unref()
 
   const lifecycle = new DaemonLifecycleRuntime({
     hasDemand: () => server.hasDemand(),
@@ -339,6 +386,7 @@ async function main() {
     onStopping: async (reason) => {
       clearInterval(reapInterval)
       clearInterval(authorityInterval)
+      clearInterval(lockCheckInterval)
       discoveryScheduler.stop()
       prScheduler.stop()
       pullRequestWatcher.close()
@@ -348,6 +396,7 @@ async function main() {
       logger.info("graceful shutdown", { reason })
       withdrawDescriptor()
       await server.close(instanceSocket)
+      releaseDaemonLock(lock)
     },
     onStopped: () => process.exit(0),
     onError: (error) => {

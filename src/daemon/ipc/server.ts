@@ -19,7 +19,10 @@ import {
 } from "../../shared/protocol/v2.ts";
 import type { InstanceDescriptorV1 } from "../../shared/protocol/descriptor.ts";
 import { PREMIND_COMMIT, PREMIND_VERSION } from "../../shared/version.ts";
-import { isSocketReachable } from "../../shared/daemon-startup.ts";
+import {
+  isSocketReachable,
+  SOCKET_TAKEOVER_PROBE_MS,
+} from "../../shared/daemon-startup.ts";
 import { Router } from "./router.ts";
 import { StateStore } from "../persistence/store.ts";
 import { ReminderHandoffRegistry } from "../reminders/reminder-handoff-registry.ts";
@@ -68,6 +71,15 @@ const SUPPORTED_OPERATIONS = [
   "pruneClosedSessions",
 ] as const;
 
+
+const socketInode = (socketPath: string): number | undefined => {
+	try {
+		return fs.statSync(socketPath).ino;
+	} catch {
+		return undefined;
+	}
+};
+
 export class IpcServer {
 	private readonly logger = createLogger("daemon.ipc");
 	private readonly instanceId = randomUUID();
@@ -78,6 +90,7 @@ export class IpcServer {
 	readonly reminderHandoffs: ReminderHandoffRegistry;
 	private readonly router: Router;
 	private demandChangeListener: () => void = () => {};
+	private socketInode: number | undefined;
 	private readonly server = net.createServer((socket) => {
 		let buffer = "";
 
@@ -151,7 +164,9 @@ export class IpcServer {
 		this.socketPath = socketPath;
 		this.lifecycleState = "starting";
 		if (fs.existsSync(socketPath)) {
-			if (await isSocketReachable(socketPath)) {
+			// A busy daemon can take well over the default probe to accept a
+			// connection. Deleting its socket would strand it, so probe patiently.
+			if (await isSocketReachable(socketPath, SOCKET_TAKEOVER_PROBE_MS)) {
 				throw new Error(`premind daemon already owns socket: ${socketPath}`);
 			}
 			fs.rmSync(socketPath);
@@ -162,19 +177,30 @@ export class IpcServer {
 		});
 		// Owner-only: another local user must not drive this daemon.
 		fs.chmodSync(socketPath, 0o600);
+		this.socketInode = socketInode(socketPath);
 		this.lifecycleState = "ready";
 		this.logger.info("listening", { socketPath });
 	}
 
 	async close(socketPath = PREMIND_SOCKET_PATH) {
 		this.lifecycleState = "draining";
-		await new Promise<void>((resolve, reject) => {
-			this.server.close((error) => {
-				if (error) reject(error);
-				else resolve();
+		// Closing a listening Unix socket also unlinks its path. If another daemon
+		// has since bound that path, closing would cut it off, so only stop
+		// holding the process open and let the handle die with this process.
+		const ownsSocket =
+			this.socketInode !== undefined &&
+			socketInode(socketPath) === this.socketInode;
+		if (ownsSocket || this.socketInode === undefined) {
+			await new Promise<void>((resolve, reject) => {
+				this.server.close((error) => {
+					if (error) reject(error);
+					else resolve();
+				});
 			});
-		});
-		if (fs.existsSync(socketPath)) fs.rmSync(socketPath);
+			if (fs.existsSync(socketPath) && ownsSocket) fs.rmSync(socketPath);
+		} else {
+			this.server.unref();
+		}
 		this.reminderHandoffs.close();
 		this.worktreeBindings.close();
 		this.store.close();

@@ -286,7 +286,7 @@ export const setGlobalDisabledPayloadSchema = z
 
 export const getGlobalDisabledPayloadSchema = z.object({}).strict();
 
-export const debugStatusPayloadSchema = z.object({}).strict();
+export const debugStatusPayloadSchema = z.object({ includeSnapshots: z.boolean().optional() }).strict();
 
 export const daemonInfoSchema = z
   .object({
@@ -300,6 +300,17 @@ export const daemonInfoSchema = z
     operations: z.array(z.string().min(1)).optional(),
   })
   .strict();
+
+export const cachedPrStatusSnapshotSchema = z.object({
+  title: z.string(),
+  url: z.string().url(),
+  state: z.string(),
+  isDraft: z.boolean(),
+  mergeStateStatus: z.string().optional(),
+  reviewDecision: z.string().nullable().optional(),
+  checks: z.array(z.object({ state: z.string().optional() }).strict()),
+  fetchedAt: z.number().int(),
+}).strict();
 
 export const debugStatusResponseSchema = z
   .object({
@@ -345,6 +356,7 @@ export const debugStatusResponseSchema = z
                   writePolicy: subscriptionWritePolicySchema,
                   state: z.enum(["active", "unsubscribed"]),
                   pendingEventCount: z.number().int().nonnegative(),
+                  snapshot: cachedPrStatusSnapshotSchema.nullable().optional(),
                 })
                 .strict(),
             )

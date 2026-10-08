@@ -58,7 +58,7 @@ export const renderPremindStatus = (status: {
       pendingEventCount: number
     }>
   }>
-}, now = Date.now(), versionLabel = PREMIND_VERSION_LABEL) => {
+}, now = Date.now(), versionLabel = PREMIND_VERSION_LABEL, currentSessionId?: string) => {
   const lastReapLine = status.lastReapAt === null
     ? "- last reap: never"
     : `- last reap: ${formatRelativeTime(status.lastReapAt, now)} (${status.lastReapCount} reaped)`
@@ -92,7 +92,7 @@ export const renderPremindStatus = (status: {
         )
         .join(", ")
       const subscriptionSummary = subscriptions ? ` | subscriptions ${subscriptions}` : ""
-      return `- session ${session.sessionId}: ${session.repo} @ ${session.branch}${session.prNumber ? ` (PR #${session.prNumber})` : ""} | ${session.status}/${session.busyState} | pending ${session.pendingReminderCount}${worktree}${subscriptionSummary}`
+      return `- session ${session.sessionId}${session.sessionId === currentSessionId ? " (current)" : ""}: ${session.repo} @ ${session.branch}${session.prNumber ? ` (PR #${session.prNumber})` : ""} | ${session.status}/${session.busyState} | pending ${session.pendingReminderCount}${worktree}${subscriptionSummary}`
     }),
   )
   return lines.join("\n")

@@ -7,6 +7,7 @@ import {
   isDaemonStartLockHeldBy,
   isSocketReachable,
   releaseDaemonStartLock,
+  SOCKET_TAKEOVER_PROBE_MS,
 } from "../daemon-startup.ts";
 import { withCompatibilityMarkerLockAsync } from "./compatibility-marker-file.ts";
 
@@ -81,7 +82,9 @@ export const bridgeLegacyStorage = async (
     return await withCompatibilityMarkerLockAsync(
       options.compatibilityLockPath,
       async () => {
-        if (await isSocketReachable(options.historicalSocketPath)) {
+        if (
+          await isSocketReachable(options.historicalSocketPath, SOCKET_TAKEOVER_PROBE_MS)
+        ) {
           throw new Error("LEGACY_DAEMON_ACTIVE: historical socket is reachable");
         }
         if (

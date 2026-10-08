@@ -189,3 +189,39 @@ describe("GitHubHttpClient.graphql", () => {
     )
   })
 })
+
+describe("GitHubHttpClient request deadline", () => {
+  // Mimics fetch on a dead connection: it settles only when aborted. A real
+  // stuck socket keeps the event loop alive; AbortSignal.timeout's timer does
+  // not on Node 22, so hold a ref'd timer until the request settles.
+  const hangingFetch: typeof fetch = (_input, init) =>
+    new Promise((_resolve, reject) => {
+      const keepAlive = setInterval(() => {}, 1_000)
+      init?.signal?.addEventListener("abort", () => {
+        clearInterval(keepAlive)
+        reject(init.signal!.reason)
+      })
+    })
+
+  test("aborts a GET that never responds", async () => {
+    const client = new GitHubHttpClient({
+      fetchImpl: hangingFetch,
+      tokenProvider: authHeader,
+      requestTimeoutMs: 25,
+    })
+    const startedAt = Date.now()
+    await assert.rejects(client.get("user"), { name: "TimeoutError" })
+    assert.ok(Date.now() - startedAt < 1_000)
+  })
+
+  test("aborts a GraphQL POST that never responds", async () => {
+    const client = new GitHubHttpClient({
+      fetchImpl: hangingFetch,
+      tokenProvider: authHeader,
+      requestTimeoutMs: 25,
+    })
+    await assert.rejects(client.graphql("query { viewer { login } }", {}), {
+      name: "TimeoutError",
+    })
+  })
+})
