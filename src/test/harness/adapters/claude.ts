@@ -2,8 +2,6 @@
 
 // @ts-expect-error The shipped Claude hook runtime is plain JavaScript.
 import { handleHook } from "../../../../plugin-claude/bin/lib.mjs"
-// @ts-expect-error The shipped Claude MCP runtime is plain JavaScript.
-import { handleMcpRequest } from "../../../../plugin-claude/bin/mcp-server.mjs"
 import { harnessToolName } from "./tool-names.ts"
 import type { AdapterDriver, DeliveryCapture, StartIdleArgs } from "./types.ts"
 
@@ -126,6 +124,10 @@ export const claudeDriver: AdapterDriver = {
 		return {
 			captured: harness.captured,
 			async invoke(capabilityId, params = {}) {
+				// Loaded lazily: the MCP server imports the built daemon launcher, which
+				// delivery-only suites (test:harness) intentionally run without.
+				// @ts-expect-error The shipped Claude MCP runtime is plain JavaScript.
+				const { handleMcpRequest } = await import("../../../../plugin-claude/bin/mcp-server.mjs")
 				const result = (await handleMcpRequest(
 					{
 						method: "tools/call",
