@@ -57,7 +57,7 @@ type DaemonClientLike = {
 	registerSession: (
 		payload: Omit<RegisterSessionPayload, "clientId">,
 	) => Promise<unknown>;
-	unregisterSession: (sessionId: string) => Promise<unknown>;
+	releaseSessionOwner: (sessionId: string) => Promise<unknown>;
 	ensureSessionControl: (
 		payload: Omit<EnsureSessionControlPayload, "clientId">,
 	) => Promise<unknown>;
@@ -769,7 +769,16 @@ export const createPremindPiExtension = (
 
 			if (!client) return;
 			try {
-				if (sessionId) await client.unregisterSession(sessionId);
+				// Pi fires session_shutdown for reload, quit, new, resume, and fork.
+				// Release ownership instead of deleting the session: a dormant
+				// session keeps its subscriptions, cursors, worktree binding, and
+				// opt-outs, and the next session_start for the same session file
+				// reactivates it. Deleting it cascaded all of that away (#86).
+				if (sessionId) await client.releaseSessionOwner(sessionId);
+			} catch {
+				// Best-effort: the session may already be closed by stale-session reaping.
+			}
+			try {
 				await client.release();
 			} catch {
 				// Shutdown must be best-effort; stale sessions can be cleaned by /premind:prune.
