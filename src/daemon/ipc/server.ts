@@ -17,6 +17,7 @@ import {
   toProtocolV2Response,
   type ProtocolV2Response,
 } from "../../shared/protocol/v2.ts";
+import type { InstanceDescriptorV1 } from "../../shared/protocol/descriptor.ts";
 import { PREMIND_COMMIT, PREMIND_VERSION } from "../../shared/version.ts";
 import { isSocketReachable } from "../../shared/daemon-startup.ts";
 import { Router } from "./router.ts";
@@ -25,6 +26,10 @@ import { ReminderHandoffRegistry } from "../reminders/reminder-handoff-registry.
 import { WorktreeBindingRegistry } from "../worktrees/worktree-binding-registry.ts";
 
 const SUPPORTED_PROTOCOLS = { min: 1, max: PROTOCOL_V2 } as const;
+const STORAGE_CAPABILITIES = {
+  epoch: 1,
+  capabilities: ["legacy-singleton-v1"],
+};
 
 const SUPPORTED_OPERATIONS = [
   "registerClient",
@@ -155,6 +160,8 @@ export class IpcServer {
 			this.server.once("error", reject);
 			this.server.listen(socketPath, () => resolve());
 		});
+		// Owner-only: another local user must not drive this daemon.
+		fs.chmodSync(socketPath, 0o600);
 		this.lifecycleState = "ready";
 		this.logger.info("listening", { socketPath });
 	}
@@ -243,25 +250,37 @@ export class IpcServer {
 			ok: true,
 			bootstrapVersion: 1,
 			result: {
-				daemon: {
-					instanceId: this.instanceId,
-					pid: process.pid,
-					version: PREMIND_VERSION,
-					commit: PREMIND_COMMIT,
-					socketPath: this.socketPath,
-					lifecycleState: this.lifecycleState,
-				},
+				daemon: this.identity(),
 				protocols: { ...SUPPORTED_PROTOCOLS, selected },
 				capabilities: {
 					operations: [...SUPPORTED_OPERATIONS],
 					rollingSessions: false,
 				},
-				storage: {
-					epoch: 1,
-					capabilities: ["legacy-singleton-v1"],
-				},
+				storage: STORAGE_CAPABILITIES,
 			},
 		});
+	}
+
+	/** The permanent descriptor-v1 this instance publishes for discovery. */
+	describe(heartbeatAt = Date.now()): InstanceDescriptorV1 {
+		return {
+			descriptorFormat: 1,
+			...this.identity(),
+			protocols: { ...SUPPORTED_PROTOCOLS },
+			storage: STORAGE_CAPABILITIES,
+			heartbeatAt,
+		};
+	}
+
+	private identity() {
+		return {
+			instanceId: this.instanceId,
+			pid: process.pid,
+			version: PREMIND_VERSION,
+			commit: PREMIND_COMMIT,
+			socketPath: this.socketPath,
+			lifecycleState: this.lifecycleState,
+		};
 	}
 
 	private isRecord(value: unknown): value is Record<string, unknown> {

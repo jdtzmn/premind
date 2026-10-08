@@ -20,11 +20,6 @@ export const PREMIND_DB_PATH = path.join(
   "1",
   "premind.db",
 );
-// Clients discover this socket through the bootstrap handshake on
-// PREMIND_SOCKET_PATH, so it sits beside that socket and inherits its isolation.
-export const PREMIND_MODERN_SOCKET_PATH =
-  process.env.PREMIND_MODERN_SOCKET_PATH ??
-  path.join(path.dirname(PREMIND_SOCKET_PATH), "premind-modern-epoch-1.sock");
 export const PREMIND_COMPATIBILITY_MARKER_PATH = path.join(
   PREMIND_STATE_DIR,
   "compatibility-v1.json",

@@ -7,14 +7,22 @@ import {
   PREMIND_DAEMON_LOG_PATH,
   PREMIND_DB_PATH,
   PREMIND_LEGACY_DB_PATH,
-  PREMIND_MODERN_SOCKET_PATH,
   PREMIND_SOCKET_PATH,
   PREMIND_STATE_DIR,
   PREMIND_IDLE_SHUTDOWN_GRACE_MS,
   PREMIND_REMINDER_HANDOFF_STALE_MS,
   PREMIND_SESSION_STALE_MS,
 } from "../shared/constants.ts"
+import path from "node:path"
 import { DAEMON_START_LOCK_TOKEN_ENV, isSocketReachable } from "../shared/daemon-startup.ts"
+import {
+  instanceSocketPath,
+  pruneUnreachableInstances,
+  removeInstanceDescriptor,
+  instanceRuntimeBaseDir,
+  resolveInstanceRuntimeDir,
+  writeInstanceDescriptor,
+} from "../shared/protocol/instance-registry.ts"
 import { reconcileCompatibilityMarker } from "../shared/protocol/compatibility-marker-reconciler.ts"
 import { LegacyV1GuardServer } from "../shared/protocol/legacy-v1-guard-server.ts"
 import { LegacyV1ProxyRouter } from "../shared/protocol/legacy-v1-proxy.ts"
@@ -33,6 +41,11 @@ import { DetailFileWriter } from "./reminders/detail-files.ts"
 import { DaemonLifecycleRuntime } from "./lifecycle/daemon-lifecycle-runtime.ts"
 
 const logger = createLogger("daemon")
+
+// Undoes startup side effects if main() fails before the lifecycle owns them.
+// Without this a failed start keeps its leases until they expire and blocks
+// the next daemon with COORDINATOR_BUSY.
+let abortStartup: (() => Promise<void>) | undefined
 
 const STALENESS_SWEEP_INTERVAL_MS = 5 * 60 * 1000
 
@@ -58,6 +71,12 @@ async function main() {
     },
   })
   let runtime: { server: IpcServer; guard: LegacyV1GuardServer } | undefined
+  // Each instance owns a unique, owner-only socket; the historical socket stays
+  // the stable bootstrap entry point that advertises it.
+  const runtimeDir = resolveInstanceRuntimeDir(
+    instanceRuntimeBaseDir(path.dirname(PREMIND_SOCKET_PATH)),
+  )
+  let instanceSocket = ""
   await bridgeLegacyStorage({
     stateDir: PREMIND_STATE_DIR,
     legacyDbPath: PREMIND_LEGACY_DB_PATH,
@@ -82,7 +101,8 @@ async function main() {
       )
       // Current clients bootstrap on the historical socket and are pointed at
       // the modern socket; historical v1 clients stay on the frozen proxy.
-      server.advertiseSocketPath(PREMIND_MODERN_SOCKET_PATH)
+      instanceSocket = instanceSocketPath(runtimeDir, server.daemonInstanceId)
+      server.advertiseSocketPath(instanceSocket)
       const guard = new LegacyV1GuardServer(proxy, (value) => server.bootstrap(value))
       await guard.listen(PREMIND_SOCKET_PATH)
       runtime = { server, guard }
@@ -94,7 +114,14 @@ async function main() {
     instanceId: server.daemonInstanceId,
     incarnationNonce: randomUUID(),
   })
+  let releaseCoordinator = () => {}
+  abortStartup = async () => {
+    releaseCoordinator()
+    server.store.releaseDaemonInstanceLease(daemonLease)
+    await guard.close()
+  }
   let coordinatorLease = server.store.claimCoordinatorLease(daemonLease)
+  releaseCoordinator = () => server.store.releaseCoordinatorLease(coordinatorLease)
   const github = new GitHubClient()
   const discoveryWatcher = new BranchDiscoveryWatcher(server.store, github, server.worktreeBindings)
 
@@ -169,7 +196,31 @@ async function main() {
     logger.info("detail file cleanup", { removed: cleanedFiles })
   }
 
-  await server.listen(PREMIND_MODERN_SOCKET_PATH)
+  await server.listen(instanceSocket)
+  const publishDescriptor = () => {
+    try {
+      writeInstanceDescriptor(PREMIND_STATE_DIR, server.describe())
+    } catch (error) {
+      logger.warn("failed to publish instance descriptor", {
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
+  const withdrawDescriptor = () => {
+    try {
+      removeInstanceDescriptor(PREMIND_STATE_DIR, server.daemonInstanceId)
+    } catch {
+      // A stale descriptor is pruned by the next daemon; never block shutdown.
+    }
+  }
+  publishDescriptor()
+  const prunedInstances = await pruneUnreachableInstances(
+    PREMIND_STATE_DIR,
+    runtimeDir,
+    isSocketReachable,
+    server.daemonInstanceId,
+  )
+  if (prunedInstances > 0) logger.info("pruned stale instances", { prunedInstances })
 
   const discoveryScheduler = new PollScheduler(
     "branch-discovery",
@@ -254,6 +305,7 @@ async function main() {
 
   let authorityStopping = false
   const authorityInterval = setInterval(() => {
+    publishDescriptor()
     const renewedDaemon = server.store.renewDaemonInstanceLease(daemonLease)
     if (!renewedDaemon) {
       authorityStopping = true
@@ -275,7 +327,8 @@ async function main() {
     prScheduler.stop()
     pullRequestWatcher.close()
     void guard.close()
-      .then(() => server.close(PREMIND_MODERN_SOCKET_PATH))
+      .then(() => server.close(instanceSocket))
+      .finally(withdrawDescriptor)
       .finally(() => process.exit(1))
   }, 10_000)
   if (typeof authorityInterval.unref === "function") authorityInterval.unref()
@@ -293,7 +346,8 @@ async function main() {
       server.store.releaseCoordinatorLease(coordinatorLease)
       server.store.releaseDaemonInstanceLease(daemonLease)
       logger.info("graceful shutdown", { reason })
-      await server.close(PREMIND_MODERN_SOCKET_PATH)
+      withdrawDescriptor()
+      await server.close(instanceSocket)
     },
     onStopped: () => process.exit(0),
     onError: (error) => {
@@ -305,13 +359,21 @@ async function main() {
   })
   server.setDemandChangeListener(() => lifecycle.evaluateDemand())
   lifecycle.start()
+  abortStartup = undefined
 
   const cleanup = () => lifecycle.requestStop("signal")
   process.on("SIGINT", cleanup)
   process.on("SIGTERM", cleanup)
 }
 
-void main().catch((error) => {
+void main().catch(async (error) => {
   logger.error("fatal error", { error: error instanceof Error ? error.message : String(error) })
+  try {
+    await abortStartup?.()
+  } catch (cleanupError) {
+    logger.warn("startup cleanup failed", {
+      error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+    })
+  }
   process.exit(1)
 })

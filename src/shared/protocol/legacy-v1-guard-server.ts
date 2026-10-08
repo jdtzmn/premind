@@ -46,6 +46,8 @@ export class LegacyV1GuardServer {
         resolve();
       });
     });
+    // Owner-only: the historical path is predictable, so restrict who connects.
+    fs.chmodSync(socketPath, 0o600);
     this.socketPath = socketPath;
   }
 

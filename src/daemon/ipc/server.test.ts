@@ -81,6 +81,9 @@ describe("IpcServer protocol negotiation", () => {
     try {
       await client.registerClient("/tmp/project", "test");
       assert.equal(client.selectedProtocolVersion, 2);
+      for (const socketPath of [historicalSocketPath, modernSocketPath]) {
+        assert.equal(fs.statSync(socketPath).mode & 0o777, 0o600);
+      }
       // Operations outside the frozen v1 allowlist only succeed on the modern socket.
       await client.registerSession({
         sessionId: "routed-session",
