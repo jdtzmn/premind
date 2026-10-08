@@ -1,4 +1,5 @@
 import { PREMIND_VERSION_LABEL } from "../shared/version.ts";
+import { commandCapabilities } from "../shared/command-capabilities.ts";
 import {
 	CONFIG_DIR_NAME,
 	type ExtensionAPI,
@@ -885,7 +886,7 @@ export const createPremindPiExtension = (
 		pi.registerTool({
 			name: "premind_set_active_checkout",
 			label: "Premind Set Active Checkout",
-			description: "Set the active Git checkout for the current premind session.",
+			description: `Set the active Git checkout for the current premind session. ${commandCapabilities["set-active-checkout"].toolGuidance}`,
 			promptSnippet: "Tell premind which Git checkout this session is actively using.",
 			promptGuidelines: [
 				"Call premind_set_active_checkout at the start of any PR work, including when already in the startup checkout, and again after switching branches before creating or following a PR.",
@@ -909,8 +910,7 @@ export const createPremindPiExtension = (
 		pi.registerTool({
 			name: "premind_subscribe",
 			label: "Premind Subscribe",
-			description:
-				"Mandatory PR tracking: Immediately call this tool after creating, opening, discovering, or beginning work on a pull request. Do this before reporting the PR URL or status to the user. Applies after gh pr create, gh stack submit, gh stack link, or any equivalent GitHub operation.",
+			description: commandCapabilities.subscribe.toolGuidance,
 			promptGuidelines: [
 				"Omit writePolicy to let Premind verify whether the authenticated GitHub user authored the PR on this session's active checkout. It remains observation-only until verified.",
 				"Use user-authorized only when the user explicitly authorizes work on this PR. Use observe-only to prevent automatic authority escalation.",
@@ -941,7 +941,7 @@ export const createPremindPiExtension = (
 		pi.registerTool({
 			name: "premind_unsubscribe",
 			label: "Premind Unsubscribe",
-			description: "Unsubscribe the current session from a pull request.",
+			description: `Unsubscribe the current session from a pull request. ${commandCapabilities.unsubscribe.toolGuidance}`,
 			parameters: Type.Object({
 				prNumber: Type.Integer({ minimum: 1 }),
 				repo: Type.Optional(Type.String({ minLength: 1 })),
@@ -962,8 +962,7 @@ export const createPremindPiExtension = (
 		pi.registerTool({
 			name: "premind_deliver",
 			label: "Premind Deliver",
-			description:
-				"Deliver all pending premind reminders for the current session at the earliest safe boundary.",
+			description: commandCapabilities.deliver.toolGuidance,
 			parameters: Type.Object({}),
 			async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
 				const sessionId = currentSessionId ?? getPiSessionId(ctx);
@@ -987,7 +986,7 @@ export const createPremindPiExtension = (
 		pi.registerTool({
 			name: "premind_enable",
 			label: "Premind Enable",
-			description: "Enable premind GitHub polling globally.",
+			description: `Enable premind polling. ${commandCapabilities.enable.toolGuidance}`,
 			parameters: Type.Object({}),
 			async execute() {
 				return {
@@ -1000,7 +999,7 @@ export const createPremindPiExtension = (
 		pi.registerTool({
 			name: "premind_disable",
 			label: "Premind Disable",
-			description: "Disable premind GitHub polling globally.",
+			description: `Disable premind polling. ${commandCapabilities.disable.toolGuidance}`,
 			parameters: Type.Object({}),
 			async execute() {
 				return {
@@ -1013,7 +1012,7 @@ export const createPremindPiExtension = (
 		pi.registerTool({
 			name: "premind_doctor",
 			label: "Premind Doctor",
-			description: "Diagnose premind extension, configuration, and daemon health.",
+			description: commandCapabilities.doctor.toolGuidance,
 			parameters: Type.Object({}),
 			async execute() {
 				return {
@@ -1026,8 +1025,7 @@ export const createPremindPiExtension = (
 		pi.registerTool({
 			name: "premind_status",
 			label: "Premind Status",
-			description:
-				"Show premind daemon status including active sessions, watchers, and pending reminder counts.",
+			description: `Show premind daemon status, active sessions, and watchers. ${commandCapabilities.status.toolGuidance}`,
 			promptSnippet: "Inspect premind PR reminder daemon status.",
 			promptGuidelines: [
 				"Use premind_status when the user asks about premind daemon state, PR reminder attachment, pending reminders, or watcher status.",

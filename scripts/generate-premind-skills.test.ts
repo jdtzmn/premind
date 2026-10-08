@@ -67,7 +67,7 @@ test("Codex reference names follow advertised MCP tools and preserve safety guid
 	assert.match(reminders, /SessionStart.*UserPromptSubmit.*Stop/);
 	assert.doesNotMatch(
 		`${subscriptions}\n${reminders}`,
-		/premind_set_active_checkout|premind_deliver/,
+		/premind_activate_worktree|premind_deliver/,
 	);
 });
 

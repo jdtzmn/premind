@@ -2,36 +2,93 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, test } from "node:test";
 import {
+	type CommandCapability,
 	commandCapabilities,
 	expectedCapabilitySurface,
-	renderCommandCapabilityDocumentation,
+	harnessSurface,
+	listCapabilityExceptions,
+	listParameterExceptions,
 	premindHarnesses,
+	renderCommandCapabilityDocumentation,
 } from "./command-capabilities.ts";
 
+const capabilities = Object.entries(
+	commandCapabilities as Record<string, CommandCapability>,
+);
+
 describe("command capability contract", () => {
-	test("common capabilities explain omitted or noncanonical surfaces", () => {
-		for (const [capabilityId, capability] of Object.entries(
-			commandCapabilities,
-		)) {
-			if (capability.classification !== "common") continue;
+	test("every capability declares every supported harness", () => {
+		for (const [capabilityId, capability] of capabilities) {
+			assert.deepEqual(
+				Object.keys(capability.harnesses).sort(),
+				[...premindHarnesses].sort(),
+				`${capabilityId} must declare a surface for every supported harness`,
+			);
+		}
+	});
+
+	test("every missing or renamed surface has a typed exception, whatever the classification", () => {
+		for (const [capabilityId, capability] of capabilities) {
 			for (const harness of premindHarnesses) {
-				const surface = capability.harnesses[harness];
+				const surface = harnessSurface(capability, harness);
 				for (const kind of ["commands", "tools"] as const) {
-					const canonicalNames: readonly string[] = capability.canonical[kind];
-					const surfaceNames: readonly string[] = surface[kind];
-					const differsFromCanonical =
-						canonicalNames.some((name) => !surfaceNames.includes(name)) ||
-						surfaceNames.some((name) => !canonicalNames.includes(name));
-					if (!differsFromCanonical) continue;
-					const exceptions =
-						"exceptions" in surface
-							? (surface.exceptions as Partial<Record<typeof kind, string>>)
-							: undefined;
-					assert.ok(
-						exceptions?.[kind],
-						`${capabilityId}.${harness}.${kind} differs from the canonical surface and requires an explicit exception`,
-					);
+					const canonical = capability.canonical[kind];
+					const actual = surface[kind];
+					const differs =
+						canonical.some((name) => !actual.includes(name)) ||
+						actual.some((name) => !canonical.includes(name));
+					const exception = surface.exceptions?.[kind];
+					if (differs) {
+						assert.ok(
+							exception,
+							`${capabilityId}.${harness}.${kind} differs from the canonical surface and requires an unsupported, deferred, or host-naming exception`,
+						);
+					} else {
+						assert.equal(
+							exception,
+							undefined,
+							`${capabilityId}.${harness}.${kind} matches the canonical surface; remove its stale exception`,
+						);
+					}
 				}
+			}
+		}
+	});
+
+	test("exceptions are well-formed", () => {
+		for (const { capabilityId, harness, surface, exception } of listCapabilityExceptions()) {
+			const label = `${capabilityId}.${harness}.${surface}`;
+			assert.ok(exception.reason.trim(), `${label} needs a reason`);
+			if (exception.kind === "deferred") {
+				assert.match(
+					exception.tracking ?? "",
+					/^(#\d+|https:\/\/github\.com\/\S+)$/,
+					`${label} is deferred and must name a tracking issue or PR`,
+				);
+			}
+			if (exception.kind === "host-naming") {
+				const surfaceNames = harnessSurface(
+					commandCapabilities[capabilityId as keyof typeof commandCapabilities],
+					harness,
+				)[surface];
+				assert.ok(
+					surfaceNames.length > 0,
+					`${label} is host-naming but exposes no surface; use unsupported or deferred`,
+				);
+			}
+		}
+	});
+
+	test("parameter exceptions name canonical parameters and track deferred gaps", () => {
+		for (const { capabilityId, harness, parameter, exception } of listParameterExceptions()) {
+			const label = `${capabilityId}.${harness}.${parameter}`;
+			assert.ok(
+				parameter in commandCapabilities[capabilityId as keyof typeof commandCapabilities].parameters,
+				`${label} excuses a parameter that is not canonical`,
+			);
+			assert.ok(exception.reason.trim(), `${label} needs a reason`);
+			if (exception.kind === "deferred") {
+				assert.match(exception.tracking ?? "", /^(#\d+|https:\/\/github\.com\/\S+)$/);
 			}
 		}
 	});

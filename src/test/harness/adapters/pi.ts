@@ -1,6 +1,7 @@
 /** Pi lifecycle contract driver. */
 
 import { createPremindPiExtension } from "../../../extension/index.ts"
+import { harnessToolName } from "./tool-names.ts"
 import type {
 	AdapterDriver,
 	DeliveryCapture,
@@ -8,6 +9,16 @@ import type {
 } from "./types.ts"
 
 type EventHandler = (event: unknown, ctx: unknown) => Promise<void>
+type PiTool = {
+	name: string
+	execute: (
+		toolCallId: string,
+		params: Record<string, unknown>,
+		signal: undefined,
+		onUpdate: undefined,
+		ctx: unknown,
+	) => Promise<{ content: Array<{ text: string }> }>
+}
 
 type PiHarnessArgs = Pick<StartIdleArgs, "daemonClient" | "sessionId" | "branch"> & {
 	statusPollIntervalMs: number
@@ -20,6 +31,7 @@ const createPiHarness = ({
 	statusPollIntervalMs,
 }: PiHarnessArgs) => {
 	const events = new Map<string, EventHandler>()
+	const tools = new Map<string, PiTool>()
 	const captured: DeliveryCapture[] = []
 	let idle = true
 
@@ -29,7 +41,9 @@ const createPiHarness = ({
 		},
 		registerMessageRenderer() {},
 		registerCommand() {},
-		registerTool() {},
+		registerTool(definition: PiTool) {
+			tools.set(definition.name, definition)
+		},
 		sendMessage(
 			message: { customType?: string; content?: string; details?: unknown },
 			options: unknown,
@@ -72,6 +86,8 @@ const createPiHarness = ({
 	return {
 		captured,
 		fire,
+		ctx,
+		tools,
 		setIdle(value: boolean) {
 			idle = value
 		},
@@ -97,6 +113,26 @@ export const piDriver: AdapterDriver = {
 		return {
 			captured: harness.captured,
 			idleAgain: () => harness.fire("turn_end"),
+		}
+	},
+
+	async createControls(args) {
+		const harness = createPiHarness({ ...args, statusPollIntervalMs: 0 })
+		await harness.fire("session_start")
+		return {
+			captured: harness.captured,
+			async invoke(capabilityId, params = {}) {
+				const name = harnessToolName("pi", capabilityId)
+				const tool = harness.tools.get(name)
+				if (!tool) throw new Error(`pi did not register ${name}`)
+				try {
+					const result = await tool.execute("scenario", params, undefined, undefined, harness.ctx)
+					return { text: result.content.map((part) => part.text).join("\n"), isError: false }
+				} catch (error) {
+					return { text: error instanceof Error ? error.message : String(error), isError: true }
+				}
+			},
+			shutdown: () => harness.fire("session_shutdown"),
 		}
 	},
 

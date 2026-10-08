@@ -6,7 +6,7 @@ import { commandCapabilities } from "../src/shared/command-capabilities.ts";
 
 type SkillHost = "codex" | "pi" | "claude";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const skillRoots = {
+export const skillRoots = {
 	codex: [
 		"plugins/premind/skills/premind",
 		"plugins/codex/premind/skills/premind",
@@ -63,7 +63,7 @@ export const generateSubscriptionsMarkdown = (
 
 Use the exact \`Premind session handle\` supplied by lifecycle context for session-scoped tools. Never invent one or reuse another session's handle.
 
-- After moving work into a linked or nested Git worktree, call ${tool("activate_worktree")} with the current handle and new path.
+- After moving work into a linked or nested Git worktree, call ${tool("set_active_checkout")} with the current handle and new path.
 - Use ${tool("subscribe")} or ${tool("unsubscribe")} only when the user asks to change tracking; pass \`repo\` as \`owner/name\` for a PR outside the current repository.
 - Use ${tool("status")} to inspect redacted state. If multiple sessions share a working directory, supply the current handle rather than guessing.
 
