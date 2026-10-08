@@ -968,6 +968,53 @@ describe("premind Pi extension", () => {
 		assert.match(notifications[0]?.message ?? "", /host: pi/);
 		assert.match(notifications[0]?.message ?? "", /daemon: reachable \(protocol 1\)/);
 		assert.match(notifications[0]?.message ?? "", /follow-up messages can wake an idle Pi session/);
+		assert.match(notifications[0]?.message ?? "", /daemon lock: /);
+		assert.match(notifications[0]?.message ?? "", /idle sessions with pending reminders: /);
+	});
+
+	test("/premind:doctor flags idle sessions holding reminders and a stuck idle poll", async (t) => {
+		t.mock.timers.enable({ apis: ["setInterval", "Date"] });
+		const mock = createMockPi();
+		const client = createClient();
+		let statusCalls = 0;
+		const stalledStatus: DebugStatusResponse = {
+			...status,
+			sessions: status.sessions.map((session) => ({
+				...session,
+				busyState: "idle" as const,
+				pendingReminderCount: 48,
+			})),
+		};
+		client.client.debugStatus = async () => {
+			statusCalls++;
+			if (statusCalls === 2) return new Promise<DebugStatusResponse>(() => {});
+			return stalledStatus;
+		};
+		const notifications: Array<{ message: string; level: string }> = [];
+		createPremindPiExtension({
+			createDaemonClient: () => client.client,
+			config: { statusPollIntervalMs: 5_000 },
+			detectGit: async () => ({ repo: "owner/repo", branch: "feature/pi" }),
+		})(mock.pi as never);
+		const start = mock.events.get("session_start");
+		const shutdown = mock.events.get("session_shutdown");
+		assert.ok(start);
+		assert.ok(shutdown);
+		const { ctx } = createEventContext();
+		await start({}, ctx);
+		t.mock.timers.tick(5_000);
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		// Move the clock past the stale threshold without firing the next poll.
+		t.mock.timers.setTime(Date.now() + STATUS_POLL_STALE_MS);
+
+		const command = mock.commands.get("premind:doctor");
+		assert.ok(command);
+		await command.handler("", createCommandContext(notifications));
+
+		const message = notifications[0]?.message ?? "";
+		assert.match(message, /idle delivery poll: stuck for \d+s/);
+		assert.match(message, /idle sessions with pending reminders: .+\(48\)/);
+		await shutdown({}, ctx);
 	});
 
 	test("global polling commands and tools target the daemon-wide switch", async () => {

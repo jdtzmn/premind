@@ -226,6 +226,30 @@ export const acquireDaemonLock = async ({
 
 export const releaseDaemonLock = (lock: DaemonLock) => releaseDaemonStartLock(lock);
 
+export type DaemonLockStatus = {
+  pid: number;
+  alive: boolean;
+  heldSince: string;
+} | null;
+
+/** Who holds the daemon lock, for doctor output. */
+export const daemonLockStatus = (
+  stateDir = PREMIND_STATE_DIR,
+): DaemonLockStatus => {
+  const owner = readDaemonLockOwner(stateDir);
+  if (!owner) return null;
+  return {
+    pid: owner.pid,
+    alive: isProcessAlive(owner.pid),
+    heldSince: new Date(owner.createdAt).toISOString(),
+  };
+};
+
+export const formatDaemonLockStatus = (status: DaemonLockStatus) =>
+  status === null
+    ? "not held (no daemon running, or one predating the daemon lock)"
+    : `held by pid ${status.pid}${status.alive ? "" : " (process gone)"} since ${status.heldSince}`;
+
 export const isSocketReachable = (
   socketPath = PREMIND_SOCKET_PATH,
   timeoutMs = DEFAULT_PROBE_TIMEOUT_MS,

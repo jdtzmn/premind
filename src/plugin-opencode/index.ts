@@ -9,6 +9,7 @@ import { renderPremindStatus } from "./commands.ts"
 import { getPluginRuntimeStatePath, readPluginInstances, readPluginRuntimeState, registerPluginInstance, writePluginRuntimeState } from "./debug-state.ts"
 import { detectGitContext } from "../client/git-context.ts"
 import { ensureDaemonRunning } from "./daemon-launcher.ts"
+import { daemonLockStatus, formatDaemonLockStatus } from "../shared/daemon-startup.ts"
 
 const COMMAND_MARKERS = {
   status: "[PREMIND_STATUS]",
@@ -809,6 +810,7 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
       `- client registered: ${state.clientRegistered === true ? "yes" : state.clientRegistered === false ? "no" : "unknown"}`,
       `- commands registered: ${state.commandsRegistered === true ? "yes" : state.commandsRegistered === false ? "no" : "unknown"}`,
       `- idle delivery threshold: ${idleDeliveryThreshold}ms`,
+      `- daemon lock: ${formatDaemonLockStatus(daemonLockStatus())}`,
       `- root: ${state.root ?? "unknown"}`,
       `- last session: ${state.lastSessionId ?? "none"}`,
       `- updated at: ${state.updatedAt ?? "unknown"}`,

@@ -35,6 +35,7 @@ describe("Logger file output", () => {
     assert.ok(matchingLine, `should find a log entry with message "${marker}"`)
     const entry = JSON.parse(matchingLine!)
     assert.equal(entry.service, "logger-test")
+    assert.equal(entry.pid, process.pid)
     assert.equal(entry.level, "info")
     assert.equal(entry.extra?.testField, true)
     assert.ok(typeof entry.ts === "string", "entry should have a timestamp")
