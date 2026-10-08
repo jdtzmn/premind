@@ -213,6 +213,42 @@ const SCENARIOS: CapabilityScenario[] = [
 		},
 	},
 	{
+		name: "a host restart keeps manual subscriptions and the updates still owed on them",
+		capabilities: ["subscribe"],
+		async run({ driver, controls, store, sessionId }) {
+			assertSucceeded(
+				await controls.invoke("subscribe", { prNumber: 99, repo: "acme/other" }),
+				`${driver.key} subscribe`,
+			)
+			const before = store.getSubscription(sessionId, "acme/other", 99)
+			assert.equal(before?.state, "active")
+			store.insertEvents("acme/other", 99, [
+				{
+					dedupeKey: `restart:${driver.key}`,
+					kind: "issue_comment.created",
+					priority: "high",
+					summary: "A comment that has not been delivered yet",
+					payload: {},
+				},
+			])
+
+			const restarted = await controls.restart()
+			const after = store.getSubscription(sessionId, "acme/other", 99)
+			assert.equal(after?.state, "active", `${driver.key} restart dropped the manual subscription`)
+			assert.equal(
+				after?.subscriptionId,
+				before?.subscriptionId,
+				`${driver.key} restart replaced the subscription instead of keeping it`,
+			)
+			assert.equal(
+				store.listUndeliveredEventsForSubscription(after.subscriptionId).length,
+				1,
+				`${driver.key} restart lost an update that was still owed`,
+			)
+			await restarted.shutdown()
+		},
+	},
+	{
 		name: "a pause survives a host restart and stale-session reaping",
 		capabilities: ["pause", "resume"],
 		async run({ driver, controls, store, sessionId }) {
