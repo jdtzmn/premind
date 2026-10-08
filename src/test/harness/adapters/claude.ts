@@ -3,7 +3,13 @@
 // @ts-expect-error The shipped Claude hook runtime is plain JavaScript.
 import { handleHook } from "../../../../plugin-claude/bin/lib.mjs"
 import { harnessToolName } from "./tool-names.ts"
-import type { AdapterDriver, DeliveryCapture, StartIdleArgs } from "./types.ts"
+import type {
+	AdapterDriver,
+	DeliverArgs,
+	DeliveryCapture,
+	HarnessControls,
+	StartIdleArgs,
+} from "./types.ts"
 
 type HookOutput = {
 	hookSpecificOutput: {
@@ -92,7 +98,61 @@ const createClaudeHarness = ({ daemonClient, sessionId }: ClaudeHarnessArgs) => 
 		await stop(true)
 	}
 
-	return { captured, deliverAtStop, stop }
+	/** Claude's SessionEnd hook suspends the session in the daemon. */
+	const end = () =>
+		handleHook(
+			"SessionEnd",
+			{ session_id: sessionId },
+			ipc,
+			{ CLAUDE_CODE_SESSION_ID: sessionId },
+			handoffs,
+		)
+
+	return { captured, deliverAtStop, end, stop }
+}
+
+const createClaudeControls = async (args: DeliverArgs): Promise<HarnessControls> => {
+	const harness = createClaudeHarness(args)
+	const environment = { CLAUDE_CODE_SESSION_ID: args.sessionId }
+	// The SessionStart hook registers through real git detection, which the
+	// harness cannot stub, so send the registration it would have sent.
+	await args.daemonClient.call("registerClaudeSession", {
+		sessionId: args.sessionId,
+		hostSessionId: args.sessionId,
+		repo: "acme/repo",
+		branch: args.branch,
+		busyState: "idle",
+	})
+	return {
+		captured: harness.captured,
+		async invoke(capabilityId, params = {}) {
+			// Loaded lazily: the MCP server imports the built daemon launcher, which
+			// delivery-only suites (test:harness) intentionally run without.
+			// @ts-expect-error The shipped Claude MCP runtime is plain JavaScript.
+			const { handleMcpRequest } = await import("../../../../plugin-claude/bin/mcp-server.mjs")
+			const result = (await handleMcpRequest(
+				{
+					method: "tools/call",
+					params: { name: harnessToolName("claude", capabilityId), arguments: params },
+				},
+				(type: string, payload: unknown) => args.daemonClient.call(type, payload),
+				environment,
+			)) as { content: Array<{ text: string }>; isError?: boolean }
+			return {
+				text: result.content.map((part) => part.text).join("\n"),
+				isError: result.isError === true,
+			}
+		},
+		// Claude delivers at Stop and confirms when the continuation stops again.
+		crossDeliveryBoundary: harness.deliverAtStop,
+		// Restarting Claude Code ends the session (SessionEnd hook), then the next
+		// SessionStart registers the same session ID again.
+		async restart() {
+			await harness.end()
+			return createClaudeControls(args)
+		},
+		shutdown: async () => {},
+	}
 }
 
 export const claudeDriver: AdapterDriver = {
@@ -109,41 +169,7 @@ export const claudeDriver: AdapterDriver = {
 		}
 	},
 
-	async createControls(args) {
-		const harness = createClaudeHarness(args)
-		const environment = { CLAUDE_CODE_SESSION_ID: args.sessionId }
-		// The SessionStart hook registers through real git detection, which the
-		// harness cannot stub, so send the registration it would have sent.
-		await args.daemonClient.call("registerClaudeSession", {
-			sessionId: args.sessionId,
-			hostSessionId: args.sessionId,
-			repo: "acme/repo",
-			branch: args.branch,
-			busyState: "idle",
-		})
-		return {
-			captured: harness.captured,
-			async invoke(capabilityId, params = {}) {
-				// Loaded lazily: the MCP server imports the built daemon launcher, which
-				// delivery-only suites (test:harness) intentionally run without.
-				// @ts-expect-error The shipped Claude MCP runtime is plain JavaScript.
-				const { handleMcpRequest } = await import("../../../../plugin-claude/bin/mcp-server.mjs")
-				const result = (await handleMcpRequest(
-					{
-						method: "tools/call",
-						params: { name: harnessToolName("claude", capabilityId), arguments: params },
-					},
-					(type: string, payload: unknown) => args.daemonClient.call(type, payload),
-					environment,
-				)) as { content: Array<{ text: string }>; isError?: boolean }
-				return {
-					text: result.content.map((part) => part.text).join("\n"),
-					isError: result.isError === true,
-				}
-			},
-			shutdown: async () => {},
-		}
-	},
+	createControls: (args) => createClaudeControls(args),
 
 	async startIdle(args) {
 		const harness = createClaudeHarness(args)

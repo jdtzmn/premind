@@ -4,6 +4,10 @@ import path from "node:path";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
 import { commandCapabilities } from "../shared/command-capabilities.ts";
+import {
+	SESSION_PAUSED_MESSAGE,
+	SESSION_RESUMED_MESSAGE,
+} from "../shared/session-pause.ts";
 import { z } from "zod";
 import { PremindDaemonClient } from "../client/daemon-client.ts";
 import { createDaemonLauncher } from "../client/daemon-launcher.ts";
@@ -79,6 +83,9 @@ const subscriptionArgumentsSchema = z
 		repo: z.string().min(1).optional(),
 	})
 	.strict();
+const sessionControlArgumentsSchema = z
+	.object({ sessionHandle: z.string().uuid() })
+	.strict();
 const toolCallSchema = z
 	.object({
 		name: z.string().min(1),
@@ -139,6 +146,26 @@ const tools = [
 			additionalProperties: false,
 		},
 	},
+	{
+		name: "premind_pause",
+		description: commandCapabilities.pause.toolGuidance,
+		inputSchema: {
+			type: "object",
+			properties: { sessionHandle: { type: "string", format: "uuid" } },
+			required: ["sessionHandle"],
+			additionalProperties: false,
+		},
+	},
+	{
+		name: "premind_resume",
+		description: commandCapabilities.resume.toolGuidance,
+		inputSchema: {
+			type: "object",
+			properties: { sessionHandle: { type: "string", format: "uuid" } },
+			required: ["sessionHandle"],
+			additionalProperties: false,
+		},
+	},
 ] as const;
 
 /** The same tool catalog advertised by tools/list; used by skill generation. */
@@ -174,7 +201,12 @@ class JsonRpcError extends Error {
 
 type McpDaemonClient = Pick<
 	PremindDaemonClient,
-	"activateWorktree" | "debugStatus" | "subscribe" | "unsubscribe"
+	| "activateWorktree"
+	| "debugStatus"
+	| "subscribe"
+	| "unsubscribe"
+	| "pauseSession"
+	| "resumeSession"
 >;
 
 export type CodexMcpDependencies = {
@@ -218,6 +250,14 @@ type ParsedToolCall =
 	| {
 			name: "premind_subscribe" | "premind_unsubscribe";
 			args: z.infer<typeof subscriptionArgumentsSchema>;
+	  }
+	| {
+			name: "premind_pause";
+			args: z.infer<typeof sessionControlArgumentsSchema>;
+	  }
+	| {
+			name: "premind_resume";
+			args: z.infer<typeof sessionControlArgumentsSchema>;
 	  };
 
 const parseToolCall = (params: unknown): ParsedToolCall => {
@@ -240,6 +280,12 @@ const parseToolCall = (params: unknown): ParsedToolCall => {
 		case "premind_subscribe":
 		case "premind_unsubscribe": {
 			const args = subscriptionArgumentsSchema.safeParse(rawArguments);
+			if (!args.success) throw new JsonRpcError(-32602, "Invalid tool arguments");
+			return { name: call.data.name, args: args.data };
+		}
+		case "premind_pause":
+		case "premind_resume": {
+			const args = sessionControlArgumentsSchema.safeParse(rawArguments);
 			if (!args.success) throw new JsonRpcError(-32602, "Invalid tool arguments");
 			return { name: call.data.name, args: args.data };
 		}
@@ -291,6 +337,15 @@ const callTool = async (
 			return text(
 				`Premind activated ${result.binding.repo} from this Codex session.`,
 			);
+		}
+
+		if (tool.name === "premind_pause") {
+			await dependencies.client.pauseSession(binding.sessionId);
+			return text(SESSION_PAUSED_MESSAGE);
+		}
+		if (tool.name === "premind_resume") {
+			await dependencies.client.resumeSession(binding.sessionId);
+			return text(SESSION_RESUMED_MESSAGE);
 		}
 
 		if (tool.name === "premind_subscribe") {

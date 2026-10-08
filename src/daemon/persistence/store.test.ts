@@ -584,6 +584,143 @@ describe("StateStore", () => {
     store.close()
   })
 
+  test("paused sessions keep subscriptions watched but cannot claim pending reminders", () => {
+    const store = createStore()
+    store.registerClient("pause-client", { pid: 1, projectRoot: "/tmp/project" })
+    store.registerSession({
+      clientId: "pause-client",
+      sessionId: "pause-session",
+      repo: "acme/repo",
+      branch: "feature/pause",
+      isPrimary: true,
+      status: "active",
+      busyState: "idle",
+    })
+    const subscriptions = [
+      { prNumber: 21, source: "automatic" as const },
+      { prNumber: 22, source: "manual" as const },
+    ].map(({ prNumber, source }) =>
+      store.upsertSubscription({
+        sessionId: "pause-session",
+        repo: "acme/repo",
+        prNumber,
+        source,
+      }),
+    )
+    // A batch built before pausing must stay pending, not be handed off.
+    const prebuiltBatchId = store.createOrReplaceReminder(
+      "pause-session",
+      subscriptions[0].subscriptionId,
+      "Reminder 21",
+      [],
+      0,
+    )
+    const subscriptionState = () =>
+      store
+        .listSessionSubscriptions("pause-session", "active")
+        .map(({ subscriptionId, prNumber, source }) => ({ subscriptionId, prNumber, source }))
+    const before = subscriptionState()
+
+    assert.equal(store.setSessionPaused("pause-session", true), true)
+    store.insertEvents("acme/repo", 22, [
+      {
+        dedupeKey: "issue_comment.created:22",
+        kind: "issue_comment.created",
+        priority: "high",
+        summary: "Comment while paused",
+        payload: { commentId: 22 },
+      },
+    ])
+
+    assert.deepEqual(subscriptionState(), before)
+    assert.deepEqual(
+      store.listPrWatchTargets().map(({ pr_number }) => pr_number).sort(),
+      [21, 22],
+    )
+    assert.equal(store.claimReminderBundle("pause-session"), null)
+    assert.equal(store.claimReminder("pause-session"), null)
+    assert.equal(store.getReminderBatchRecord(prebuiltBatchId)?.state, "built")
+
+    // Lifecycle transitions never lift a pause: Pi deletes and re-registers its
+    // session on reload, Codex and Claude mark it dormant or closed, and the
+    // reaper closes it after inactivity.
+    const register = () =>
+      store.registerSession({
+        clientId: "pause-client",
+        sessionId: "pause-session",
+        repo: "acme/repo",
+        branch: "feature/pause",
+        isPrimary: true,
+        status: "active",
+        busyState: "idle",
+      })
+    register()
+    assert.equal(store.isSessionPaused("pause-session"), true)
+    assert.equal(store.releaseSessionOwner("pause-session"), true)
+    register()
+    assert.equal(store.isSessionPaused("pause-session"), true)
+    store.reapStaleSessions(0, Date.now() + 1)
+    assert.equal(store.getSession("pause-session")?.status, "closed")
+    register()
+    assert.equal(store.isSessionPaused("pause-session"), true)
+    assert.equal(store.claimReminderBundle("pause-session"), null)
+    assert.equal(
+      store.listSessionSummaries().find(({ sessionId }) => sessionId === "pause-session")?.status,
+      "paused",
+    )
+
+    assert.equal(store.setSessionPaused("pause-session", false), true)
+    assert.deepEqual(subscriptionState(), before)
+    const bundle = store.claimReminderBundle("pause-session")
+    assert.ok(bundle)
+    assert.deepEqual(
+      bundle.batches.map(({ subscriptionId }) => subscriptionId).sort(),
+      subscriptions.map(({ subscriptionId }) => subscriptionId).sort(),
+    )
+    assert.ok(bundle.batches.some(({ batchId }) => batchId === prebuiltBatchId))
+    store.close()
+  })
+
+  test("a reminder fetched before a pause cannot be handed off after it", () => {
+    const store = createStore()
+    store.registerClient("pause-client", { pid: 1, projectRoot: "/tmp/project" })
+    store.registerSession({
+      clientId: "pause-client", sessionId: "late-pause", repo: "acme/repo", branch: "feature/late",
+      isPrimary: true, status: "active", busyState: "idle",
+    })
+    const subscription = store.upsertSubscription({
+      sessionId: "late-pause", repo: "acme/repo", prNumber: 31, source: "manual",
+    })
+    const batchId = store.createOrReplaceReminder("late-pause", subscription.subscriptionId, "Late", [], 0)
+    assert.equal(store.getPendingReminder("late-pause")?.batchId, batchId)
+
+    store.setSessionPaused("late-pause", true)
+    assert.equal(store.ackReminder({ batchId, sessionId: "late-pause", state: "handed_off" }), false)
+    assert.equal(store.getReminderBatchRecord(batchId)?.state, "built")
+
+    store.setSessionPaused("late-pause", false)
+    assert.equal(store.ackReminder({ batchId, sessionId: "late-pause", state: "handed_off" }), true)
+    store.close()
+  })
+
+  test("pauses of sessions that never return are pruned with closed sessions", () => {
+    const store = createStore()
+    store.registerClient("pause-client", { pid: 1, projectRoot: "/tmp/project" })
+    store.registerSession({
+      clientId: "pause-client", sessionId: "gone", repo: "acme/repo", branch: "feature/gone",
+      isPrimary: true, status: "active", busyState: "idle",
+    })
+    store.setSessionPaused("gone", true, 1_000)
+    store.unregisterSession("gone")
+    assert.equal(store.isSessionPaused("gone"), true)
+
+    store.pruneClosedSessions(10_000, 5_000)
+    assert.equal(store.isSessionPaused("gone"), true, "a recent pause waits for its session")
+    store.pruneClosedSessions(10_000, 20_000)
+    assert.equal(store.isSessionPaused("gone"), false)
+    store.close()
+  })
+
   test("ensureSessionControl recreates a missing session at the PR event high-water mark", () => {
     const store = createStore()
     store.recordBranchAssociation("acme/repo", "feature/recover", 11)
@@ -2337,7 +2474,7 @@ describe("migrate: session hosts", () => {
     }, now)
     seeded.registerSession({
       clientId: "opencode-client", sessionId: "opencode-session", host: "opencode", hostSessionId: "opencode-host",
-      repo: "acme/repo", branch: "feature/open", isPrimary: true, status: "paused", busyState: "idle",
+      repo: "acme/repo", branch: "feature/open", isPrimary: true, status: "active", busyState: "idle",
     }, now)
     seeded.upsertWorktreeBinding({
       sessionId: "pi-session", root: "/repo/pi", gitDir: "/repo/.git/worktrees/pi",
@@ -2383,6 +2520,8 @@ describe("migrate: session hosts", () => {
     assert.equal(seeded.ackReminder({
       batchId: opencodeBatch, sessionId: "opencode-session", state: "handed_off",
     }, now), true)
+    // Legacy rows represented a pause as `status = 'paused'`; the migration must keep it.
+    seeded.updateSessionState({ sessionId: "opencode-session", status: "paused" }, now)
     seeded.close()
 
     const rows = (db: DatabaseSync, sql: string) =>

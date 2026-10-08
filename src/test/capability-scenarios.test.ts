@@ -138,13 +138,113 @@ const SCENARIOS: CapabilityScenario[] = [
 		},
 	},
 	{
-		name: "global disable and enable toggle the daemon-wide switch",
+		name: "global disable and enable toggle the daemon-wide switch when confirmed",
 		capabilities: ["disable", "enable"],
 		async run({ driver, controls, store }) {
-			assertSucceeded(await controls.invoke("disable"), `${driver.key} disable`)
+			assertSucceeded(
+				await controls.invoke("disable", { confirmGlobal: true }),
+				`${driver.key} disable`,
+			)
 			assert.equal(store.isGloballyDisabled(), true, `${driver.key} disable did not take effect`)
-			assertSucceeded(await controls.invoke("enable"), `${driver.key} enable`)
+			assertSucceeded(
+				await controls.invoke("enable", { confirmGlobal: true }),
+				`${driver.key} enable`,
+			)
 			assert.equal(store.isGloballyDisabled(), false, `${driver.key} enable did not take effect`)
+		},
+	},
+	{
+		name: "unconfirmed global disable and enable are refused before reaching the daemon",
+		capabilities: ["disable", "enable"],
+		async run({ driver, controls, daemonClient }) {
+			const globalWrites = () =>
+				daemonClient.operations.filter((operation) => operation === "setGlobalDisabled").length
+			for (const action of ["disable", "enable"] as const) {
+				for (const params of [{}, { confirmGlobal: false }]) {
+					const result = await controls.invoke(action, params)
+					assert.equal(result.isError, true, `${driver.key} ${action} accepted ${JSON.stringify(params)}`)
+					assert.match(result.text, /confirmGlobal: true/, `${driver.key} ${action} refusal`)
+				}
+			}
+			assert.equal(globalWrites(), 0, `${driver.key} reached the daemon without confirmation`)
+		},
+	},
+	{
+		name: "pause withholds reminders without changing subscriptions, and resume releases them",
+		capabilities: ["pause", "resume"],
+		async run({ driver, controls, store, sessionId }) {
+			const subscription = store.upsertSubscription({
+				sessionId,
+				repo: REPO,
+				prNumber: 8,
+				source: "manual",
+			})
+			const subscriptions = () =>
+				store
+					.listSessionSubscriptions(sessionId)
+					.map(({ subscriptionId, state }) => ({ subscriptionId, state }))
+			const before = subscriptions()
+
+			assertSucceeded(await controls.invoke("pause"), `${driver.key} pause`)
+			assert.equal(store.isSessionPaused(sessionId), true, `${driver.key} pause did not take effect`)
+			const batchId = store.createOrReplaceReminder(
+				sessionId,
+				subscription.subscriptionId,
+				`Paused reminder for ${driver.key}`,
+				[],
+				0,
+			)
+			await controls.crossDeliveryBoundary()
+			assert.ok(
+				!controls.captured.some((capture) => capture.text.includes(`${REPO}#8`)),
+				`${driver.key} delivered a reminder while paused`,
+			)
+			assert.equal(store.getReminderBatchRecord(batchId)?.state, "built")
+			assert.deepEqual(subscriptions(), before, `${driver.key} pause changed subscriptions`)
+
+			assertSucceeded(await controls.invoke("resume"), `${driver.key} resume`)
+			assert.equal(store.isSessionPaused(sessionId), false, `${driver.key} resume did not take effect`)
+			assert.deepEqual(subscriptions(), before, `${driver.key} resume changed subscriptions`)
+			await controls.crossDeliveryBoundary()
+			assert.ok(
+				controls.captured.some((capture) => capture.text.includes(`${REPO}#8`)),
+				`${driver.key} did not deliver the queued reminder after resume`,
+			)
+		},
+	},
+	{
+		name: "a pause survives a host restart and stale-session reaping",
+		capabilities: ["pause", "resume"],
+		async run({ driver, controls, store, sessionId }) {
+			assertSucceeded(await controls.invoke("pause"), `${driver.key} pause`)
+			let current = await controls.restart()
+			assert.equal(store.isSessionPaused(sessionId), true, `${driver.key} restart lifted the pause`)
+
+			// The daemon closes sessions that stay quiet; the host revives them later.
+			store.reapStaleSessions(0, Date.now() + 1)
+			current = await current.restart()
+			assert.equal(store.isSessionPaused(sessionId), true, `${driver.key} reaping lifted the pause`)
+
+			const subscription = store.upsertSubscription({
+				sessionId,
+				repo: REPO,
+				prNumber: 9,
+				source: "manual",
+			})
+			store.createOrReplaceReminder(sessionId, subscription.subscriptionId, "Restarted", [], 0)
+			await current.crossDeliveryBoundary()
+			assert.ok(
+				!current.captured.some((capture) => capture.text.includes(`${REPO}#9`)),
+				`${driver.key} delivered a reminder after restarting while paused`,
+			)
+
+			assertSucceeded(await current.invoke("resume"), `${driver.key} resume`)
+			await current.crossDeliveryBoundary()
+			assert.ok(
+				current.captured.some((capture) => capture.text.includes(`${REPO}#9`)),
+				`${driver.key} did not deliver after resuming a restarted session`,
+			)
+			await current.shutdown()
 		},
 	},
 ]

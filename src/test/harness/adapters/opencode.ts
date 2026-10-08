@@ -4,6 +4,8 @@ import { PREMIND_CLIENT_HEARTBEAT_MS } from "../../../shared/constants.ts"
 import { createPremindPlugin } from "../../../plugin-opencode/index.ts"
 import { harnessToolName } from "./tool-names.ts"
 import type {
+	DeliverArgs,
+	HarnessControls,
 	AdapterDriver,
 	DeliveryCapture,
 	StartIdleArgs,
@@ -66,6 +68,37 @@ const createOpenCodeHarness = async ({
 	return { captured, delivered, fire, runtime }
 }
 
+const createOpenCodeControls = async (args: DeliverArgs): Promise<HarnessControls> => {
+	const harness = await createOpenCodeHarness(args)
+	return {
+		captured: harness.captured,
+		async invoke(capabilityId, params = {}) {
+			const name = harnessToolName("opencode", capabilityId)
+			const tool = harness.runtime.tool[name]
+			if (!tool) throw new Error(`opencode did not register ${name}`)
+			try {
+				const text = await tool.execute(params, { sessionID: args.sessionId })
+				return { text, isError: /\b(failed|refused)\b/i.test(text) }
+			} catch (error) {
+				return { text: error instanceof Error ? error.message : String(error), isError: true }
+			}
+		},
+		// OpenCode delivers after the idle threshold (0ms here) on session.idle.
+		async crossDeliveryBoundary() {
+			const before = harness.captured.length
+			await harness.fire({ type: "session.idle", properties: { sessionID: args.sessionId } })
+			for (let waited = 0; waited < 300 && harness.captured.length === before; waited += 10) {
+				await new Promise((resolve) => setTimeout(resolve, 10))
+			}
+		},
+		// Restarting OpenCode starts a new plugin process. The old process only
+		// releases its client lease; the session row stays until reaping.
+		restart: () => createOpenCodeControls(args),
+		shutdown: () =>
+			harness.fire({ type: "session.deleted", properties: { sessionID: args.sessionId } }),
+	}
+}
+
 export const opencodeDriver: AdapterDriver = {
 	key: "opencode",
 	sessionId: "opencode-session",
@@ -93,25 +126,7 @@ export const opencodeDriver: AdapterDriver = {
 		}
 	},
 
-	async createControls(args) {
-		const harness = await createOpenCodeHarness(args)
-		return {
-			captured: harness.captured,
-			async invoke(capabilityId, params = {}) {
-				const name = harnessToolName("opencode", capabilityId)
-				const tool = harness.runtime.tool[name]
-				if (!tool) throw new Error(`opencode did not register ${name}`)
-				try {
-					const text = await tool.execute(params, { sessionID: args.sessionId })
-					return { text, isError: /\bfailed\b/i.test(text) }
-				} catch (error) {
-					return { text: error instanceof Error ? error.message : String(error), isError: true }
-				}
-			},
-			shutdown: () =>
-				harness.fire({ type: "session.deleted", properties: { sessionID: args.sessionId } }),
-		}
-	},
+	createControls: (args) => createOpenCodeControls(args),
 
 	async startIdle({ advanceTime, ...args }) {
 		const harness = await createOpenCodeHarness(args)

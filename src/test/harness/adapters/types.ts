@@ -76,5 +76,15 @@ export type HarnessControls = {
 	) => Promise<ToolInvocationResult>
 	/** Messages the host injected into the session while controls were used. */
 	captured: DeliveryCapture[]
+	/**
+	 * Cross the earliest lifecycle boundary at which this host delivers pending
+	 * reminders, and settle any handoff the host confirms at the next boundary.
+	 */
+	crossDeliveryBoundary: () => Promise<void>
+	/**
+	 * Replay the host's real reload or restart of this same session: tear down
+	 * the running instance the way the host does, then start a fresh instance.
+	 */
+	restart: () => Promise<HarnessControls>
 	shutdown: () => Promise<void>
 }

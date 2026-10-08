@@ -4,7 +4,9 @@ import { createPremindPiExtension } from "../../../extension/index.ts"
 import { harnessToolName } from "./tool-names.ts"
 import type {
 	AdapterDriver,
+	DeliverArgs,
 	DeliveryCapture,
+	HarnessControls,
 	StartIdleArgs,
 } from "./types.ts"
 
@@ -73,14 +75,14 @@ const createPiHarness = ({
 		detectGit: async () => ({ repo: "acme/repo", branch }),
 	})(pi as never)
 
-	const fire = async (name: string) => {
+	const fire = async (name: string, event: Record<string, unknown> = {}) => {
 		const handler = events.get(name)
 		if (!handler) {
 			throw new Error(
 				`pi extension did not register ${name}; registered: ${[...events.keys()].join(", ")}`,
 			)
 		}
-		await handler({}, ctx)
+		await handler(event, ctx)
 	}
 
 	return {
@@ -91,6 +93,34 @@ const createPiHarness = ({
 		setIdle(value: boolean) {
 			idle = value
 		},
+	}
+}
+
+const createPiControls = async (args: DeliverArgs): Promise<HarnessControls> => {
+	const harness = createPiHarness({ ...args, statusPollIntervalMs: 0 })
+	await harness.fire("session_start")
+	return {
+		captured: harness.captured,
+		async invoke(capabilityId, params = {}) {
+			const name = harnessToolName("pi", capabilityId)
+			const tool = harness.tools.get(name)
+			if (!tool) throw new Error(`pi did not register ${name}`)
+			try {
+				const result = await tool.execute("scenario", params, undefined, undefined, harness.ctx)
+				return { text: result.content.map((part) => part.text).join("\n"), isError: false }
+			} catch (error) {
+				return { text: error instanceof Error ? error.message : String(error), isError: true }
+			}
+		},
+		// Pi hands off queued reminders as a follow-up at the end of a turn.
+		crossDeliveryBoundary: () => harness.fire("turn_end"),
+		// `/reload` fires session_shutdown on the old extension instance, then
+		// session_start on a fresh one for the same session file (Pi extension docs).
+		async restart() {
+			await harness.fire("session_shutdown", { reason: "reload" })
+			return createPiControls(args)
+		},
+		shutdown: () => harness.fire("session_shutdown"),
 	}
 }
 
@@ -116,25 +146,7 @@ export const piDriver: AdapterDriver = {
 		}
 	},
 
-	async createControls(args) {
-		const harness = createPiHarness({ ...args, statusPollIntervalMs: 0 })
-		await harness.fire("session_start")
-		return {
-			captured: harness.captured,
-			async invoke(capabilityId, params = {}) {
-				const name = harnessToolName("pi", capabilityId)
-				const tool = harness.tools.get(name)
-				if (!tool) throw new Error(`pi did not register ${name}`)
-				try {
-					const result = await tool.execute("scenario", params, undefined, undefined, harness.ctx)
-					return { text: result.content.map((part) => part.text).join("\n"), isError: false }
-				} catch (error) {
-					return { text: error instanceof Error ? error.message : String(error), isError: true }
-				}
-			},
-			shutdown: () => harness.fire("session_shutdown"),
-		}
-	},
+	createControls: (args) => createPiControls(args),
 
 	async startIdle({ advanceTime, ...args }) {
 		const harness = createPiHarness({ ...args, statusPollIntervalMs: 5_000 })

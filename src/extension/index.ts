@@ -1,6 +1,16 @@
 import { PREMIND_VERSION_LABEL } from "../shared/version.ts";
 import { commandCapabilities } from "../shared/command-capabilities.ts";
 import {
+	GLOBAL_CONFIRMATION_DESCRIPTION,
+	globalControlRefusal,
+	globalControlResult,
+} from "../shared/global-control.ts";
+import {
+	SESSION_PAUSED_DELIVERY_MESSAGE,
+	SESSION_PAUSED_MESSAGE,
+	SESSION_RESUMED_MESSAGE,
+} from "../shared/session-pause.ts";
+import {
 	CONFIG_DIR_NAME,
 	type ExtensionAPI,
 	type Theme,
@@ -102,6 +112,7 @@ const PRUNE_ERROR_PREFIX = "premind prune failed";
 const DELIVER_ERROR_PREFIX = "premind deliver failed";
 const CHECKOUT_ERROR_PREFIX = "premind active checkout update failed";
 const SUBSCRIPTION_ERROR_PREFIX = "premind subscription update failed";
+const SESSION_CONTROL_ERROR_PREFIX = "premind session control failed";
 const SESSION_SOURCE = "pi-extension";
 const DEFAULT_HEARTBEAT_MS = 10_000;
 const DEFAULT_STATUS_POLL_INTERVAL_MS = 15_000;
@@ -427,9 +438,36 @@ export const createPremindPiExtension = (
 			return result as PruneClosedSessionsResult;
 		};
 
+		const setCurrentSessionPaused = async (
+			ctx: {
+				cwd: string;
+				sessionManager?: { getSessionFile?: () => string | undefined };
+			},
+			paused: boolean,
+		) => {
+			const { client, sessionId } = await ensurePiSessionAttached(ctx);
+			if (paused) await client.pauseSession(sessionId);
+			else await client.resumeSession(sessionId);
+			return paused ? SESSION_PAUSED_MESSAGE : SESSION_RESUMED_MESSAGE;
+		};
+
+		const isCurrentSessionPaused = async () => {
+			if (!currentSessionId) return false;
+			const status = await getClient().debugStatus();
+			return status.sessions.some(
+				(session) =>
+					session.sessionId === currentSessionId && session.status === "paused",
+			);
+		};
+
+		const describeUndelivered = async () =>
+			(await isCurrentSessionPaused().catch(() => false))
+				? SESSION_PAUSED_DELIVERY_MESSAGE
+				: "premind has no pending reminders for this session.";
+
 		const setGlobalPolling = async (disabled: boolean) => {
 			const result = await createDaemonClient().setGlobalDisabled(disabled);
-			return `premind polling is ${result.disabled ? "disabled" : "enabled"} globally.`;
+			return globalControlResult(result.disabled);
 		};
 
 		const setStatus = (
@@ -761,14 +799,16 @@ export const createPremindPiExtension = (
 		});
 
 		pi.registerCommand("premind:enable", {
-			description: "Enable premind GitHub polling globally",
+			description:
+				"Enable premind GitHub polling globally, across all sessions and projects",
 			handler: async (_args, ctx) => {
 				ctx.ui.notify(await setGlobalPolling(false), "info");
 			},
 		});
 
 		pi.registerCommand("premind:disable", {
-			description: "Disable premind GitHub polling globally",
+			description:
+				"Disable premind GitHub polling globally, across all sessions and projects (use /premind:pause for this session only)",
 			handler: async (_args, ctx) => {
 				ctx.ui.notify(await setGlobalPolling(true), "info");
 			},
@@ -850,6 +890,30 @@ export const createPremindPiExtension = (
 			},
 		});
 
+		for (const [name, paused] of [
+			["premind:pause", true],
+			["premind:resume", false],
+		] as const) {
+			pi.registerCommand(name, {
+				description: paused
+					? "Pause premind reminders for this session only; subscriptions keep being watched"
+					: "Resume premind reminders for this session without changing subscriptions",
+				handler: async (_args, ctx) => {
+					try {
+						const message = await setCurrentSessionPaused(ctx, paused);
+						if (paused) setStatus(ctx, `${PR_ICON} paused`);
+						else await refreshStatusbar(ctx);
+						ctx.ui.notify(message, "info");
+					} catch (error) {
+						ctx.ui.notify(
+							`${SESSION_CONTROL_ERROR_PREFIX}: ${error instanceof Error ? error.message : String(error)}`,
+							"error",
+						);
+					}
+				},
+			});
+		}
+
 		const deliverCommand = {
 			description:
 				"Deliver all pending premind reminders for the current session, if any",
@@ -866,7 +930,7 @@ export const createPremindPiExtension = (
 					ctx.ui.notify(
 						result.delivered
 							? `premind delivered ${result.batches.length} reminder batch${result.batches.length === 1 ? "" : "es"}.`
-							: "premind has no pending reminders for this session.",
+							: await describeUndelivered(),
 						"info",
 					);
 				} catch (error) {
@@ -959,6 +1023,27 @@ export const createPremindPiExtension = (
 			},
 		});
 
+		for (const [name, label, paused, description] of [
+			["premind_pause", "Premind Pause", true, commandCapabilities.pause.toolGuidance],
+			["premind_resume", "Premind Resume", false, commandCapabilities.resume.toolGuidance],
+		] as const) {
+			pi.registerTool({
+				name,
+				label,
+				description,
+				parameters: Type.Object({}),
+				async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+					const text = await setCurrentSessionPaused(ctx, paused);
+					if (paused) setStatus(ctx, `${PR_ICON} paused`);
+					else await refreshStatusbar(ctx);
+					return {
+						content: [{ type: "text" as const, text }],
+						details: {},
+					};
+				},
+			});
+		}
+
 		pi.registerTool({
 			name: "premind_deliver",
 			label: "Premind Deliver",
@@ -975,7 +1060,7 @@ export const createPremindPiExtension = (
 				else await refreshStatusbar(ctx);
 				const text = result.delivered
 					? `premind delivered ${result.batches.length} reminder batch${result.batches.length === 1 ? "" : "es"}.`
-					: "premind has no pending reminders for this session.";
+					: await describeUndelivered();
 				return {
 					content: [{ type: "text" as const, text }],
 					details: {},
@@ -983,31 +1068,33 @@ export const createPremindPiExtension = (
 			},
 		});
 
-		pi.registerTool({
-			name: "premind_enable",
-			label: "Premind Enable",
-			description: `Enable premind polling. ${commandCapabilities.enable.toolGuidance}`,
-			parameters: Type.Object({}),
-			async execute() {
-				return {
-					content: [{ type: "text" as const, text: await setGlobalPolling(false) }],
-					details: {},
-				};
-			},
-		});
-
-		pi.registerTool({
-			name: "premind_disable",
-			label: "Premind Disable",
-			description: `Disable premind polling. ${commandCapabilities.disable.toolGuidance}`,
-			parameters: Type.Object({}),
-			async execute() {
-				return {
-					content: [{ type: "text" as const, text: await setGlobalPolling(true) }],
-					details: {},
-				};
-			},
-		});
+		for (const [name, label, action] of [
+			["premind_enable", "Premind Enable", "enable"],
+			["premind_disable", "Premind Disable", "disable"],
+		] as const) {
+			pi.registerTool({
+				name,
+				label,
+				description: `${action === "enable" ? "Enable" : "Disable"} premind polling. ${commandCapabilities[action].toolGuidance}`,
+				parameters: Type.Object({
+					confirmGlobal: Type.Boolean({ description: GLOBAL_CONFIRMATION_DESCRIPTION }),
+				}),
+				async execute(_toolCallId, params) {
+					if (params.confirmGlobal !== true) {
+						throw new Error(globalControlRefusal(action));
+					}
+					return {
+						content: [
+							{
+								type: "text" as const,
+								text: await setGlobalPolling(action === "disable"),
+							},
+						],
+						details: {},
+					};
+				},
+			});
+		}
 
 		pi.registerTool({
 			name: "premind_doctor",

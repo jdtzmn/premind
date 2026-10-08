@@ -218,11 +218,12 @@ export const commandCapabilities = {
 	enable: {
 		classification: "common",
 		scope: "daemon",
-		description: "Enable GitHub polling globally.",
+		description:
+			"Enable GitHub polling globally for every session; model tools require confirmGlobal: true.",
 		canonical: { commands: ["premind:enable"], tools: ["premind_enable"] },
-		parameters: {},
+		parameters: { confirmGlobal: { type: "boolean", required: true } },
 		toolGuidance:
-			"This enables Premind GitHub polling globally, for every session and project.",
+			"This enables Premind GitHub polling globally, for every session and project. Call it only when the user explicitly asks for the global enable, and pass confirmGlobal: true. To resume only this session, use the session resume tool instead.",
 		harnesses: {
 			pi: { commands: ["premind:enable"], tools: ["premind_enable"] },
 			claude: {
@@ -253,11 +254,12 @@ export const commandCapabilities = {
 	disable: {
 		classification: "common",
 		scope: "daemon",
-		description: "Disable GitHub polling globally.",
+		description:
+			"Disable GitHub polling globally for every session; model tools require confirmGlobal: true.",
 		canonical: { commands: ["premind:disable"], tools: ["premind_disable"] },
-		parameters: {},
+		parameters: { confirmGlobal: { type: "boolean", required: true } },
 		toolGuidance:
-			"This disables Premind GitHub polling globally, for every session and project.",
+			"This disables Premind GitHub polling globally, for every session and project. Call it only when the user explicitly asks for the global disable, and pass confirmGlobal: true. To pause, mute, or quiet only this session, use the session pause tool instead.",
 		harnesses: {
 			pi: { commands: ["premind:disable"], tools: ["premind_disable"] },
 			claude: {
@@ -398,6 +400,56 @@ export const commandCapabilities = {
 			codex: {
 				commands: [],
 				tools: ["premind_unsubscribe"],
+				exceptions: { commands: codexHasNoCommands },
+				extraParameters: codexSessionHandle(true),
+			},
+		},
+	},
+	pause: {
+		classification: "common",
+		scope: "session",
+		description:
+			"Pause reminder delivery for one session while preserving its subscriptions.",
+		canonical: { commands: ["premind:pause"], tools: ["premind_pause"] },
+		parameters: {},
+		toolGuidance:
+			"Pause Premind reminders for this session only. Subscriptions, watchers, and queued PR updates are kept, and the pause lasts until the session resume tool is called. Use this, not the global disable tool, to pause, mute, or quiet Premind.",
+		harnesses: {
+			pi: { commands: ["premind:pause"], tools: ["premind_pause"] },
+			claude: {
+				commands: ["premind:pause"],
+				tools: ["pause"],
+				exceptions: { tools: claudeToolNaming },
+			},
+			opencode: { commands: ["premind:pause"], tools: ["premind_pause"] },
+			codex: {
+				commands: [],
+				tools: ["premind_pause"],
+				exceptions: { commands: codexHasNoCommands },
+				extraParameters: codexSessionHandle(true),
+			},
+		},
+	},
+	resume: {
+		classification: "common",
+		scope: "session",
+		description:
+			"Resume reminder delivery for a paused session without changing subscriptions.",
+		canonical: { commands: ["premind:resume"], tools: ["premind_resume"] },
+		parameters: {},
+		toolGuidance:
+			"Resume Premind reminders for this session without changing subscriptions. Queued PR updates arrive at the next safe boundary. Use this, not the global enable tool, to undo a session pause.",
+		harnesses: {
+			pi: { commands: ["premind:resume"], tools: ["premind_resume"] },
+			claude: {
+				commands: ["premind:resume"],
+				tools: ["resume"],
+				exceptions: { tools: claudeToolNaming },
+			},
+			opencode: { commands: ["premind:resume"], tools: ["premind_resume"] },
+			codex: {
+				commands: [],
+				tools: ["premind_resume"],
 				exceptions: { commands: codexHasNoCommands },
 				extraParameters: codexSessionHandle(true),
 			},
@@ -583,6 +635,7 @@ export const renderCommandCapabilityDocumentation = (): string => {
 		"## Notes",
 		"",
 		"- Claude status remains aggregate and redacted; Pi, OpenCode, and Codex may expose session detail.",
+		"- `pause` / `resume` act on one session and never change subscriptions; `enable` / `disable` act on every session, and their model tools refuse calls without `confirmGlobal: true`.",
 		"- Delivery mechanics remain harness-specific even though `/premind:deliver` is canonical.",
 		"",
 	);

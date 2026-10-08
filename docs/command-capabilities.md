@@ -12,6 +12,8 @@ This matrix is generated from `src/shared/command-capabilities.ts`. Every harnes
 | `set-active-checkout` | common | session | commands `/premind:set-active-checkout`<br>tools `premind_set_active_checkout` | commands `/premind:set-active-checkout`<br>tools `premind_set_active_checkout` | tools `set_active_checkout` | tools `premind_set_active_checkout` | tools `premind_set_active_checkout` |
 | `subscribe` | common | session | commands `/premind:subscribe`<br>tools `premind_subscribe` | commands `/premind:subscribe`<br>tools `premind_subscribe` | commands `/premind:subscribe`<br>tools `subscribe` | tools `premind_subscribe` | tools `premind_subscribe` |
 | `unsubscribe` | common | session | commands `/premind:unsubscribe`<br>tools `premind_unsubscribe` | commands `/premind:unsubscribe`<br>tools `premind_unsubscribe` | commands `/premind:unsubscribe`<br>tools `unsubscribe` | tools `premind_unsubscribe` | tools `premind_unsubscribe` |
+| `pause` | common | session | commands `/premind:pause`<br>tools `premind_pause` | commands `/premind:pause`<br>tools `premind_pause` | commands `/premind:pause`<br>tools `pause` | commands `/premind:pause`<br>tools `premind_pause` | tools `premind_pause` |
+| `resume` | common | session | commands `/premind:resume`<br>tools `premind_resume` | commands `/premind:resume`<br>tools `premind_resume` | commands `/premind:resume`<br>tools `resume` | commands `/premind:resume`<br>tools `premind_resume` | tools `premind_resume` |
 | `prune` | adapter-specific | daemon | commands `/premind:prune` | commands `/premind:prune` | — | — | — |
 
 ## Deferred gaps
@@ -51,10 +53,15 @@ This matrix is generated from `src/shared/command-capabilities.ts`. Every harnes
 - `subscribe` / Codex / commands (unsupported): Codex plugins expose MCP tools and skills, not slash commands.
 - `unsubscribe` / Claude Code / tools (host-naming): Claude MCP tools omit the premind_ prefix.
 - `unsubscribe` / Codex / commands (unsupported): Codex plugins expose MCP tools and skills, not slash commands.
+- `pause` / Claude Code / tools (host-naming): Claude MCP tools omit the premind_ prefix.
+- `pause` / Codex / commands (unsupported): Codex plugins expose MCP tools and skills, not slash commands.
+- `resume` / Claude Code / tools (host-naming): Claude MCP tools omit the premind_ prefix.
+- `resume` / Codex / commands (unsupported): Codex plugins expose MCP tools and skills, not slash commands.
 - `prune` / Codex / commands (unsupported): Codex plugins expose MCP tools and skills, not slash commands.
 - skills / OpenCode (unsupported): OpenCode's npm plugin cannot install into OpenCode's skill discovery directories.
 
 ## Notes
 
 - Claude status remains aggregate and redacted; Pi, OpenCode, and Codex may expose session detail.
+- `pause` / `resume` act on one session and never change subscriptions; `enable` / `disable` act on every session, and their model tools refuse calls without `confirmGlobal: true`.
 - Delivery mechanics remain harness-specific even though `/premind:deliver` is canonical.

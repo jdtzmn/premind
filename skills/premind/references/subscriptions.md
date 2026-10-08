@@ -7,5 +7,6 @@ Pi tools act on the current session; do not reuse another session's context.
 - At the start of PR work, even in the startup checkout, call `premind_set_active_checkout` with the active checkout path. Call it again after switching branches or worktrees, before following or creating a PR.
 - Call `premind_subscribe` immediately after creating, opening, discovering, or starting work on a PR, before reporting its URL or status. Use `premind_unsubscribe` when the user asks to stop tracking. Include `repo` as `owner/name` for a PR outside the current repository.
 - Use `premind_status` to inspect daemon status.
+- When the user asks to pause, mute, or quiet Premind, call `premind_pause`. It withholds reminders from this session only and keeps every subscription. Call `premind_resume` to restore delivery. Do not change subscriptions or global polling for this.
 
 A skill helps use controls; lifecycle hooks own registration and delivery. Do not claim that a tool call itself delivered a reminder.

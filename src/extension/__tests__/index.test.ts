@@ -1,4 +1,9 @@
 import assert from "node:assert/strict";
+import {
+	SESSION_PAUSED_DELIVERY_MESSAGE,
+	SESSION_PAUSED_MESSAGE,
+	SESSION_RESUMED_MESSAGE,
+} from "../../shared/session-pause.ts";
 import { describe, test } from "node:test";
 import {
 	createPremindPiExtension,
@@ -342,12 +347,12 @@ describe("premind Pi extension", () => {
 		assert.equal(mock.commands.has("premind:activate-worktree"), false);
 		assert.ok(mock.commands.has("premind:subscribe"));
 		assert.ok(mock.commands.has("premind:unsubscribe"));
-		assert.equal(mock.commands.has("premind:pause"), false);
-		assert.equal(mock.commands.has("premind:resume"), false);
+		assert.ok(mock.commands.has("premind:pause"));
+		assert.ok(mock.commands.has("premind:resume"));
 		assert.ok(mock.commands.has("premind:deliver"));
 		assert.ok(mock.commands.has("premind:flush"));
-		assert.equal(mock.tools.has("premind_pause"), false);
-		assert.equal(mock.tools.has("premind_resume"), false);
+		assert.ok(mock.tools.has("premind_pause"));
+		assert.ok(mock.tools.has("premind_resume"));
 		assert.ok(mock.tools.has("premind_deliver"));
 		assert.ok(mock.tools.has("premind_doctor"));
 		assert.ok(mock.tools.has("premind_enable"));
@@ -1035,10 +1040,30 @@ describe("premind Pi extension", () => {
 		assert.ok(disableTool);
 		assert.ok(enableTool);
 
+		for (const tool of [disableTool, enableTool]) {
+			assert.match(tool.description ?? "", /globally, for every session and project/);
+			assert.match(tool.description ?? "", /only when the user explicitly asks/);
+			for (const params of [{}, { confirmGlobal: false }]) {
+				await assert.rejects(
+					tool.execute("tool-unconfirmed", params, undefined, undefined, {}),
+					/refused to (disable|enable) polling globally.*confirmGlobal: true/,
+				);
+			}
+		}
+		assert.match(disableTool.description ?? "", /use the session pause tool instead/);
+		assert.match(enableTool.description ?? "", /use the session resume tool instead/);
+		assert.deepEqual(client.operations, []);
+
 		await disable.handler("", createCommandContext(notifications));
 		await enable.handler("", createCommandContext(notifications));
-		await disableTool.execute("tool-1", {}, undefined, undefined, {});
-		await enableTool.execute("tool-2", {}, undefined, undefined, {});
+		const disabled = await disableTool.execute(
+			"tool-1",
+			{ confirmGlobal: true },
+			undefined,
+			undefined,
+			{},
+		);
+		await enableTool.execute("tool-2", { confirmGlobal: true }, undefined, undefined, {});
 
 		assert.deepEqual(client.operations, [
 			"setGlobalDisabled:true",
@@ -1049,9 +1074,13 @@ describe("premind Pi extension", () => {
 		assert.deepEqual(
 			notifications.map(({ message }) => message),
 			[
-				"premind polling is disabled globally.",
-				"premind polling is enabled globally.",
+				"premind polling is disabled globally, across all sessions and projects.",
+				"premind polling is enabled globally, across all sessions and projects.",
 			],
+		);
+		assert.equal(
+			disabled.content[0]?.text,
+			"premind polling is disabled globally, across all sessions and projects.",
 		);
 	});
 
@@ -1144,6 +1173,81 @@ describe("premind Pi extension", () => {
 				"premind subscribed to owner/repo#42.",
 				"premind unsubscribed from owner/repo#42.",
 			],
+		);
+	});
+
+	test("pause and resume control only the current session's delivery", async () => {
+		const mock = createMockPi();
+		const client = createClient();
+		const notifications: Array<{ message: string; level: string }> = [];
+		createPremindPiExtension({
+			createDaemonClient: () => client.client,
+			config: { statusPollIntervalMs: 0 },
+			detectGit: async () => ({ repo: "owner/repo", branch: "feature/pi" }),
+		})(mock.pi as never);
+
+		const pause = mock.commands.get("premind:pause");
+		const resume = mock.commands.get("premind:resume");
+		const pauseTool = mock.tools.get("premind_pause");
+		const resumeTool = mock.tools.get("premind_resume");
+		assert.ok(pause);
+		assert.ok(resume);
+		assert.ok(pauseTool);
+		assert.ok(resumeTool);
+		assert.match(pauseTool.description ?? "", /not the global disable tool/);
+		assert.match(resumeTool.description ?? "", /not the global enable tool/);
+
+		const ctx = createCommandContext(notifications);
+		await pause.handler("", ctx);
+		await pause.handler("", ctx);
+		await resume.handler("", ctx);
+		const paused = await pauseTool.execute("tool-1", {}, undefined, undefined, ctx);
+		const resumed = await resumeTool.execute("tool-2", {}, undefined, undefined, ctx);
+
+		assert.deepEqual(client.operations, [
+			"registerClient:/tmp/project:pi-extension",
+			"registerSession:/tmp/session.jsonl:owner/repo:feature/pi",
+			"pauseSession:/tmp/session.jsonl",
+			"pauseSession:/tmp/session.jsonl",
+			"resumeSession:/tmp/session.jsonl",
+			"pauseSession:/tmp/session.jsonl",
+			"resumeSession:/tmp/session.jsonl",
+		]);
+		const pausedMessage = SESSION_PAUSED_MESSAGE;
+		const resumedMessage = SESSION_RESUMED_MESSAGE;
+		assert.deepEqual(
+			notifications.map(({ message }) => message),
+			[pausedMessage, pausedMessage, resumedMessage],
+		);
+		assert.equal(paused.content[0]?.text, pausedMessage);
+		assert.equal(resumed.content[0]?.text, resumedMessage);
+	});
+
+	test("/premind:deliver explains that a paused session withholds reminders", async () => {
+		const mock = createMockPi();
+		const client = createClient({
+			statusResult: {
+				...status,
+				sessions: [
+					{ ...status.sessions[0], sessionId: "/tmp/session.jsonl", status: "paused" },
+				],
+			},
+		});
+		const notifications: Array<{ message: string; level: string }> = [];
+		createPremindPiExtension({
+			createDaemonClient: () => client.client,
+			config: { statusPollIntervalMs: 0 },
+			detectGit: async () => ({ repo: "owner/repo", branch: "feature/pi" }),
+		})(mock.pi as never);
+
+		const ctx = createCommandContext(notifications);
+		await mock.commands.get("premind:pause")?.handler("", ctx);
+		await mock.commands.get("premind:deliver")?.handler("", ctx);
+
+		assert.deepEqual(mock.sentMessages, []);
+		assert.equal(
+			notifications.at(-1)?.message,
+			SESSION_PAUSED_DELIVERY_MESSAGE,
 		);
 	});
 
