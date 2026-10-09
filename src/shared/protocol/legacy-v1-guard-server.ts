@@ -24,6 +24,9 @@ export class LegacyV1GuardServer {
   ) {
     this.server = net.createServer((socket) => {
       socket.setEncoding("utf8");
+      // A client that disconnects before its reply (a liveness probe, a timed
+      // out request) must not crash the daemon with an unhandled EPIPE.
+      socket.on("error", () => socket.destroy());
       let buffer = "";
       socket.on("data", (chunk) => {
         buffer += chunk;
@@ -33,7 +36,7 @@ export class LegacyV1GuardServer {
           buffer = buffer.slice(newline + 1);
           if (line) {
             void this.handleLine(line).then((response) => {
-              socket.write(`${JSON.stringify(response)}\n`);
+              if (socket.writable) socket.write(`${JSON.stringify(response)}\n`);
             });
           }
           newline = buffer.indexOf("\n");

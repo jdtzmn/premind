@@ -352,3 +352,56 @@ test("a paused session stays paused after its client reconnects to a new daemon"
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("clients that disconnect before their reply never crash the daemon", async () => {
+  const dir = fs.mkdtempSync(path.join("/tmp", "premind-ipc-epipe-"));
+  const historicalSocketPath = path.join(dir, "premind.sock");
+  const modernSocketPath = path.join(dir, "modern.sock");
+  const server = new IpcServer(new StateStore(path.join(dir, "premind.db")));
+  const guard = new LegacyV1GuardServer(
+    new LegacyV1ProxyRouter(server.store, server.daemonInstanceId, (routed) =>
+      server.handleRequest(routed),
+    ),
+    (value) => server.bootstrap(value),
+  );
+  await guard.listen(historicalSocketPath);
+  await server.listen(modernSocketPath);
+  const crashes: unknown[] = [];
+  const onCrash = (error: unknown) => crashes.push(error);
+  process.on("uncaughtException", onCrash);
+  try {
+    // Like a liveness probe or a timed-out request: send, then hang up at once.
+    const hangUps = [historicalSocketPath, modernSocketPath].flatMap((socketPath) =>
+      Array.from({ length: 25 }, () =>
+        new Promise<void>((resolve) => {
+          const socket = net.createConnection(socketPath, () => {
+            socket.write(
+              `${JSON.stringify({ type: "debugStatus", protocolVersion: 1, payload: {} })}\n`,
+              () => {
+                socket.destroy();
+                resolve();
+              },
+            );
+          });
+          socket.on("error", () => resolve());
+        }),
+      ),
+    );
+    await Promise.all(hangUps);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.deepEqual(crashes, []);
+    for (const socketPath of [historicalSocketPath, modernSocketPath]) {
+      const response = (await request(socketPath, {
+        type: "debugStatus",
+        protocolVersion: 1,
+        payload: {},
+      })) as { ok: boolean };
+      assert.equal(response.ok, true, socketPath);
+    }
+  } finally {
+    process.off("uncaughtException", onCrash);
+    await guard.close();
+    await server.close(modernSocketPath);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
