@@ -299,6 +299,7 @@ export class PremindDaemonClient {
       protocolVersion: PREMIND_PROTOCOL_VERSION,
       payload: { sessionId },
     });
+    this.rememberPause(sessionId, true);
   }
 
   async resumeSession(sessionId: string) {
@@ -307,6 +308,16 @@ export class PremindDaemonClient {
       protocolVersion: PREMIND_PROTOCOL_VERSION,
       payload: { sessionId },
     });
+    this.rememberPause(sessionId, false);
+  }
+
+  // ensureSessionControl asserts its `paused` flag, so a replay after a
+  // reconnect must carry the current pause, not the one it attached with.
+  private rememberPause(sessionId: string, paused: boolean) {
+    const attached = this.attachedSessions.get(sessionId);
+    if (attached?.type === "ensureSessionControl") {
+      attached.payload = { ...attached.payload, paused };
+    }
   }
 
   async activateWorktree(payload: ActivateWorktreePayload) {

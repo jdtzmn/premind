@@ -98,6 +98,9 @@ export class IpcServer {
 		let buffer = "";
 
 		socket.setEncoding("utf8");
+		// A client that disconnects before its reply (a liveness probe, a timed
+		// out request) must not crash the daemon with an unhandled EPIPE.
+		socket.on("error", () => socket.destroy());
 		socket.on("data", (chunk) => {
 			buffer += chunk;
 			let newlineIndex = buffer.indexOf("\n");
@@ -106,7 +109,7 @@ export class IpcServer {
 				buffer = buffer.slice(newlineIndex + 1);
 				if (line.length > 0) {
 					void this.handleLine(line).then((response) => {
-						socket.write(`${JSON.stringify(response)}\n`);
+						if (socket.writable) socket.write(`${JSON.stringify(response)}\n`);
 					});
 				}
 				newlineIndex = buffer.indexOf("\n");
