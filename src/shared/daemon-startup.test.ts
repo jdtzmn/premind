@@ -8,14 +8,19 @@ import {
   CODEX_REQUIRED_DAEMON_OPERATIONS,
   acquireDaemonLock,
   acquireDaemonStartLock,
+  compareDaemonBuilds,
   daemonLockStatus,
   formatDaemonLockStatus,
+  handOverOlderDaemon,
   holdsDaemonLock,
   inspectDaemon,
+  isRunningDaemonOlder,
+  isSocketReachable,
   isDaemonStarting,
   probeDaemon,
   releaseDaemonLock,
   releaseDaemonStartLock,
+  REQUEST_HANDOVER_OPERATION,
 } from "./daemon-startup.ts";
 
 const tempPaths: string[] = [];
@@ -295,4 +300,175 @@ test("describes the daemon lock holder for doctor output", async () => {
 
   writeDaemonLock(stateDir, DEAD_PID, Date.now());
   assert.match(formatDaemonLockStatus(daemonLockStatus(stateDir)), /process gone/);
+});
+
+const build = (version: string, buildTime = 0) => ({ version, buildTime });
+
+test("orders daemon builds by version, then commit time", () => {
+  assert.equal(compareDaemonBuilds(build("0.2.0"), build("0.1.9")), "newer");
+  assert.equal(compareDaemonBuilds(build("0.1.0", 9), build("0.2.0", 1)), "older");
+  assert.equal(compareDaemonBuilds(build("0.1.0", 20), build("0.1.0", 10)), "newer");
+  assert.equal(compareDaemonBuilds(build("0.1.0", 10), build("0.1.0", 10)), "same");
+  // Equal versions with an unknown commit time never order: the running daemon wins.
+  assert.equal(compareDaemonBuilds(build("0.1.0", 20), build("0.1.0")), "unordered");
+  // An unknown candidate never takes over; an unknown running build always yields.
+  assert.equal(compareDaemonBuilds(build("0.0.0", 20), build("0.1.0", 10)), "unordered");
+  assert.equal(compareDaemonBuilds(build("dev"), build("0.1.0", 10)), "unordered");
+  assert.equal(compareDaemonBuilds(build("0.1.0", 10), build("0.0.0")), "newer");
+});
+
+type FakeDaemon = {
+  socketPath: string;
+  requests: Array<{ type?: string; payload?: unknown }>;
+  stop: () => Promise<void>;
+};
+
+/** A daemon that answers bootstrap and requestHandover like the real server. */
+const startFakeDaemon = async ({
+  version,
+  buildTime,
+  operations = [REQUEST_HANDOVER_OPERATION],
+  acceptHandover = true,
+  exitOnHandover = true,
+}: {
+  version: string;
+  buildTime: number;
+  operations?: string[];
+  acceptHandover?: boolean;
+  exitOnHandover?: boolean;
+}): Promise<FakeDaemon> => {
+  const socketPath = path.join(createTempDir(), "premind.sock");
+  const requests: FakeDaemon["requests"] = [];
+  const sockets = new Set<net.Socket>();
+  const server = net.createServer((socket) => {
+    sockets.add(socket);
+    socket.on("close", () => sockets.delete(socket));
+    socket.once("data", (chunk) => {
+      const request = JSON.parse(String(chunk).trim()) as { type?: string; payload?: unknown };
+      requests.push(request);
+      if (request.type === "initialize") {
+        socket.end(
+          `${JSON.stringify({
+            ok: true,
+            bootstrapVersion: 1,
+            result: {
+              daemon: { instanceId: "fake", pid: 1, version, commit: "abc123", buildTime, socketPath, lifecycleState: "ready" },
+              protocols: { min: 1, max: 2, selected: 2 },
+              capabilities: { operations, rollingSessions: false },
+              storage: { epoch: 1, capabilities: [] },
+            },
+          })}\n`,
+        );
+        return;
+      }
+      socket.end(
+        `${JSON.stringify({ ok: true, protocolVersion: 2, result: { accepted: acceptHandover } })}\n`,
+      );
+      if (acceptHandover && exitOnHandover) {
+        setImmediate(() => {
+          server.close();
+          for (const open of sockets) open.destroy();
+        });
+      }
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+  return {
+    socketPath,
+    requests,
+    stop: () =>
+      new Promise<void>((resolve) => {
+        for (const open of sockets) open.destroy();
+        server.close(() => resolve());
+        if (!server.listening) resolve();
+      }),
+  };
+};
+
+test("hands over only to a strictly newer build and waits for the old daemon to exit", async () => {
+  const daemon = await startFakeDaemon({ version: "0.1.0", buildTime: 100 });
+  const stateDir = createTempDir();
+  try {
+    assert.equal(
+      await handOverOlderDaemon({
+        build: build("0.1.0", 100),
+        host: "pi",
+        socketPath: daemon.socketPath,
+        stateDir,
+      }),
+      "not-older",
+    );
+    assert.equal(
+      await isRunningDaemonOlder({ build: build("0.1.0", 200), host: "pi", socketPath: daemon.socketPath }),
+      true,
+    );
+    assert.equal(
+      await handOverOlderDaemon({
+        build: build("0.1.0", 200),
+        host: "pi",
+        socketPath: daemon.socketPath,
+        stateDir,
+        timeoutMs: 2_000,
+      }),
+      "handed-over",
+    );
+    assert.deepEqual(daemon.requests.at(-1), {
+      type: REQUEST_HANDOVER_OPERATION,
+      protocolVersion: 2,
+      payload: { version: "0.1.0", buildTime: 200 },
+    });
+  } finally {
+    await daemon.stop();
+  }
+});
+
+test("never kills a daemon that refuses, lacks handover, or does not exit", async () => {
+  const stateDir = createTempDir();
+  const newer = build("9.0.0", 1);
+  const cases: Array<{
+    options: { acceptHandover?: boolean; operations?: string[]; exitOnHandover?: boolean };
+    expected: string;
+  }> = [
+    { options: { acceptHandover: false }, expected: "refused" },
+    { options: { operations: [] }, expected: "unsupported" },
+    { options: { exitOnHandover: false }, expected: "timeout" },
+  ];
+  for (const { options, expected } of cases) {
+    const daemon = await startFakeDaemon({ version: "0.1.0", buildTime: 1, ...options });
+    try {
+      assert.equal(
+        await handOverOlderDaemon({
+          build: newer,
+          host: "pi",
+          socketPath: daemon.socketPath,
+          stateDir,
+          timeoutMs: 200,
+        }),
+        expected,
+      );
+      assert.equal(await isSocketReachable(daemon.socketPath), true, expected);
+    } finally {
+      await daemon.stop();
+    }
+  }
+});
+
+test("treats a daemon without bootstrap as unsupported", async () => {
+  const socketPath = path.join(createTempDir(), "premind.sock");
+  const server = net.createServer((socket) =>
+    socket.once("data", () =>
+      socket.end(
+        `${JSON.stringify({ ok: false, protocolVersion: 1, error: { code: "BAD_REQUEST", message: "unsupported request type" } })}\n`,
+      ),
+    ),
+  );
+  await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+  try {
+    assert.equal(
+      await handOverOlderDaemon({ build: build("9.0.0", 1), host: "pi", socketPath, stateDir: createTempDir() }),
+      "unsupported",
+    );
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
 });

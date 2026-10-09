@@ -13,6 +13,8 @@ export const daemonInstanceIdentitySchema = z.object({
   commit: z.string().min(1),
   socketPath: z.string().min(1),
   lifecycleState: daemonLifecycleStateSchema,
+  // Additive: commit time of the build in seconds, used to order equal versions.
+  buildTime: z.number().int().nonnegative().optional(),
 });
 
 export const instanceDescriptorV1Schema = daemonInstanceIdentitySchema.extend({

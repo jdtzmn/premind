@@ -97,6 +97,12 @@ export const unregisterSessionPayloadSchema = z
   })
   .strict();
 export const deleteSessionPayloadSchema = unregisterSessionPayloadSchema;
+export const requestHandoverPayloadSchema = z
+  .object({
+    version: z.string().min(1),
+    buildTime: z.number().int().nonnegative(),
+  })
+  .strict();
 export const sessionLeaseTokenSchema = z
   .object({
     sessionId: z.string().min(1),

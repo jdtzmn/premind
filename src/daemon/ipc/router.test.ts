@@ -5,7 +5,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, test } from "node:test";
 import { PREMIND_PROTOCOL_VERSION } from "../../shared/constants.ts";
-import { requestSchema } from "../../shared/ipc.ts";
+import { legacyRequestSchema, requestSchema } from "../../shared/ipc.ts";
 import { Router } from "./router.ts";
 import { StateStore, type SessionLeaseToken } from "../persistence/store.ts";
 import { WorktreeBindingRegistry } from "../worktrees/worktree-binding-registry.ts";
@@ -1341,6 +1341,48 @@ describe("generic reminder claim IPC", () => {
       protocolVersion: PREMIND_PROTOCOL_VERSION,
       result: { claim: null },
     });
+    store.close();
+  });
+});
+
+describe("handover IPC", () => {
+  test("accepts only a strictly newer build and keeps handover out of protocol v1", async () => {
+    const store = createStore();
+    let accepted = 0;
+    const router = new Router(
+      store,
+      async () => worktree,
+      undefined,
+      undefined,
+      () => {},
+      () => {
+        accepted++;
+      },
+    );
+    const request = (version: string) =>
+      router.handle({
+        type: "requestHandover",
+        protocolVersion: 2,
+        payload: { version, buildTime: 1 },
+      } as never);
+
+    const refused = await request("0.0.1");
+    assert.equal(refused.ok, true);
+    assert.equal((refused as { result: { accepted: boolean } }).result.accepted, false);
+    assert.equal(accepted, 0);
+
+    const granted = await request("999.0.0");
+    assert.deepEqual((granted as { result: unknown }).result, { accepted: true });
+    assert.equal(accepted, 1);
+
+    assert.equal(
+      legacyRequestSchema.safeParse({
+        type: "requestHandover",
+        protocolVersion: 1,
+        payload: { version: "999.0.0", buildTime: 1 },
+      }).success,
+      false,
+    );
     store.close();
   });
 });
