@@ -289,3 +289,66 @@ test("closing removes the daemon's own socket", async () => {
 		fs.rmSync(dir, { recursive: true, force: true });
 	}
 });
+
+test("a paused session stays paused after its client reconnects to a new daemon", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "premind-ipc-reconnect-"));
+  const socketPath = path.join(dir, "premind.sock");
+  const dbPath = path.join(dir, "premind.db");
+  let server = new IpcServer(new StateStore(dbPath));
+  await server.listen(socketPath);
+  let serving = true;
+  const client = new PremindDaemonClient({
+    host: "pi",
+    socketPath,
+    retryDelayMs: 0,
+    // Stands in for a launcher: starts a fresh daemon on the same state.
+    ensureDaemon: async () => {
+      if (serving) return;
+      // Like daemon startup, recovery detaches every process-owned session.
+      const store = new StateStore(dbPath);
+      store.recoverFromRestart();
+      server = new IpcServer(store);
+      await server.listen(socketPath);
+      serving = true;
+    },
+  });
+  try {
+    await client.registerClient(dir, "test");
+    await client.ensureSessionControl({
+      sessionId: "paused-session",
+      host: "pi",
+      repo: "acme/repo",
+      branch: "main",
+      isPrimary: true,
+      busyState: "idle",
+      paused: false,
+    });
+    await client.registerSession({
+      sessionId: "registered-session",
+      host: "pi",
+      repo: "acme/repo",
+      branch: "main",
+      isPrimary: true,
+      status: "active",
+      busyState: "idle",
+    });
+    for (const sessionId of ["paused-session", "registered-session"]) {
+      await client.pauseSession(sessionId);
+      assert.equal(server.store.isSessionPaused(sessionId), true);
+    }
+
+    // The daemon is replaced; the client's next request reconnects and
+    // re-registers its sessions with their original payloads.
+    await server.close(socketPath);
+    serving = false;
+    await client.heartbeat();
+    for (const sessionId of ["paused-session", "registered-session"]) {
+      assert.equal(server.store.getSession(sessionId)?.status, "active", sessionId);
+      assert.equal(server.store.isSessionPaused(sessionId), true, sessionId);
+    }
+  } finally {
+    await client.release();
+    await server.close(socketPath);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
