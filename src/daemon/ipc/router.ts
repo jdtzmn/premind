@@ -367,20 +367,26 @@ export class Router {
 					}
 				case "claimReminderBundle":
 					try {
-						return this.withAttachedSessionLease(request, () =>
-							this.ok({
-								bundle: this.reminderHandoffs.claimReminderBundle(
-									request.payload.sessionId,
-									Date.now(),
-									request.sessionLease
-										? {
-											ownerInstanceId: request.sessionLease.ownerInstanceId,
-											sessionGeneration: request.sessionLease.generation,
-										}
-										: undefined,
-								),
-							}),
-						);
+						return this.withAttachedSessionLease(request, () => {
+							const claim = this.reminderHandoffs.claimReminderBundle(
+								request.payload.sessionId,
+								Date.now(),
+								request.sessionLease
+									? {
+										ownerInstanceId: request.sessionLease.ownerInstanceId,
+										sessionGeneration: request.sessionLease.generation,
+									}
+									: undefined,
+							);
+							// The execution generation is daemon-internal fencing state; the
+							// wire bundle is frozen to `{ handoffId, batches }`, which strict
+							// released clients reject any additions to.
+							return this.ok({
+								bundle: claim
+									? { handoffId: claim.handoffId, batches: claim.batches }
+									: null,
+							});
+						});
 					} catch (error) {
 						return this.sessionLeaseFailure(error);
 					}

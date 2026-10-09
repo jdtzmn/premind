@@ -5,7 +5,11 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, test } from "node:test";
 import { PREMIND_PROTOCOL_VERSION } from "../../shared/constants.ts";
-import { legacyRequestSchema, requestSchema } from "../../shared/ipc.ts";
+import {
+  claimReminderBundleResponseSchema,
+  legacyRequestSchema,
+  requestSchema,
+} from "../../shared/ipc.ts";
 import { Router } from "./router.ts";
 import { StateStore, type SessionLeaseToken } from "../persistence/store.ts";
 import { WorktreeBindingRegistry } from "../worktrees/worktree-binding-registry.ts";
@@ -664,6 +668,8 @@ describe("reminder bundle IPC", () => {
     } as never);
     assert.equal(claimed.ok, true);
     if (!claimed.ok) return;
+    // The frozen wire bundle must parse with the strict client schema.
+    assert.doesNotThrow(() => claimReminderBundleResponseSchema.parse(claimed.result));
     const firstBundle = (claimed.result as {
       bundle: {
         handoffId: string;
