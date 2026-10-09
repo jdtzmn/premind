@@ -437,12 +437,14 @@ describe("PremindDaemonClient protocol negotiation and session leases", () => {
     const requests: LeaseRequest[] = [];
     const testClient = client as unknown as {
       clientId: string;
+      initialized: boolean;
       protocolVersion: number;
       daemonInstanceId?: string;
       supportedOperations: Set<string>;
       request: (request: LeaseRequest) => Promise<unknown>;
     };
     testClient.clientId = "client-a-1";
+    testClient.initialized = true;
     testClient.protocolVersion = 2;
     testClient.daemonInstanceId = "daemon-a";
     testClient.supportedOperations = new Set([
@@ -502,6 +504,33 @@ describe("protocol-v1 response compatibility", () => {
 });
 
 describe("PremindDaemonClient connection loss", () => {
+  test("starts a missing daemon before the first protocol handshake", async () => {
+    const temporaryRoot = process.platform === "win32" ? os.tmpdir() : "/tmp";
+    const directory = fs.mkdtempSync(path.join(temporaryRoot, "premind-client-"));
+    const socketPath = path.join(directory, "premind.sock");
+    let ensureCalls = 0;
+    const server = net.createServer((socket) =>
+      socket.once("data", () => socket.end(okResponse())),
+    );
+    const client = new PremindDaemonClient({
+      socketPath,
+      ensureDaemon: async () => {
+        ensureCalls++;
+        await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+      },
+      maxRetries: 1,
+      retryDelayMs: 0,
+    });
+    try {
+      // No daemon is listening yet: the handshake must trigger ensureDaemon.
+      await client.heartbeat();
+      assert.equal(ensureCalls, 1);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   test("rejects when the daemon closes the connection without replying", async () => {
     await withSocketServer(
       (socket) => socket.once("data", () => socket.end()),

@@ -132,7 +132,6 @@ export class PremindDaemonClient {
     }
   >();
   async registerClient(projectRoot: string, sessionSource?: string) {
-    await this.initializeProtocol();
     this.projectRoot = projectRoot;
     this.sessionSource = sessionSource;
     const response = await this.requestWithRetry({
@@ -654,8 +653,11 @@ export class PremindDaemonClient {
     message: unknown,
     attempt = 0,
   ): Promise<unknown> {
-    await this.ensureRequestSessionLease(message);
     try {
+      // Negotiate inside the retry so a missing daemon is started rather than
+      // failing the very first request with ENOENT.
+      await this.initializeProtocol();
+      await this.ensureRequestSessionLease(message);
       return await this.request(this.withNegotiatedProtocol(message));
     } catch (error) {
       if (attempt >= this.maxRetries) throw error;
