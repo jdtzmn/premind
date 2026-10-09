@@ -204,7 +204,7 @@ The running daemon accepts only from a strictly newer build and answers `{ "acce
 
 The launcher holds the daemon start lock from the request until its own daemon is serving, so concurrent older launchers wait rather than restarting the old build. It waits a bounded time (10 seconds) for the old daemon to release the daemon lock and historical socket. On timeout it releases the start lock and keeps using the running daemon; it never kills a daemon.
 
-A daemon that predates `requestHandover` cannot be asked to hand over. Newer launchers keep attaching to it when a protocol overlaps, and it is replaced the next time it exits on its own (idle shutdown, crash, or reboot).
+A daemon that predates `requestHandover` cannot be asked to hand over, but every Premind daemon since the lifetime daemon lock (#79) shuts down gracefully on SIGTERM: it stops its schedulers, releases its leases and the daemon lock, closes its socket, and exits. A strictly newer launcher sends that signal only to an identified Premind daemon: a live process that holds this state directory's daemon lock, whose command line is a Premind daemon entry point, and whose socket answers a Premind status probe. Anything less, including a daemon older than the daemon lock, is left running for manual recovery. When the signalled daemon predates the storage bridge, the new daemon runs the bridge on startup.
 
 ## Illustrative package scenarios
 
@@ -373,7 +373,7 @@ Under a global bridge lock:
 
 The bridge also acquires the historical daemon-start lock understood by the supported legacy fixture and holds it through guard binding. A still-older launcher that does not honor that lock is outside automatic cutover: quarantine still protects modern state, but socket contention requires manual recovery.
 
-1. detect every reachable legacy owner and use only a documented cooperative shutdown path;
+1. detect every reachable legacy owner and use only a documented cooperative shutdown path: `requestHandover`, or SIGTERM to an identified Premind daemon that predates it (see [Cooperative handover](#cooperative-handover));
 2. if safe quiescence cannot be established, stop and require manual recovery rather than killing an unidentified PID;
 3. after all legacy database connections close, migrate/copy authoritative state into a new epoch path unknown to pre-bridge code;
 4. replace the historical database path with a quarantine tombstone/blocker so a legacy daemon cannot reopen modern state;
@@ -402,7 +402,8 @@ This guarantees modern-state safety, not perpetual service for unupdated pre-bri
 | --- | --- | --- |
 | Current client | Pre-bridge singleton | Use legacy adapter; bridge only after cooperative global quiescence or manual recovery |
 | Current client | Older bridge-aware daemon with `requestHandover` | Hand over, start the packaged daemon, reconnect |
-| Current client | Older daemon without `requestHandover` | Attach if a protocol overlaps; replace it when it next exits |
+| Current client | Older identified daemon without `requestHandover` | Stop it with SIGTERM, start the packaged daemon (bridging legacy storage if needed), reconnect |
+| Current client | Unidentified process on the socket | Attach if a protocol overlaps; never signal it |
 | Current client | Exact or newer daemon | Attach; never hand over |
 | Old supported client | Newer daemon with retained protocol | Attach to the newer daemon; do not launch the old packaged daemon |
 | Old client mid-session | Its daemon hands over to a newer build | Reconnect to the newer daemon if a protocol overlaps; otherwise update-required |

@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import net from "node:net";
@@ -610,6 +611,98 @@ export type DaemonHandoverResult =
  * restarting the old build. A daemon is never killed: on refusal or timeout it
  * keeps serving.
  */
+// Daemons that predate `requestHandover` still shut down gracefully on SIGTERM:
+// they stop polling, release their leases and the daemon lock, close their
+// sockets, and exit. That is their documented cooperative shutdown path.
+const DAEMON_ENTRY_PATTERN = /(?:premind-daemon\.mjs|[/\\]daemon[/\\]index\.ts)(?:\s|$)/;
+
+const readProcessCommand = (pid: number): string | undefined => {
+  if (process.platform === "win32") return undefined;
+  try {
+    return execFileSync("ps", ["-o", "command=", "-p", String(pid)], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 1_000,
+    }).trim();
+  } catch {
+    return undefined;
+  }
+};
+
+/**
+ * Identifies a running Premind daemon that cannot accept `requestHandover`,
+ * so it can be asked to stop with SIGTERM instead. Every check must pass:
+ * a live process holds this state directory's daemon lock, its command line
+ * is a Premind daemon entry point, and the socket answers a Premind status
+ * probe. Anything less is left alone for manual recovery.
+ */
+export const identifySignalableDaemon = async ({
+  socketPath = PREMIND_SOCKET_PATH,
+  stateDir = PREMIND_STATE_DIR,
+  readCommand = readProcessCommand,
+}: {
+  socketPath?: string;
+  stateDir?: string;
+  readCommand?: (pid: number) => string | undefined;
+} = {}): Promise<number | undefined> => {
+  const owner = readDaemonLockOwner(stateDir);
+  if (!owner || owner.pid === process.pid || !isProcessAlive(owner.pid)) {
+    return undefined;
+  }
+  const command = readCommand(owner.pid);
+  if (!command || !DAEMON_ENTRY_PATTERN.test(command)) return undefined;
+  const probe = await inspectDaemon(socketPath);
+  if (probe.status !== "compatible" && probe.status !== "incompatible") {
+    return undefined;
+  }
+  // The lock may have changed hands while probing.
+  return readDaemonLockOwner(stateDir)?.token === owner.token ? owner.pid : undefined;
+};
+
+/** The build a pre-bootstrap daemon is treated as: older than any known build. */
+const UNKNOWN_BUILD: DaemonBuildIdentity = { version: "0.0.0", buildTime: 0 };
+
+type HandoverPlan =
+  | { kind: "request"; socketPath: string }
+  | { kind: "signal"; pid: number }
+  | { kind: "none"; result: Exclude<DaemonHandoverResult, "handed-over" | "timeout" | "refused"> };
+
+const planHandover = async ({
+  build,
+  host,
+  socketPath,
+  stateDir,
+  readCommand,
+}: {
+  build: DaemonBuildIdentity;
+  host: string;
+  socketPath: string;
+  stateDir: string;
+  readCommand?: (pid: number) => string | undefined;
+}): Promise<HandoverPlan> => {
+  const running = await inspectRunningDaemonBuild({ socketPath, host, build });
+  const runningBuild = running?.build ?? UNKNOWN_BUILD;
+  if (compareDaemonBuilds(build, runningBuild) !== "newer") {
+    return { kind: "none", result: "not-older" };
+  }
+  if (running?.operations.includes(REQUEST_HANDOVER_OPERATION)) {
+    return { kind: "request", socketPath: running.socketPath };
+  }
+  const pid = await identifySignalableDaemon({ socketPath, stateDir, readCommand });
+  return pid === undefined
+    ? { kind: "none", result: "unsupported" }
+    : { kind: "signal", pid };
+};
+
+/**
+ * Replaces the running daemon when `build` is strictly newer, then waits for
+ * it to release the historical socket and the daemon lock. A daemon that
+ * supports `requestHandover` is asked; an identified older Premind daemon that
+ * does not is sent SIGTERM. Callers hold the daemon start lock throughout so
+ * older launchers wait instead of restarting the old build. An unidentified
+ * process is never signalled, and a daemon that refuses or does not exit in
+ * time keeps serving.
+ */
 export const handOverOlderDaemon = async ({
   build,
   host,
@@ -617,6 +710,7 @@ export const handOverOlderDaemon = async ({
   stateDir = PREMIND_STATE_DIR,
   timeoutMs = DAEMON_HANDOVER_TIMEOUT_MS,
   retryMs = 50,
+  readCommand,
 }: {
   build: DaemonBuildIdentity;
   host: string;
@@ -624,22 +718,28 @@ export const handOverOlderDaemon = async ({
   stateDir?: string;
   timeoutMs?: number;
   retryMs?: number;
+  readCommand?: (pid: number) => string | undefined;
 }): Promise<DaemonHandoverResult> => {
-  const running = await inspectRunningDaemonBuild({ socketPath, host, build });
-  if (!running) return "unsupported";
-  if (compareDaemonBuilds(build, running.build) !== "newer") return "not-older";
-  if (!running.operations.includes(REQUEST_HANDOVER_OPERATION)) return "unsupported";
-
-  const response = (await requestJson(
-    running.socketPath,
-    {
-      type: REQUEST_HANDOVER_OPERATION,
-      protocolVersion: 2,
-      payload: { version: build.version, buildTime: build.buildTime },
-    },
-    HANDOVER_REQUEST_TIMEOUT_MS,
-  )) as { ok?: unknown; result?: { accepted?: unknown } } | undefined;
-  if (response?.ok !== true || response.result?.accepted !== true) return "refused";
+  const plan = await planHandover({ build, host, socketPath, stateDir, readCommand });
+  if (plan.kind === "none") return plan.result;
+  if (plan.kind === "request") {
+    const response = (await requestJson(
+      plan.socketPath,
+      {
+        type: REQUEST_HANDOVER_OPERATION,
+        protocolVersion: 2,
+        payload: { version: build.version, buildTime: build.buildTime },
+      },
+      HANDOVER_REQUEST_TIMEOUT_MS,
+    )) as { ok?: unknown; result?: { accepted?: unknown } } | undefined;
+    if (response?.ok !== true || response.result?.accepted !== true) return "refused";
+  } else {
+    try {
+      process.kill(plan.pid, "SIGTERM");
+    } catch {
+      // It exited on its own; the wait below confirms the socket is free.
+    }
+  }
 
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -651,16 +751,18 @@ export const handOverOlderDaemon = async ({
   return "timeout";
 };
 
-/** True when a reachable daemon is a strictly older build than `build`. */
+/** True when the running daemon is strictly older than `build` and replaceable. */
 export const isRunningDaemonOlder = async (options: {
   build: DaemonBuildIdentity;
   host: string;
   socketPath?: string;
-}) => {
-  const running = await inspectRunningDaemonBuild(options);
-  return (
-    running !== undefined &&
-    running.operations.includes(REQUEST_HANDOVER_OPERATION) &&
-    compareDaemonBuilds(options.build, running.build) === "newer"
-  );
-};
+  stateDir?: string;
+  readCommand?: (pid: number) => string | undefined;
+}) =>
+  (
+    await planHandover({
+      ...options,
+      socketPath: options.socketPath ?? PREMIND_SOCKET_PATH,
+      stateDir: options.stateDir ?? PREMIND_STATE_DIR,
+    })
+  ).kind !== "none";

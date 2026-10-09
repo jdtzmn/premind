@@ -19,6 +19,16 @@ const PACKAGE_ROOT = path.resolve(
  */
 export type DaemonBuild = { version: string; buildTime: number };
 
+// Replaced by scripts/build-runtime.mjs in installed bundles; undefined when
+// running from source.
+declare const PREMIND_BUNDLED_BUILD:
+  | { version: string; commit: string; buildTime: number }
+  | undefined;
+
+/** The build identity stamped into a bundle, if this code runs from one. */
+export const bundledBuild = () =>
+  typeof PREMIND_BUNDLED_BUILD === "undefined" ? undefined : PREMIND_BUNDLED_BUILD;
+
 const readPackageVersion = (): string => {
   try {
     const metadata = JSON.parse(
@@ -56,6 +66,9 @@ let packagedBuild: DaemonBuild | undefined;
 
 /** This package's build, read lazily so short-lived hooks pay only when asked. */
 export const readPackagedBuild = (): DaemonBuild => {
-  packagedBuild ??= { version: readPackageVersion(), buildTime: readBuildTime() };
+  const bundled = bundledBuild();
+  packagedBuild ??= bundled
+    ? { version: bundled.version, buildTime: bundled.buildTime }
+    : { version: readPackageVersion(), buildTime: readBuildTime() };
   return packagedBuild;
 };
