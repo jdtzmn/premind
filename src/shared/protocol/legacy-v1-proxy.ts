@@ -110,7 +110,11 @@ export class LegacyV1ProxyRouter {
       request.type === "claimReminder" ||
       request.type === "settleReminderClaim" ||
       request.type === "releaseSessionOwner";
-    if (sessionId && !isHostOwnedOperation) {
+    // Their sessions are host-owned too: a Claude Stop hook claims and settles
+    // reminder bundles for a session it registered without any client lease.
+    const sessionHost = sessionId ? this.store.getSession(sessionId)?.host : undefined;
+    const isHostOwnedSession = sessionHost === "claude" || sessionHost === "codex";
+    if (sessionId && !isHostOwnedOperation && !isHostOwnedSession) {
       const mapping = this.store.getLegacyProxyLease(sessionId);
       if (!mapping) return failure("SESSION_MOVED", "Legacy session must re-register");
       return projectV1ProxyResponse(
@@ -125,7 +129,12 @@ export class LegacyV1ProxyRouter {
 
     return projectV1ProxyResponse(
       request.type,
-      await this.requestModern({ ...request, protocolVersion: 2 } as RoutedPremindRequest),
+      await this.requestModern({
+        ...request,
+        // Protocol v2 requires a session lease that host-owned sessions never
+        // hold, so forward their requests with v1 semantics.
+        protocolVersion: isHostOwnedSession ? 1 : 2,
+      } as RoutedPremindRequest),
     );
   }
 
