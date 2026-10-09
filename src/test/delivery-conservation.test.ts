@@ -353,6 +353,19 @@ const DISRUPTIONS: Record<string, (world: World) => Promise<void> | void> = {
 		world.store.close()
 		world.store = new StateStore(world.dbPath)
 		world.store.recoverFromRestart(world.now)
+		world.store.registerClient(CLIENT, { pid: 2, projectRoot: "/repo" }, world.now)
+		world.store.ensureSessionControl(
+			{
+				clientId: CLIENT,
+				sessionId: SESSION,
+				repo: REPO,
+				branch: BRANCH,
+				isPrimary: true,
+				busyState: "idle",
+				paused: false,
+			},
+			world.now,
+		)
 		world.watcher = new PullRequestWatcher(world.store, world.github)
 		world.handoffs = new ReminderHandoffRegistry(world.store)
 		world.watchers = new PrWatcherRegistry(world.store, { now: world.now })

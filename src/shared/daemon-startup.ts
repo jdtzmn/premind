@@ -114,6 +114,17 @@ export const acquireDaemonStartLock = ({
   return undefined;
 };
 
+// A launcher holds the start lock while its daemon boots, so it hands the
+// lock token to that daemon. Startup steps that must exclude every other
+// launcher accept a lock held under the inherited token as their own.
+export const DAEMON_START_LOCK_TOKEN_ENV = "PREMIND_DAEMON_START_LOCK_TOKEN";
+
+export const isDaemonStartLockHeldBy = (
+  token: string,
+  { stateDir = PREMIND_STATE_DIR }: { stateDir?: string } = {},
+): boolean =>
+  readLockOwner(path.join(stateDir, "daemon-start.lock"))?.token === token;
+
 export const releaseDaemonStartLock = (lock: DaemonStartLock) => {
   try {
     fs.closeSync(lock.fd);
@@ -249,6 +260,11 @@ export const formatDaemonLockStatus = (status: DaemonLockStatus) =>
   status === null
     ? "not held (no daemon running, or one predating the daemon lock)"
     : `held by pid ${status.pid}${status.alive ? "" : " (process gone)"} since ${status.heldSince}`;
+
+// A busy daemon can take well over the default probe to accept a connection.
+// Anything that would delete or take over an existing socket must probe for
+// this long first, or it can strand a live daemon (see the 2026-10-07 storm).
+export const SOCKET_TAKEOVER_PROBE_MS = 2_000;
 
 export const isSocketReachable = (
   socketPath = PREMIND_SOCKET_PATH,

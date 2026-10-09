@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
 	SESSION_PAUSED_DELIVERY_MESSAGE,
 	SESSION_PAUSED_MESSAGE,
@@ -11,6 +12,7 @@ import {
 	renderPremindReminderText,
 	STATUS_POLL_STALE_MS,
 } from "../index.ts";
+import { PremindDaemonClient } from "../../client/daemon-client.ts";
 import type {
 	DebugStatusResponse,
 	RegisterSessionPayload,
@@ -1333,6 +1335,48 @@ test("Pi interactive status colors Unicode signals without styling tool text", a
 		assert.equal(
 			notifications[0]?.message,
 			"premind has no pending reminders for this session.",
+		);
+	});
+
+	test("/premind:flush survives a pre-host protocol-v1 status response", async () => {
+		const fixture = JSON.parse(
+			readFileSync(
+				new URL(
+					"../../shared/protocol/__fixtures__/v1/a75d55f-pre-host-debug-status.json",
+					import.meta.url,
+				),
+				"utf8",
+			),
+		) as unknown;
+		const mock = createMockPi();
+		const client = new PremindDaemonClient({ ensureDaemon: async () => {} });
+		const testClient = client as unknown as {
+			requestWithRetry: (request: { type: string }) => Promise<unknown>;
+		};
+		testClient.requestWithRetry = async ({ type }) => {
+			if (type === "claimReminderBundle") return { bundle: null };
+			if (type === "debugStatus") return fixture;
+			throw new Error(`unexpected request: ${type}`);
+		};
+		const notifications: Array<{ message: string; level: string }> = [];
+		createPremindPiExtension({
+			createDaemonClient: () => client,
+			config: { statusPollIntervalMs: 0 },
+		})(mock.pi as never);
+
+		const command = mock.commands.get("premind:flush");
+		assert.ok(command);
+		await command.handler("", createCommandContext(notifications));
+
+		assert.equal(
+			notifications[0]?.message,
+			"premind has no pending reminders for this session.",
+		);
+		assert.equal(
+			notifications.some(({ message }) =>
+				message.startsWith("premind flush failed"),
+			),
+			false,
 		);
 	});
 

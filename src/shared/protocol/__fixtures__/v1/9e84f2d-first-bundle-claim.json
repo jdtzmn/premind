@@ -1,0 +1,16 @@
+{
+  "batches": [
+    {
+      "batchId": "batch-v1-a",
+      "sessionId": "session-v1",
+      "reminderText": "First protocol v1 bundle member",
+      "events": []
+    },
+    {
+      "batchId": "batch-v1-b",
+      "sessionId": "session-v1",
+      "reminderText": "Second protocol v1 bundle member",
+      "events": []
+    }
+  ]
+}

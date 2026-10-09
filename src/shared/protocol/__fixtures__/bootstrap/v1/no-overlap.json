@@ -1,0 +1,9 @@
+{
+  "ok": false,
+  "bootstrapVersion": 1,
+  "error": {
+    "code": "PROTOCOL_UNSUPPORTED",
+    "message": "Update the premind plugin to continue",
+    "supported": { "min": 7, "max": 7 }
+  }
+}

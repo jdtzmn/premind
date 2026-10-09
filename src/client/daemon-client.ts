@@ -6,13 +6,10 @@ import {
 } from "../shared/constants.ts";
 import {
   ackReminderBundleResponseSchema,
-  claimReminderBundleResponseSchema,
-  activateWorktreeResponseSchema,
-  debugStatusResponseSchema,
   claimReminderResponseSchema,
+  activateWorktreeResponseSchema,
   getPendingReminderResponseSchema,
   globalDisabledResponseSchema,
-  legacyClaimReminderBundleResponseSchema,
   registerClientResponseSchema,
   registerSessionResponseSchema,
   releaseSessionOwnerResponseSchema,
@@ -21,6 +18,17 @@ import {
   subscribeResponseSchema,
   unsubscribeResponseSchema,
 } from "../shared/ipc.ts";
+import { bootstrapResponseSchema } from "../shared/protocol/bootstrap.ts";
+import {
+  PROTOCOL_V2,
+  protocolV2ResponseSchema,
+} from "../shared/protocol/v2.ts";
+import {
+  decodeV1ClaimReminderBundleResponse,
+  decodeV1DebugStatusResponse,
+  isV1UnsupportedOperation,
+} from "../shared/protocol/v1.ts";
+import { sessionLeaseTokenSchema } from "../shared/schema.ts";
 import type {
   AckReminderPayload,
   AckReminderBundlePayload,
@@ -30,13 +38,31 @@ import type {
   ActivateWorktreePayload,
   EnsureSessionControlPayload,
   RegisterSessionPayload,
+  SessionHost,
+  SessionLeaseToken,
   SubscribePayload,
   UnsubscribePayload,
   UpdateSessionStatePayload,
 } from "../shared/schema.ts";
+import { PREMIND_COMMIT, PREMIND_VERSION } from "../shared/version.ts";
 
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 500;
+const SESSION_LEASE_EXEMPT_OPERATIONS = new Set([
+  "claimSessionLease",
+  "renewSessionLease",
+  "transferSessionLease",
+  "releaseSessionLease",
+  "registerClaudeSession",
+  "suspendClaudeSession",
+  "claimClaudeHandoff",
+  "confirmClaudeHandoff",
+  "registerCodexSession",
+  "claimReminder",
+  "settleReminderClaim",
+  "releaseSessionOwner",
+]);
+
 // Every request gets a hard deadline so a stalled or vanished daemon can never
 // leave a caller (for example, the Pi idle-delivery poll) awaiting forever.
 export const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
@@ -45,6 +71,7 @@ const CONNECTION_CLOSED_MESSAGE =
 const isUnsupportedOperation = (error: unknown) =>
   error instanceof Error && error.message.startsWith("BAD_REQUEST:");
 export type PremindDaemonClientOptions = {
+  host?: SessionHost;
   socketPath?: string;
   ensureDaemon: () => Promise<void>;
   maxRetries?: number;
@@ -54,14 +81,25 @@ export type PremindDaemonClientOptions = {
 
 export class PremindDaemonClient {
   readonly clientId = randomUUID();
+  private readonly host: SessionHost;
   private readonly socketPath: string;
+  // Normal requests go to the socket the daemon advertises during bootstrap;
+  // the handshake itself always uses the stable entry socket.
+  private routeSocketPath: string;
   private readonly ensureDaemon: () => Promise<void>;
   private readonly maxRetries: number;
   private readonly retryDelayMs: number;
   private readonly requestTimeoutMs: number;
+  private protocolVersion: 1 | typeof PROTOCOL_V2 = PREMIND_PROTOCOL_VERSION;
+  private initialized = false;
 
+  private daemonInstanceId?: string;
+  private supportedOperations = new Set<string>();
+  private readonly sessionLeases = new Map<string, SessionLeaseToken>();
   constructor(options: PremindDaemonClientOptions) {
+    this.host = options.host ?? "opencode";
     this.socketPath = options.socketPath ?? PREMIND_SOCKET_PATH;
+    this.routeSocketPath = this.socketPath;
     this.ensureDaemon = options.ensureDaemon;
     this.maxRetries = options.maxRetries ?? MAX_RETRIES;
     this.retryDelayMs = options.retryDelayMs ?? RETRY_DELAY_MS;
@@ -77,6 +115,10 @@ export class PremindDaemonClient {
       throw new Error("Invalid premind daemon client retry or timeout options");
     }
   }
+
+  get selectedProtocolVersion() {
+    return this.protocolVersion;
+  }
   private registered = false;
   private projectRoot?: string;
   private sessionSource?: string;
@@ -84,11 +126,11 @@ export class PremindDaemonClient {
   private readonly legacyBundleClaims = new Map<
     string,
     {
-      handoffId: string
-      batchIds: string[]
-      mode: "single" | "legacy-bundle"
+      handoffId: string;
+      batchIds: string[];
+      mode: "single" | "legacy-bundle";
     }
-  >()
+  >();
   async registerClient(projectRoot: string, sessionSource?: string) {
     this.projectRoot = projectRoot;
     this.sessionSource = sessionSource;
@@ -114,9 +156,15 @@ export class PremindDaemonClient {
       protocolVersion: PREMIND_PROTOCOL_VERSION,
       payload: { clientId: this.clientId },
     });
+    for (const sessionId of [...this.sessionLeases.keys()]) {
+      await this.renewSessionLease(sessionId);
+    }
   }
 
   async release() {
+    for (const sessionId of [...this.sessionLeases.keys()]) {
+      await this.releaseSessionLease(sessionId);
+    }
     await this.requestWithRetry({
       type: "releaseClient",
       protocolVersion: PREMIND_PROTOCOL_VERSION,
@@ -126,6 +174,7 @@ export class PremindDaemonClient {
   }
 
   async registerSession(payload: Omit<RegisterSessionPayload, "clientId">) {
+    await this.claimSessionLease(payload.sessionId);
     await this.requestWithRetry({
       type: "registerSession",
       protocolVersion: PREMIND_PROTOCOL_VERSION,
@@ -172,6 +221,7 @@ export class PremindDaemonClient {
   async ensureSessionControl(
     payload: Omit<EnsureSessionControlPayload, "clientId">,
   ) {
+    await this.claimSessionLease(payload.sessionId);
     try {
       await this.requestWithRetry({
         type: "ensureSessionControl",
@@ -182,12 +232,7 @@ export class PremindDaemonClient {
       // A long-lived daemon from a pre-control-operation package reports the new
       // request as BAD_REQUEST. Fall back to its compatible registration path so
       // clients keep working until that daemon exits naturally.
-      if (
-        !(error instanceof Error) ||
-        !error.message.startsWith("BAD_REQUEST:")
-      ) {
-        throw error;
-      }
+      if (!isV1UnsupportedOperation(error)) throw error;
       const { paused, ...session } = payload;
       await this.registerSession({
         ...session,
@@ -210,6 +255,21 @@ export class PremindDaemonClient {
       protocolVersion: PREMIND_PROTOCOL_VERSION,
       payload: { sessionId },
     });
+    this.sessionLeases.delete(sessionId);
+  }
+
+  async deleteSession(sessionId: string) {
+    try {
+      await this.requestWithRetry({
+        type: "deleteSession",
+        protocolVersion: PREMIND_PROTOCOL_VERSION,
+        payload: { sessionId },
+      });
+      this.sessionLeases.delete(sessionId);
+    } catch (error) {
+      if (!isV1UnsupportedOperation(error)) throw error;
+      await this.unregisterSession(sessionId);
+    }
   }
 
   async pauseSession(sessionId: string) {
@@ -261,37 +321,34 @@ export class PremindDaemonClient {
         type: "claimReminderBundle",
         protocolVersion: PREMIND_PROTOCOL_VERSION,
         payload: { sessionId },
-      })
-      const current = claimReminderBundleResponseSchema.safeParse(response)
-      if (current.success) return current.data
-
-      const legacy = legacyClaimReminderBundleResponseSchema.safeParse(response)
-      if (!legacy.success) return claimReminderBundleResponseSchema.parse(response)
-      if (legacy.data.batches.length === 0) return { bundle: null }
-      const handoffId = randomUUID()
+      });
+      const decoded = decodeV1ClaimReminderBundleResponse(response);
+      if (decoded.variant === "tokenized") return decoded.response;
+      if (decoded.response.batches.length === 0) return { bundle: null };
+      const handoffId = randomUUID();
       this.legacyBundleClaims.set(sessionId, {
         handoffId,
-        batchIds: legacy.data.batches.map(({ batchId }) => batchId),
+        batchIds: decoded.response.batches.map(({ batchId }) => batchId),
         mode: "legacy-bundle",
-      })
-      return { bundle: { handoffId, batches: legacy.data.batches } }
+      });
+      return { bundle: { handoffId, batches: decoded.response.batches } };
     } catch (error) {
-      if (!isUnsupportedOperation(error)) throw error
-      const pending = await this.getPendingReminder(sessionId)
-      if (!pending.batch) return { bundle: null }
+      if (!isV1UnsupportedOperation(error)) throw error;
+      const pending = await this.getPendingReminder(sessionId);
+      if (!pending.batch) return { bundle: null };
 
       await this.ackReminder({
         batchId: pending.batch.batchId,
         sessionId,
         state: "handed_off",
-      })
-      const handoffId = randomUUID()
+      });
+      const handoffId = randomUUID();
       this.legacyBundleClaims.set(sessionId, {
         handoffId,
         batchIds: [pending.batch.batchId],
         mode: "single",
-      })
-      return { bundle: { handoffId, batches: [pending.batch] } }
+      });
+      return { bundle: { handoffId, batches: [pending.batch] } };
     }
   }
 
@@ -301,13 +358,13 @@ export class PremindDaemonClient {
         type: "ackReminderBundle",
         protocolVersion: PREMIND_PROTOCOL_VERSION,
         payload,
-      })
-      return ackReminderBundleResponseSchema.parse(response)
+      });
+      return ackReminderBundleResponseSchema.parse(response);
     } catch (error) {
-      if (!isUnsupportedOperation(error)) throw error
-      const claim = this.legacyBundleClaims.get(payload.sessionId)
+      if (!isV1UnsupportedOperation(error)) throw error;
+      const claim = this.legacyBundleClaims.get(payload.sessionId);
       if (!claim || claim.handoffId !== payload.handoffId) {
-        return { acknowledged: 0 }
+        return { acknowledged: 0 };
       }
 
       if (claim.mode === "legacy-bundle") {
@@ -319,10 +376,10 @@ export class PremindDaemonClient {
             state: payload.state,
             ...(payload.error ? { error: payload.error } : {}),
           },
-        })
-        const acknowledged = ackReminderBundleResponseSchema.parse(response)
-        this.legacyBundleClaims.delete(payload.sessionId)
-        return acknowledged
+        });
+        const acknowledged = ackReminderBundleResponseSchema.parse(response);
+        this.legacyBundleClaims.delete(payload.sessionId);
+        return acknowledged;
       }
 
       for (const batchId of claim.batchIds) {
@@ -331,10 +388,10 @@ export class PremindDaemonClient {
           sessionId: payload.sessionId,
           state: payload.state,
           ...(payload.error ? { error: payload.error } : {}),
-        })
+        });
       }
-      this.legacyBundleClaims.delete(payload.sessionId)
-      return { acknowledged: claim.batchIds.length }
+      this.legacyBundleClaims.delete(payload.sessionId);
+      return { acknowledged: claim.batchIds.length };
     }
   }
 
@@ -390,7 +447,7 @@ export class PremindDaemonClient {
         payload: {},
       });
     }
-    return debugStatusResponseSchema.parse(response);
+    return decodeV1DebugStatusResponse(response);
   }
 
   async pruneClosedSessions() {
@@ -401,12 +458,207 @@ export class PremindDaemonClient {
     });
   }
 
+  private supportsSessionLeaseOperation(operation: string): boolean {
+    return (
+      this.protocolVersion === PROTOCOL_V2 &&
+      this.daemonInstanceId !== undefined &&
+      this.supportedOperations.has(operation)
+    );
+  }
+
+  private async claimSessionLease(
+    sessionId: string,
+  ): Promise<SessionLeaseToken | null> {
+    if (!this.supportsSessionLeaseOperation("claimSessionLease")) return null;
+    const current = this.sessionLeases.get(sessionId);
+    if (
+      current &&
+      current.ownerInstanceId === this.daemonInstanceId &&
+      current.clientIncarnationNonce === this.clientId
+    ) {
+      return current;
+    }
+    const response = await this.requestWithRetry({
+      type: "claimSessionLease",
+      protocolVersion: PREMIND_PROTOCOL_VERSION,
+      payload: {
+        sessionId,
+        ownerInstanceId: this.daemonInstanceId,
+        clientIncarnationNonce: this.clientId,
+      },
+    });
+    const lease = sessionLeaseTokenSchema.parse(
+      (response as { lease?: unknown }).lease,
+    );
+    if (
+      lease.sessionId !== sessionId ||
+      lease.ownerInstanceId !== this.daemonInstanceId ||
+      lease.clientIncarnationNonce !== this.clientId
+    ) {
+      throw new Error(
+        "SESSION_MOVED: daemon returned a mismatched session lease",
+      );
+    }
+    this.sessionLeases.set(sessionId, lease);
+    return lease;
+  }
+
+  private async renewSessionLease(sessionId: string): Promise<void> {
+    const current = this.sessionLeases.get(sessionId);
+    if (!current || !this.supportsSessionLeaseOperation("renewSessionLease"))
+      return;
+    const response = await this.requestWithRetry({
+      type: "renewSessionLease",
+      protocolVersion: PREMIND_PROTOCOL_VERSION,
+      payload: { lease: current },
+    });
+    const renewed = sessionLeaseTokenSchema.parse(
+      (response as { lease?: unknown }).lease,
+    );
+    if (
+      renewed.sessionId !== current.sessionId ||
+      renewed.ownerInstanceId !== current.ownerInstanceId ||
+      renewed.generation !== current.generation ||
+      renewed.clientIncarnationNonce !== current.clientIncarnationNonce ||
+      renewed.leaseToken !== current.leaseToken
+    ) {
+      this.sessionLeases.delete(sessionId);
+      throw new Error(
+        "SESSION_MOVED: daemon renewed a different session lease",
+      );
+    }
+    this.sessionLeases.set(sessionId, renewed);
+  }
+
+  private async releaseSessionLease(sessionId: string): Promise<void> {
+    const lease = this.sessionLeases.get(sessionId);
+    if (!lease) return;
+    try {
+      if (this.supportsSessionLeaseOperation("releaseSessionLease")) {
+        await this.requestWithRetry({
+          type: "releaseSessionLease",
+          protocolVersion: PREMIND_PROTOCOL_VERSION,
+          payload: { lease },
+        });
+      }
+    } finally {
+      this.sessionLeases.delete(sessionId);
+    }
+  }
+
+  private async initializeProtocol() {
+    if (this.initialized) return;
+    this.routeSocketPath = this.socketPath;
+    const response = await this.requestRaw({
+      type: "initialize",
+      bootstrapVersion: 1,
+      payload: {
+        client: {
+          host: this.host,
+          version: PREMIND_VERSION,
+          commit: PREMIND_COMMIT,
+          incarnationNonce: this.clientId,
+        },
+        protocols: { min: PREMIND_PROTOCOL_VERSION, max: PROTOCOL_V2 },
+      },
+    }, this.socketPath);
+    const bootstrap = bootstrapResponseSchema.safeParse(response);
+    if (bootstrap.success) {
+      if (!bootstrap.data.ok) {
+        throw new Error(
+          `${bootstrap.data.error.code}: ${bootstrap.data.error.message}`,
+        );
+      }
+      const selected = bootstrap.data.result.protocols.selected;
+      if (selected !== PREMIND_PROTOCOL_VERSION && selected !== PROTOCOL_V2) {
+        throw new Error(
+          `PROTOCOL_UNSUPPORTED: Unexpected protocol ${selected}`,
+        );
+      }
+      const nextDaemonInstanceId = bootstrap.data.result.daemon.instanceId;
+      if (
+        this.daemonInstanceId !== undefined &&
+        this.daemonInstanceId !== nextDaemonInstanceId
+      ) {
+        this.sessionLeases.clear();
+      }
+      this.daemonInstanceId = nextDaemonInstanceId;
+      this.supportedOperations = new Set(
+        bootstrap.data.result.capabilities.operations,
+      );
+      this.protocolVersion = selected;
+      this.routeSocketPath = bootstrap.data.result.daemon.socketPath;
+      this.initialized = true;
+      return;
+    }
+
+    // Any protocol-v1 envelope comes from a daemon that predates bootstrap
+    // (normally a BAD_REQUEST rejection of `initialize`): keep speaking v1.
+    const legacy = responseSchema.safeParse(response);
+    if (legacy.success) {
+      this.protocolVersion = PREMIND_PROTOCOL_VERSION;
+      this.daemonInstanceId = undefined;
+      this.supportedOperations.clear();
+      this.sessionLeases.clear();
+      this.initialized = true;
+      return;
+    }
+
+    throw bootstrap.error;
+  }
+
+  private withNegotiatedProtocol(message: unknown): unknown {
+    if (typeof message !== "object" || message === null) return message;
+    if (!("protocolVersion" in message)) return message;
+    const request = message as Record<string, unknown>;
+    const payload = request.payload;
+    const sessionId =
+      typeof payload === "object" && payload !== null && "sessionId" in payload
+        ? (payload as { sessionId?: unknown }).sessionId
+        : undefined;
+    const lease =
+      typeof sessionId === "string"
+        ? this.sessionLeases.get(sessionId)
+        : undefined;
+    const type = typeof request.type === "string" ? request.type : "";
+    return {
+      ...request,
+      protocolVersion: this.protocolVersion,
+      ...(this.protocolVersion === PROTOCOL_V2 &&
+      lease &&
+      !SESSION_LEASE_EXEMPT_OPERATIONS.has(type)
+        ? { sessionLease: lease }
+        : {}),
+    };
+  }
+
+  private async ensureRequestSessionLease(message: unknown): Promise<void> {
+    if (!this.supportsSessionLeaseOperation("claimSessionLease")) return;
+    if (typeof message !== "object" || message === null) return;
+    const request = message as Record<string, unknown>;
+    const type = typeof request.type === "string" ? request.type : "";
+    if (SESSION_LEASE_EXEMPT_OPERATIONS.has(type)) return;
+    const payload = request.payload;
+    if (
+      typeof payload !== "object" ||
+      payload === null ||
+      !("sessionId" in payload)
+    )
+      return;
+    const sessionId = (payload as { sessionId?: unknown }).sessionId;
+    if (typeof sessionId === "string") await this.claimSessionLease(sessionId);
+  }
+
   private async requestWithRetry(
     message: unknown,
     attempt = 0,
   ): Promise<unknown> {
     try {
-      return await this.request(message);
+      // Negotiate inside the retry so a missing daemon is started rather than
+      // failing the very first request with ENOENT.
+      await this.initializeProtocol();
+      await this.ensureRequestSessionLease(message);
+      return await this.request(this.withNegotiatedProtocol(message));
     } catch (error) {
       if (attempt >= this.maxRetries) throw error;
 
@@ -428,13 +680,15 @@ export class PremindDaemonClient {
       // Startup errors (including unsupported Node and incompatible daemons)
       // are actionable and must not be hidden behind a later socket retry.
       await this.ensureDaemon();
+      this.initialized = false;
+      await this.initializeProtocol();
 
       // If we were previously registered, re-register after daemon restart.
       if (this.registered && this.projectRoot) {
         try {
           await this.request({
             type: "registerClient",
-            protocolVersion: PREMIND_PROTOCOL_VERSION,
+            protocolVersion: this.protocolVersion,
             payload: {
               clientId: this.clientId,
               metadata: {
@@ -457,8 +711,28 @@ export class PremindDaemonClient {
   }
 
   private async request(message: unknown) {
+    const response = await this.requestRaw(message);
+    const protocolVersion =
+      typeof message === "object" &&
+      message !== null &&
+      "protocolVersion" in message
+        ? (message as { protocolVersion?: unknown }).protocolVersion
+        : PREMIND_PROTOCOL_VERSION;
+    const parsed =
+      protocolVersion === PROTOCOL_V2
+        ? protocolV2ResponseSchema.parse(response)
+        : responseSchema.parse(response);
+    if (!parsed.ok)
+      throw new Error(`${parsed.error.code}: ${parsed.error.message}`);
+    return parsed.result;
+  }
+
+  private async requestRaw(
+    message: unknown,
+    socketPath = this.routeSocketPath,
+  ): Promise<unknown> {
     const line = await new Promise<string>((resolve, reject) => {
-      const socket = net.createConnection(this.socketPath);
+      const socket = net.createConnection(socketPath);
       let buffer = "";
       let settled = false;
 
@@ -509,15 +783,6 @@ export class PremindDaemonClient {
       });
     });
 
-    let payload: unknown;
-    try {
-      payload = JSON.parse(line);
-    } catch (error) {
-      throw new Error("premind daemon returned invalid JSON", { cause: error });
-    }
-    const parsed = responseSchema.parse(payload);
-    if (!parsed.ok)
-      throw new Error(`${parsed.error.code}: ${parsed.error.message}`);
-    return parsed.result;
+    return JSON.parse(line);
   }
 }

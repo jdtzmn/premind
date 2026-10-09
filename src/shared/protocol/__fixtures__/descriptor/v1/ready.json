@@ -1,0 +1,15 @@
+{
+  "descriptorFormat": 1,
+  "instanceId": "a1aa7407-10d2-4b1e-b58b-ac989b83d8b9",
+  "pid": 1234,
+  "version": "0.2.0",
+  "commit": "abc123",
+  "socketPath": "/tmp/premind-501/d-a1aa7407.sock",
+  "lifecycleState": "ready",
+  "protocols": { "min": 1, "max": 2 },
+  "storage": {
+    "epoch": 2,
+    "capabilities": ["base", "session-leases-v1"]
+  },
+  "heartbeatAt": 123456
+}

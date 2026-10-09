@@ -1,11 +1,41 @@
-import { PREMIND_CLOSED_SESSION_RETENTION_MS, PREMIND_DAEMON_LOG_PATH, PREMIND_IDLE_SHUTDOWN_GRACE_MS, PREMIND_REMINDER_HANDOFF_STALE_MS, PREMIND_SESSION_STALE_MS } from "../shared/constants.ts"
+import { randomUUID } from "node:crypto"
+import fs from "node:fs"
+import {
+  PREMIND_CLOSED_SESSION_RETENTION_MS,
+  PREMIND_COMPATIBILITY_LOCK_PATH,
+  PREMIND_COMPATIBILITY_MARKER_PATH,
+  PREMIND_DAEMON_LOG_PATH,
+  PREMIND_DB_PATH,
+  PREMIND_LEGACY_DB_PATH,
+  PREMIND_SOCKET_PATH,
+  PREMIND_STATE_DIR,
+  PREMIND_IDLE_SHUTDOWN_GRACE_MS,
+  PREMIND_REMINDER_HANDOFF_STALE_MS,
+  PREMIND_SESSION_STALE_MS,
+} from "../shared/constants.ts"
+import path from "node:path"
 import {
   acquireDaemonLock,
+  DAEMON_START_LOCK_TOKEN_ENV,
   holdsDaemonLock,
   isSocketReachable,
   releaseDaemonLock,
   type DaemonLock,
 } from "../shared/daemon-startup.ts"
+import {
+  instanceSocketPath,
+  pruneUnreachableInstances,
+  removeInstanceDescriptor,
+  instanceRuntimeBaseDir,
+  resolveInstanceRuntimeDir,
+  writeInstanceDescriptor,
+} from "../shared/protocol/instance-registry.ts"
+import { reconcileCompatibilityMarker } from "../shared/protocol/compatibility-marker-reconciler.ts"
+import { LegacyV1GuardServer } from "../shared/protocol/legacy-v1-guard-server.ts"
+import { LegacyV1ProxyRouter } from "../shared/protocol/legacy-v1-proxy.ts"
+import { bridgeLegacyStorage } from "../shared/protocol/storage-bridge.ts"
+import { PREMIND_VERSION } from "../shared/version.ts"
+import { StateStore } from "./persistence/store.ts"
 import { createLogger } from "./logging/logger.ts"
 import { IpcServer } from "./ipc/server.ts"
 import { GitHubClient } from "./github/client.ts"
@@ -18,6 +48,11 @@ import { DetailFileWriter } from "./reminders/detail-files.ts"
 import { DaemonLifecycleRuntime } from "./lifecycle/daemon-lifecycle-runtime.ts"
 
 const logger = createLogger("daemon")
+
+// Undoes startup side effects if main() fails before the lifecycle owns them.
+// Without this a failed start keeps its leases until they expire and blocks
+// the next daemon with COORDINATOR_BUSY.
+let abortStartup: (() => Promise<void>) | undefined
 
 const STALENESS_SWEEP_INTERVAL_MS = 5 * 60 * 1000
 // How often a running daemon confirms it still owns the daemon lock.
@@ -47,11 +82,77 @@ async function startDaemon(lock: DaemonLock) {
     releaseDaemonLock(lock)
     return
   }
-  const server = new IpcServer()
+  const compatibility = reconcileCompatibilityMarker({
+    markerPath: PREMIND_COMPATIBILITY_MARKER_PATH,
+    lockPath: PREMIND_COMPATIBILITY_LOCK_PATH,
+    dbPath: fs.existsSync(PREMIND_DB_PATH) ? PREMIND_DB_PATH : PREMIND_LEGACY_DB_PATH,
+    currentVersion: PREMIND_VERSION,
+    candidate: {
+      markerFormat: 1,
+      highestDaemonVersion: PREMIND_VERSION,
+      minimumDaemonVersion: "0.0.0",
+      serviceSupportFloor: "0.0.0",
+      serviceSupportNotBefore: Number.MAX_SAFE_INTEGER,
+      storageEpoch: 1,
+      generation: 0,
+    },
+  })
+  let runtime: { server: IpcServer; guard: LegacyV1GuardServer } | undefined
+  // Each instance owns a unique, owner-only socket; the historical socket stays
+  // the stable bootstrap entry point that advertises it.
+  const runtimeDir = resolveInstanceRuntimeDir(
+    instanceRuntimeBaseDir(path.dirname(PREMIND_SOCKET_PATH)),
+  )
+  let instanceSocket = ""
+  await bridgeLegacyStorage({
+    stateDir: PREMIND_STATE_DIR,
+    legacyDbPath: PREMIND_LEGACY_DB_PATH,
+    modernDbPath: PREMIND_DB_PATH,
+    historicalSocketPath: PREMIND_SOCKET_PATH,
+    compatibilityLockPath: PREMIND_COMPATIBILITY_LOCK_PATH,
+    inheritedStartLockToken: process.env[DAEMON_START_LOCK_TOKEN_ENV],
+    bindGuard: async () => {
+      const store = new StateStore(PREMIND_DB_PATH)
+      const databaseStorageEpoch = store.getStorageEpoch()
+      if (databaseStorageEpoch !== compatibility.storageEpoch) {
+        store.close()
+        throw new Error(
+          `STORAGE_EPOCH_MISMATCH: marker=${compatibility.storageEpoch} database=${databaseStorageEpoch}`,
+        )
+      }
+      const server = new IpcServer(store)
+      const proxy = new LegacyV1ProxyRouter(
+        store,
+        server.daemonInstanceId,
+        (request) => server.handleRequest(request),
+      )
+      // Current clients bootstrap on the historical socket and are pointed at
+      // the modern socket; historical v1 clients stay on the frozen proxy.
+      instanceSocket = instanceSocketPath(runtimeDir, server.daemonInstanceId)
+      server.advertiseSocketPath(instanceSocket)
+      const guard = new LegacyV1GuardServer(proxy, (value) => server.bootstrap(value))
+      await guard.listen(PREMIND_SOCKET_PATH)
+      runtime = { server, guard }
+    },
+  })
+  if (!runtime) throw new Error("LEGACY_GUARD_NOT_BOUND")
+  const { server, guard } = runtime
+  let daemonLease = server.store.claimDaemonInstanceLease({
+    instanceId: server.daemonInstanceId,
+    incarnationNonce: randomUUID(),
+  })
+  let releaseCoordinator = () => {}
+  abortStartup = async () => {
+    releaseCoordinator()
+    server.store.releaseDaemonInstanceLease(daemonLease)
+    await guard.close()
+  }
+  let coordinatorLease = server.store.claimCoordinatorLease(daemonLease)
+  releaseCoordinator = () => server.store.releaseCoordinatorLease(coordinatorLease)
   const github = new GitHubClient()
   const discoveryWatcher = new BranchDiscoveryWatcher(server.store, github, server.worktreeBindings)
 
-  const recovery = server.store.recoverFromRestart()
+  const recovery = server.store.recoverFromRestartAsCoordinator(coordinatorLease)
   logger.info("startup recovery", {
     prunedClients: recovery.prunedClients,
     resetBatches: recovery.resetBatches,
@@ -62,7 +163,10 @@ async function startDaemon(lock: DaemonLock) {
   })
 
 
-  const suspendedAutomaticSubscriptions = server.store.suspendAutomaticSubscriptions()
+  const suspendedAutomaticSubscriptions = server.store.withCoordinatorLease(
+    coordinatorLease,
+    () => server.store.suspendAutomaticSubscriptions(),
+  )
   if (suspendedAutomaticSubscriptions > 0) {
     logger.info("suspended automatic subscriptions pending author verification", {
       suspendedAutomaticSubscriptions,
@@ -80,7 +184,10 @@ async function startDaemon(lock: DaemonLock) {
   // Reap sessions whose last_activity_at is older than the staleness threshold.
   // Runs once at startup to clean up any backlog carried across daemon restarts,
   // and periodically while the daemon is up.
-  const startupReap = server.store.reapStaleSessions(PREMIND_SESSION_STALE_MS)
+  const startupReap = server.store.withCoordinatorLease(
+    coordinatorLease,
+    () => server.store.reapStaleSessions(PREMIND_SESSION_STALE_MS),
+  )
   server.worktreeBindings.closeInactiveSessions()
   if (startupReap.reaped > 0 || startupReap.oldestAgeMs !== null) {
     logger.info("startup reap", {
@@ -92,8 +199,13 @@ async function startDaemon(lock: DaemonLock) {
 
   // Prune closed session rows and orphaned PR events at startup so any backlog
   // accumulated while the daemon was down is cleaned up immediately.
-  const startupPrunedSessions = server.store.pruneClosedSessions(PREMIND_CLOSED_SESSION_RETENTION_MS)
-  const startupPrunedEvents = server.store.pruneOrphanedPrEvents()
+  const [startupPrunedSessions, startupPrunedEvents] = server.store.withCoordinatorLease(
+    coordinatorLease,
+    () => [
+      server.store.pruneClosedSessions(PREMIND_CLOSED_SESSION_RETENTION_MS),
+      server.store.pruneOrphanedPrEvents(),
+    ] as const,
+  )
   if (startupPrunedSessions > 0 || startupPrunedEvents > 0) {
     logger.info("startup prune", {
       prunedClosedSessions: startupPrunedSessions,
@@ -103,7 +215,10 @@ async function startDaemon(lock: DaemonLock) {
 
   // Run cache cleanup on startup.
   const detailFiles = new DetailFileWriter()
-  const cleanedFiles = detailFiles.cleanup()
+  const cleanedFiles = server.store.withCoordinatorLease(
+    coordinatorLease,
+    () => detailFiles.cleanup(),
+  )
   if (cleanedFiles > 0) {
     logger.info("detail file cleanup", { removed: cleanedFiles })
   }
@@ -112,20 +227,52 @@ async function startDaemon(lock: DaemonLock) {
   // meantime, another daemon is taking over: leave the socket to it.
   if (!holdsDaemonLock(lock)) {
     logger.warn("daemon lock lost during startup; exiting before listening")
+    await abortStartup?.()
+    abortStartup = undefined
     server.store.close()
     return
   }
-  await server.listen()
+  await server.listen(instanceSocket)
+  const publishDescriptor = () => {
+    try {
+      writeInstanceDescriptor(PREMIND_STATE_DIR, server.describe())
+    } catch (error) {
+      logger.warn("failed to publish instance descriptor", {
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
+  const withdrawDescriptor = () => {
+    try {
+      removeInstanceDescriptor(PREMIND_STATE_DIR, server.daemonInstanceId)
+    } catch {
+      // A stale descriptor is pruned by the next daemon; never block shutdown.
+    }
+  }
+  publishDescriptor()
+  const prunedInstances = await pruneUnreachableInstances(
+    PREMIND_STATE_DIR,
+    runtimeDir,
+    isSocketReachable,
+    server.daemonInstanceId,
+  )
+  if (prunedInstances > 0) logger.info("pruned stale instances", { prunedInstances })
 
   const discoveryScheduler = new PollScheduler(
     "branch-discovery",
-    createDisableGatedTick("branch-discovery", server.store, () => discoveryWatcher.tick(), logger),
+    createDisableGatedTick("branch-discovery", server.store, async () => {
+      server.store.withCoordinatorLease(coordinatorLease, () => true)
+      await discoveryWatcher.tick()
+    }, logger),
     { baseIntervalMs: 60_000, maxIntervalMs: 180_000, jitterFactor: 0.25 },
   )
 
   const prScheduler = new PollScheduler(
     "pr-watcher",
-    createDisableGatedTick("pr-watcher", server.store, () => pullRequestWatcher.tick(), logger),
+    createDisableGatedTick("pr-watcher", server.store, async () => {
+      server.store.withCoordinatorLease(coordinatorLease, () => true)
+      await pullRequestWatcher.tick()
+    }, logger),
     { baseIntervalMs: 20_000, maxIntervalMs: 120_000, jitterFactor: 0.2 },
   )
 
@@ -156,12 +303,14 @@ async function startDaemon(lock: DaemonLock) {
 
 
   if (!server.store.isGloballyDisabled()) {
+    server.store.withCoordinatorLease(coordinatorLease, () => true)
     await discoveryWatcher.tick()
   }
   discoveryScheduler.start()
   prScheduler.start()
 
   const reapInterval = setInterval(() => {
+    server.store.withCoordinatorLease(coordinatorLease, () => {
     const result = server.store.reapStaleSessions(PREMIND_SESSION_STALE_MS)
     server.worktreeBindings.closeInactiveSessions()
     const reclaimedHandoffs = server.store.expireStaleHandoffs()
@@ -186,9 +335,42 @@ async function startDaemon(lock: DaemonLock) {
         prunedOrphanedEvents: prunedEvents,
       })
     }
+    })
   }, STALENESS_SWEEP_INTERVAL_MS)
   if (typeof reapInterval.unref === "function") reapInterval.unref()
 
+  let authorityStopping = false
+  const authorityInterval = setInterval(() => {
+    publishDescriptor()
+    const renewedDaemon = server.store.renewDaemonInstanceLease(daemonLease)
+    if (!renewedDaemon) {
+      authorityStopping = true
+      logger.error("daemon instance lease lost; self-demoting")
+    } else {
+      daemonLease = renewedDaemon
+      const renewedCoordinator = server.store.renewCoordinatorLease(coordinatorLease)
+      if (!renewedCoordinator) {
+        authorityStopping = true
+        logger.error("coordinator lease lost; self-demoting")
+      } else {
+        coordinatorLease = renewedCoordinator
+      }
+    }
+    if (!authorityStopping) return
+    clearInterval(authorityInterval)
+    clearInterval(reapInterval)
+    discoveryScheduler.stop()
+    prScheduler.stop()
+    pullRequestWatcher.close()
+    void guard.close()
+      .then(() => server.close(instanceSocket))
+      .finally(() => {
+        withdrawDescriptor()
+        releaseDaemonLock(lock)
+      })
+      .finally(() => process.exit(1))
+  }, 10_000)
+  if (typeof authorityInterval.unref === "function") authorityInterval.unref()
   // A daemon whose lock was reclaimed (for example after it stopped answering)
   // must stop polling and writing so two daemons never run side by side.
   const lockCheckInterval = setInterval(() => {
@@ -203,12 +385,17 @@ async function startDaemon(lock: DaemonLock) {
     graceMs: PREMIND_IDLE_SHUTDOWN_GRACE_MS,
     onStopping: async (reason) => {
       clearInterval(reapInterval)
+      clearInterval(authorityInterval)
       clearInterval(lockCheckInterval)
       discoveryScheduler.stop()
       prScheduler.stop()
       pullRequestWatcher.close()
+      await guard.close()
+      server.store.releaseCoordinatorLease(coordinatorLease)
+      server.store.releaseDaemonInstanceLease(daemonLease)
       logger.info("graceful shutdown", { reason })
-      await server.close()
+      withdrawDescriptor()
+      await server.close(instanceSocket)
       releaseDaemonLock(lock)
     },
     onStopped: () => process.exit(0),
@@ -221,13 +408,21 @@ async function startDaemon(lock: DaemonLock) {
   })
   server.setDemandChangeListener(() => lifecycle.evaluateDemand())
   lifecycle.start()
+  abortStartup = undefined
 
   const cleanup = () => lifecycle.requestStop("signal")
   process.on("SIGINT", cleanup)
   process.on("SIGTERM", cleanup)
 }
 
-void main().catch((error) => {
+void main().catch(async (error) => {
   logger.error("fatal error", { error: error instanceof Error ? error.message : String(error) })
+  try {
+    await abortStartup?.()
+  } catch (cleanupError) {
+    logger.warn("startup cleanup failed", {
+      error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+    })
+  }
   process.exit(1)
 })

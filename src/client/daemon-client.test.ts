@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import fs from "node:fs";
+import fs, { readFileSync } from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -8,6 +8,7 @@ import {
   DEFAULT_REQUEST_TIMEOUT_MS,
   PremindDaemonClient,
 } from "./daemon-client.ts";
+import type { ReminderBatch } from "../shared/schema.ts";
 
 type Request = { type: string; payload: Record<string, unknown> };
 
@@ -332,7 +333,204 @@ describe("PremindDaemonClient Codex operations", () => {
   });
 });
 
+const readV1Fixture = (name: string): unknown =>
+  JSON.parse(
+    readFileSync(
+      new URL(`../shared/protocol/__fixtures__/v1/${name}`, import.meta.url),
+      "utf8",
+    ),
+  );
+
+type LeaseRequest = Request & {
+  protocolVersion?: number;
+  sessionLease?: unknown;
+};
+
+describe("PremindDaemonClient protocol negotiation and session leases", () => {
+  test("claims, renews, and releases a negotiated session lease", async () => {
+    const client = createClient();
+    const requests: LeaseRequest[] = [];
+    const lease = {
+      sessionId: "session-1",
+      ownerInstanceId: "daemon-a",
+      generation: 1,
+      clientIncarnationNonce: client.clientId,
+      leaseToken: "00000000-0000-4000-8000-000000000001",
+      claimedAt: 1,
+      expiresAt: 60_001,
+    };
+    const testClient = client as unknown as {
+      protocolVersion: 2;
+      daemonInstanceId: string;
+      supportedOperations: Set<string>;
+      requestWithRetry: (request: LeaseRequest) => Promise<unknown>;
+      withNegotiatedProtocol: (
+        request: LeaseRequest,
+      ) => Record<string, unknown>;
+    };
+    testClient.protocolVersion = 2;
+    testClient.daemonInstanceId = "daemon-a";
+    testClient.supportedOperations = new Set([
+      "claimSessionLease",
+      "renewSessionLease",
+      "releaseSessionLease",
+    ]);
+    testClient.requestWithRetry = async (request) => {
+      requests.push(request);
+      if (request.type === "claimSessionLease") return { lease };
+      if (request.type === "renewSessionLease") {
+        return { lease: { ...lease, expiresAt: 120_001 } };
+      }
+      if (request.type === "releaseSessionLease") return { released: true };
+      return undefined;
+    };
+
+    await client.registerSession({
+      sessionId: "session-1",
+      repo: "acme/repo",
+      branch: "feature/x",
+      isPrimary: true,
+      status: "active",
+      busyState: "idle",
+    });
+    const fenced = testClient.withNegotiatedProtocol({
+      type: "updateSessionState",
+      protocolVersion: 1,
+      payload: { sessionId: "session-1", busyState: "busy" },
+    });
+    assert.deepEqual(fenced.sessionLease, lease);
+    await client.heartbeat();
+    await client.release();
+
+    assert.deepEqual(
+      requests.map(({ type }) => type),
+      [
+        "claimSessionLease",
+        "registerSession",
+        "heartbeatClient",
+        "renewSessionLease",
+        "releaseSessionLease",
+        "releaseClient",
+      ],
+    );
+    const releaseRequest = requests.find(
+      ({ type }) => type === "releaseSessionLease",
+    );
+    assert.equal(
+      (releaseRequest?.payload.lease as { expiresAt?: number } | undefined)
+        ?.expiresAt,
+      120_001,
+    );
+  });
+
+  test("claims before an unfenced protocol-v2 session mutation", async () => {
+    const client = createClient();
+    const lease = {
+      sessionId: "session-1",
+      ownerInstanceId: "daemon-a",
+      generation: 1,
+      clientIncarnationNonce: "client-a-1",
+      leaseToken: "00000000-0000-4000-8000-000000000002",
+      claimedAt: 1,
+      expiresAt: 60_001,
+    };
+    const requests: LeaseRequest[] = [];
+    const testClient = client as unknown as {
+      clientId: string;
+      initialized: boolean;
+      protocolVersion: number;
+      daemonInstanceId?: string;
+      supportedOperations: Set<string>;
+      request: (request: LeaseRequest) => Promise<unknown>;
+    };
+    testClient.clientId = "client-a-1";
+    testClient.initialized = true;
+    testClient.protocolVersion = 2;
+    testClient.daemonInstanceId = "daemon-a";
+    testClient.supportedOperations = new Set([
+      "claimSessionLease",
+      "renewSessionLease",
+      "transferSessionLease",
+      "releaseSessionLease",
+    ]);
+    testClient.request = async (request) => {
+      requests.push(request);
+      if (request.type === "claimSessionLease") return { lease };
+      return { updated: true };
+    };
+
+    await client.updateSessionState({
+      sessionId: "session-1",
+      busyState: "busy",
+    });
+
+    assert.deepEqual(
+      requests.map(({ type }) => type),
+      ["claimSessionLease", "updateSessionState"],
+    );
+    assert.deepEqual(requests[1]?.sessionLease, lease);
+  });
+});
+
+describe("protocol-v1 response compatibility", () => {
+  test("accepts tokenized bundle claims", async () => {
+    const fixture = readV1Fixture("0a309df-tokenized-bundle-claim.json") as {
+      bundle: { handoffId: string; batches: ReminderBatch[] };
+    };
+    const client = createClient();
+    const testClient = client as unknown as {
+      requestWithRetry: () => Promise<unknown>;
+    };
+    testClient.requestWithRetry = async () => fixture;
+
+    assert.deepEqual(
+      await client.claimReminderBundle(fixture.bundle.batches[0]!.sessionId),
+      fixture,
+    );
+  });
+
+  test("normalizes debug status from before host fields", async () => {
+    const client = createClient();
+    const testClient = client as unknown as {
+      requestWithRetry: () => Promise<unknown>;
+    };
+    testClient.requestWithRetry = async () =>
+      readV1Fixture("a75d55f-pre-host-debug-status.json");
+
+    const result = await client.debugStatus();
+    assert.equal(result.sessions[0]?.host, "unknown");
+    assert.equal(result.sessions[0]?.sessionId, "session-pre-host");
+  });
+});
+
 describe("PremindDaemonClient connection loss", () => {
+  test("starts a missing daemon before the first protocol handshake", async () => {
+    const temporaryRoot = process.platform === "win32" ? os.tmpdir() : "/tmp";
+    const directory = fs.mkdtempSync(path.join(temporaryRoot, "premind-client-"));
+    const socketPath = path.join(directory, "premind.sock");
+    let ensureCalls = 0;
+    const server = net.createServer((socket) =>
+      socket.once("data", () => socket.end(okResponse())),
+    );
+    const client = new PremindDaemonClient({
+      socketPath,
+      ensureDaemon: async () => {
+        ensureCalls++;
+        await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+      },
+      maxRetries: 1,
+      retryDelayMs: 0,
+    });
+    try {
+      // No daemon is listening yet: the handshake must trigger ensureDaemon.
+      await client.heartbeat();
+      assert.equal(ensureCalls, 1);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   test("rejects when the daemon closes the connection without replying", async () => {
     await withSocketServer(
       (socket) => socket.once("data", () => socket.end()),
