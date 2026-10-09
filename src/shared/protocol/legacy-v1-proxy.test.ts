@@ -100,6 +100,38 @@ describe("safe protocol-v1 proxy", () => {
     });
   });
 
+  test("re-registers a legacy session after a daemon restart cleared its lease", async () => {
+    const store = createStore();
+    const router = new Router(store);
+    const proxy = new LegacyV1ProxyRouter(store, "daemon-a", (request) => router.handle(request));
+    const registerRequest = {
+      type: "registerSession",
+      protocolVersion: 1,
+      payload: {
+        clientId: "legacy-client",
+        sessionId: "legacy-session",
+        repo: "acme/repo",
+        branch: "feature/legacy",
+        isPrimary: true,
+        status: "active",
+        busyState: "idle",
+      },
+    } as const;
+    assert.equal((await proxy.handle(registerRequest)).ok, true);
+    const before = store.getLegacyProxyLease("legacy-session");
+    assert.ok(before);
+
+    // Startup recovery after a restart or handover clears every session lease.
+    store.recoverFromRestart();
+    const successor = new LegacyV1ProxyRouter(store, "daemon-b", (request) => router.handle(request));
+    const reregistered = await successor.handle(registerRequest);
+    assert.equal(reregistered.ok, true, JSON.stringify(reregistered));
+    const after = store.getLegacyProxyLease("legacy-session");
+    assert.ok(after && after.lease.generation > before.lease.generation);
+    assert.equal(store.getSession("legacy-session")?.status, "active");
+    store.close();
+  });
+
   test("maps tokenless identities to rotating durable leases", async () => {
     const store = createStore();
     const router = new Router(store);
