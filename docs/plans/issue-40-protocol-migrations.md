@@ -465,32 +465,37 @@ Phases 1–4 and per-instance sockets/descriptors shipped in #43; Phase 4's sche
 
 **Validation:** marker races/corruption, paused open connection, two-client legacy cutover, and cold pre-bridge restart. Commit.
 
-### Phase 5 — Cooperative handover
+### Phase 5 — Cooperative handover (done: #43, #89, #91, #92)
 
-- Give each daemon a unique owner-only socket and a heartbeated descriptor (done in #43).
+- Give each daemon a unique owner-only socket and a heartbeated descriptor.
 - Add build ordering and the `requestHandover` operation; on acceptance, drain through the normal graceful shutdown.
+- Replace identified daemons that predate `requestHandover` with SIGTERM, and stamp the build into installed bundles.
 - Add one shared launcher handover routine and call it from every launcher.
 - Have the shared client re-register its client and remembered sessions after reconnecting.
 - Report update-required when a newer daemon shares no protocol with the client.
 
-**Validation:** build-ordering table, handover with two live sessions, refused and timed-out handovers, a pre-handover daemon, and concurrent launchers. Commit.
+**Validation:** build-ordering table, handover with two live sessions, refused and timed-out handovers, a pre-handover daemon, concurrent launchers, and a successor that fails to start.
 
-### Phase 6 — Apply shared behavior to every host
+### Phase 6 — Apply shared behavior to every host (done: #94, #95)
 
-- Generate Claude discovery/protocol code from shared TypeScript.
-- Settle Claude cross-hook handoffs by opaque token.
-- Add low-noise updating/reconnecting/EOL diagnostics and generated-artifact drift checks.
+- Claude's hooks stay hand-written JavaScript on protocol v1 through the frozen proxy. Generating them from shared TypeScript would move them to protocol v2, which needs a session lease per short-lived hook process and risks `SESSION_BUSY` after a hook crashes. Instead, a contract test drives the shipped hooks over a real historical socket (#94); it found that the proxy rejected Claude's reminder claims.
+- Claude cross-hook handoffs settle by their opaque handoff token (already in place before this plan).
+- Every host's diagnostics show the running daemon's build next to the plugin's (#95). A live "reconnecting" indicator is not built: a handover reconnect takes about 250 ms. End-of-support warnings wait for real support floors.
+- Generated artifacts are no longer committed (#70); `validate:package-runtime` rebuilds and checks them in CI.
 
-**Validation:** one parameterized adapter contract with only host-specific lifecycle assertions. Commit.
+**Validation:** the Claude wire contract and per-host diagnostic tests.
 
-### Phase 7 — Cross-version CI and release documentation
+### Phase 7 — Cross-version CI and release documentation (done: this change)
 
-- Add `test:protocol-compat` and a dedicated CI job.
-- Run the minimally spanning suite below over real sockets and temporary databases.
-- Document protocol rules, the handover lifecycle, delivery semantics, support deadlines, downgrade behavior, and legacy recovery in `docs/protocol.md`.
-- Build all host/runtime artifacts from one tag and embedded version/commit.
+- `test:protocol-compat` and the **Protocol compatibility** CI job check out released daemon builds (#82, #43, #89) from git history and require the current launcher to replace each one, keep its sessions and subscriptions, serve its old clients, and give current clients protocol v2.
+- `docs/protocol.md` documents protocol rules, the handover lifecycle, delivery semantics, support windows, downgrade behavior, and manual recovery.
+- Installed bundles embed their version, commit, and build time (#91). Publishing every package from one release tag is left for when Premind has a release process.
 
-**Validation:** `bun run check`, `bun run test:protocol-compat`, `bun run test:harness`, `bun run test:claude`, and existing CI. Commit.
+### Remaining
+
+- Raise real minimum-daemon and service-support floors, and add end-of-support warnings, once Premind has releases to retire.
+- Schema-evolution states and the floor-raise barrier, when the first destructive schema change needs them.
+- Hardening: peer-credential checks on the historical socket, bounded compatibility-marker transitions, and lease expiry that tolerates clock jumps and suspend.
 
 ## Minimally spanning test plan
 
