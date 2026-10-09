@@ -108,7 +108,8 @@ export const createDaemonLauncher = (options: DaemonLauncherOptions) => {
     // An older daemon, even one missing operations we need, hands over to us
     // below instead of being used or reported as incompatible.
     const replaceOlder =
-      reachable && (await isRunningDaemonOlder({ build: build(), host, socketPath }));
+      reachable &&
+      (await isRunningDaemonOlder({ build: build(), host, socketPath, stateDir }));
     if (initialProbe.status === "compatible" && !replaceOlder) return;
     if (initialProbe.status === "incompatible" && !replaceOlder) {
       throw incompatibleDaemonError(initialProbe);

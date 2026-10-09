@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
@@ -13,6 +14,7 @@ import {
   formatDaemonLockStatus,
   handOverOlderDaemon,
   holdsDaemonLock,
+  identifySignalableDaemon,
   inspectDaemon,
   isRunningDaemonOlder,
   isSocketReachable,
@@ -470,5 +472,100 @@ test("treats a daemon without bootstrap as unsupported", async () => {
     );
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+/**
+ * Spawns a stand-in for a Premind daemon that predates bootstrap: it holds the
+ * daemon lock, answers status probes over protocol v1, rejects `initialize`,
+ * and shuts down gracefully on SIGTERM like the real pre-handover daemons.
+ */
+const startLegacyDaemonProcess = async (entryName: string) => {
+  const dir = createTempDir();
+  const socketPath = path.join(dir, "premind.sock");
+  const stateDir = path.join(dir, "state");
+  fs.mkdirSync(stateDir);
+  const entry = path.join(dir, entryName);
+  fs.writeFileSync(
+    entry,
+    `import fs from "node:fs";
+import net from "node:net";
+const [socketPath, lockPath] = process.argv.slice(2);
+fs.writeFileSync(lockPath, \`\${process.pid}:\${Date.now()}:legacy-token\`);
+const server = net.createServer((socket) => socket.once("data", (chunk) => {
+  const request = JSON.parse(String(chunk));
+  socket.end(JSON.stringify(request.type === "initialize"
+    ? { ok: false, protocolVersion: 1, error: { code: "BAD_REQUEST", message: "unsupported" } }
+    : { ok: true, protocolVersion: 1, result: { daemon: { protocolVersion: 1, operations: [] } } }) + "\\n");
+}));
+server.listen(socketPath, () => process.stdout.write("ready\\n"));
+process.on("SIGTERM", () => server.close(() => { fs.rmSync(lockPath, { force: true }); process.exit(0); }));
+`,
+  );
+  const child = spawn(process.execPath, [entry, socketPath, path.join(stateDir, "daemon.lock")], {
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  await new Promise<void>((resolve) => child.stdout.once("data", () => resolve()));
+  const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
+  return {
+    socketPath,
+    stateDir,
+    pid: child.pid!,
+    exited,
+    stop: async () => {
+      if (child.exitCode === null) child.kill("SIGKILL");
+      await exited;
+    },
+  };
+};
+
+test("stops an identified pre-handover daemon with SIGTERM so a newer build can start", async () => {
+  const legacy = await startLegacyDaemonProcess("premind-daemon.mjs");
+  try {
+    const options = { host: "pi", socketPath: legacy.socketPath, stateDir: legacy.stateDir };
+    assert.equal(await identifySignalableDaemon(options), legacy.pid);
+    // A launcher of unknown build never replaces anything.
+    assert.equal(await isRunningDaemonOlder({ ...options, build: build("0.0.0") }), false);
+    assert.equal(
+      await handOverOlderDaemon({ ...options, build: build("0.0.0"), timeoutMs: 200 }),
+      "not-older",
+    );
+    assert.equal(await isRunningDaemonOlder({ ...options, build: build("0.1.0", 1) }), true);
+    assert.equal(
+      await handOverOlderDaemon({ ...options, build: build("0.1.0", 1), timeoutMs: 5_000 }),
+      "handed-over",
+    );
+    await legacy.exited;
+    assert.equal(fs.existsSync(path.join(legacy.stateDir, "daemon.lock")), false);
+  } finally {
+    await legacy.stop();
+  }
+});
+
+test("never signals a process that is not an identified Premind daemon", async () => {
+  // Same behavior and lock, but the command line is not a Premind entry point.
+  const impostor = await startLegacyDaemonProcess("other-service.mjs");
+  try {
+    const options = {
+      host: "pi",
+      socketPath: impostor.socketPath,
+      stateDir: impostor.stateDir,
+      build: build("0.1.0", 1),
+      timeoutMs: 200,
+    };
+    assert.equal(await identifySignalableDaemon(options), undefined);
+    assert.equal(await handOverOlderDaemon(options), "unsupported");
+    // A Premind command line whose lock belongs to another state directory is also left alone.
+    assert.equal(
+      await handOverOlderDaemon({
+        ...options,
+        stateDir: createTempDir(),
+        readCommand: () => "node /opt/premind/premind-daemon.mjs",
+      }),
+      "unsupported",
+    );
+    assert.doesNotThrow(() => process.kill(impostor.pid, 0));
+  } finally {
+    await impostor.stop();
   }
 });
