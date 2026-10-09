@@ -437,6 +437,8 @@ export const waitForDaemon = async (
   return false;
 };
 
+export { readPackagedBuild } from "./build-info.ts";
+
 // ---------------------------------------------------------------------------
 // Cooperative handover: one daemon per state directory, replaced only by a
 // strictly newer build. Kept dependency-free because Claude's launcher imports

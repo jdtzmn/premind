@@ -5,7 +5,11 @@ import { PREMIND_SOCKET_PATH, PREMIND_STATE_DIR } from "../shared/constants.ts";
 import {
   acquireDaemonStartLock,
   DAEMON_START_LOCK_TOKEN_ENV,
+  handOverOlderDaemon,
   inspectDaemon,
+  isRunningDaemonOlder,
+  readPackagedBuild,
+  type DaemonBuildIdentity,
   isDaemonStarting,
   readDaemonLockOwner,
   releaseDaemonStartLock,
@@ -44,6 +48,10 @@ export type DaemonLauncherOptions = {
   startupTimeoutMs?: number;
   retryMs?: number;
   onDiagnostic?: (diagnostic: DaemonLaunchDiagnostic) => void;
+  /** Reported in the bootstrap handshake; diagnostic only. */
+  host?: string;
+  /** The build this launcher would start; injectable for tests. */
+  build?: DaemonBuildIdentity;
 };
 
 const waitForProbe = async (
@@ -90,11 +98,19 @@ export const createDaemonLauncher = (options: DaemonLauncherOptions) => {
   const startupTimeoutMs =
     options.startupTimeoutMs ?? CONNECT_MAX_RETRIES * CONNECT_RETRY_MS;
   const retryMs = options.retryMs ?? CONNECT_RETRY_MS;
+  const host = options.host ?? "codex";
+  const build = () => options.build ?? readPackagedBuild();
 
   return async () => {
     const initialProbe = await inspectDaemon(socketPath, requiredOperations);
-    if (initialProbe.status === "compatible") return;
-    if (initialProbe.status === "incompatible") {
+    const reachable =
+      initialProbe.status === "compatible" || initialProbe.status === "incompatible";
+    // An older daemon, even one missing operations we need, hands over to us
+    // below instead of being used or reported as incompatible.
+    const replaceOlder =
+      reachable && (await isRunningDaemonOlder({ build: build(), host, socketPath }));
+    if (initialProbe.status === "compatible" && !replaceOlder) return;
+    if (initialProbe.status === "incompatible" && !replaceOlder) {
       throw incompatibleDaemonError(initialProbe);
     }
     if (initialProbe.status === "unresponsive") {
@@ -133,7 +149,13 @@ export const createDaemonLauncher = (options: DaemonLauncherOptions) => {
 
     let failureReported = false;
     try {
-      const lockedProbe = await inspectDaemon(socketPath, requiredOperations);
+      let lockedProbe = await inspectDaemon(socketPath, requiredOperations);
+      if (lockedProbe.status === "compatible" || lockedProbe.status === "incompatible") {
+        // Holding the start lock keeps older launchers from restarting the old
+        // build between its exit and our daemon's startup.
+        const handover = await handOverOlderDaemon({ build: build(), host, socketPath, stateDir });
+        if (handover === "handed-over") lockedProbe = { status: "unreachable" };
+      }
       if (lockedProbe.status === "compatible") return;
       if (lockedProbe.status === "incompatible") {
         throw incompatibleDaemonError(lockedProbe);
