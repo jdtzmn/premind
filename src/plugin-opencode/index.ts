@@ -12,7 +12,7 @@ import { renderCurrentStatus } from "../shared/status-view.ts";
 import { getPluginRuntimeStatePath, readPluginInstances, readPluginRuntimeState, registerPluginInstance, writePluginRuntimeState } from "./debug-state.ts"
 import { detectGitContext } from "../client/git-context.ts"
 import { ensureDaemonRunning } from "./daemon-launcher.ts"
-import { daemonLockStatus, formatDaemonLockStatus } from "../shared/daemon-startup.ts"
+import { daemonLockStatus, describeDaemonBuild, formatDaemonLockStatus, readPackagedBuild } from "../shared/daemon-startup.ts"
 
 const COMMAND_MARKERS = {
   status: "[PREMIND_STATUS]",
@@ -840,7 +840,7 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
     )
   }
 
-  const getDoctorText = () => {
+  const getDoctorText = async () => {
     const state = readPluginRuntimeState()
     const instances = readPluginInstances()
     const otherInstances = instances.filter((instance) => instance.pid !== process.pid)
@@ -855,6 +855,7 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
       `- commands registered: ${state.commandsRegistered === true ? "yes" : state.commandsRegistered === false ? "no" : "unknown"}`,
       `- idle delivery threshold: ${idleDeliveryThreshold}ms`,
       `- daemon lock: ${formatDaemonLockStatus(daemonLockStatus())}`,
+      `- ${await describeDaemonBuild({ host: "opencode", build: readPackagedBuild() })}`,
       `- root: ${state.root ?? "unknown"}`,
       `- last session: ${state.lastSessionId ?? "none"}`,
       `- updated at: ${state.updatedAt ?? "unknown"}`,
@@ -866,7 +867,7 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
   }
 
   const handleDoctorCommand = async (sessionID: string, inputRef?: { agent?: string; model?: { providerID: string; modelID: string } }) => {
-    await injectResponse(sessionID, getDoctorText(), inputRef)
+    await injectResponse(sessionID, await getDoctorText(), inputRef)
   }
 
   const deliverTool = tool({

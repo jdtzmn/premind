@@ -15,7 +15,11 @@ import {
 	ensurePremindPrerequisites,
 	PremindPrerequisiteError,
 } from "../client/prerequisites.ts";
-import { CODEX_REQUIRED_DAEMON_OPERATIONS } from "../shared/daemon-startup.ts";
+import {
+	CODEX_REQUIRED_DAEMON_OPERATIONS,
+	describeDaemonBuild,
+	readPackagedBuild,
+} from "../shared/daemon-startup.ts";
 import { renderCurrentStatus } from "../shared/status-view.ts";
 import { renderPremindStatus } from "../plugin-opencode/commands.ts";
 import {
@@ -221,6 +225,8 @@ export type CodexMcpDependencies = {
 	pluginData: string;
 	cwd: string;
 	ensureDaemon(): Promise<void>;
+	/** One line comparing the running daemon's build with this plugin's. */
+	describeDaemonBuild?(): Promise<string>;
 };
 
 const resolveBinding = async (
@@ -312,7 +318,12 @@ const callTool = async (
 		if (tool.name === "premind_status" || tool.name === "premind_debug_status") {
 			const { binding, status } = await resolveBinding(dependencies, tool.args.sessionHandle);
 			if (tool.name === "premind_debug_status") {
-				return text(renderPremindStatus(status, Date.now(), undefined, binding?.sessionId));
+				const describe =
+					dependencies.describeDaemonBuild ??
+					(() => describeDaemonBuild({ host: "codex", build: readPackagedBuild() }));
+				return text(
+					`${await describe()}\n${renderPremindStatus(status, Date.now(), undefined, binding?.sessionId)}`,
+				);
 			}
 			return text(renderCurrentStatus(status, binding?.sessionId));
 		}

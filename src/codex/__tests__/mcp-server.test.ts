@@ -506,6 +506,7 @@ test("redacts daemon internals and returns execution failures as tool results", 
 			pluginData,
 			cwd: pluginData,
 			ensureDaemon: async () => undefined,
+			describeDaemonBuild: async () => "daemon build: v0.1.0 (abc123), the same as this plugin",
 		};
 		const result = await handleCodexMcpRequest(
 			call("premind_status", { sessionHandle: binding.sessionHandle }),
@@ -522,6 +523,7 @@ test("redacts daemon internals and returns execution failures as tool results", 
 			dependencies,
 		);
 		assert.match(JSON.stringify(debug), /premind status v/);
+		assert.match(JSON.stringify(debug), /daemon build: v0\.1\.0 \(abc123\), the same as this plugin/);
 		assert.match(JSON.stringify(debug), /codex:thread-1/);
 		const failed = await handleCodexMcpRequest(
 			call("premind_status", { sessionHandle: binding.sessionHandle }),

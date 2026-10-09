@@ -25,7 +25,9 @@ import { detectGitContext } from "../client/git-context.ts";
 import { ensureDaemonRunning } from "../plugin-opencode/daemon-launcher.ts";
 import {
 	daemonLockStatus,
+	describeDaemonBuild,
 	formatDaemonLockStatus,
+	readPackagedBuild,
 } from "../shared/daemon-startup.ts";
 import type {
 	AckReminderPayload,
@@ -414,6 +416,7 @@ export const createPremindPiExtension = (
 					? [`- idle delivery poll: ${describeStatusPoll(Date.now())}`]
 					: []),
 				`- daemon lock: ${formatDaemonLockStatus(daemonLockStatus())}`,
+				`- ${await describeDaemonBuild({ host: "pi", build: readPackagedBuild() })}`,
 			];
 			try {
 				const status = await createDaemonClient().debugStatus();

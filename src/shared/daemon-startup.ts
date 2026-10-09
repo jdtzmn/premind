@@ -486,6 +486,7 @@ const HANDOVER_REQUEST_TIMEOUT_MS = 2_000;
 
 type RunningDaemon = {
   build: DaemonBuildIdentity;
+  commit: string;
   socketPath: string;
   operations: string[];
 };
@@ -561,7 +562,12 @@ export const inspectRunningDaemonBuild = async ({
         ok?: unknown;
         bootstrapVersion?: unknown;
         result?: {
-          daemon?: { version?: unknown; buildTime?: unknown; socketPath?: unknown };
+          daemon?: {
+            version?: unknown;
+            commit?: unknown;
+            buildTime?: unknown;
+            socketPath?: unknown;
+          };
           capabilities?: { operations?: unknown };
         };
       }
@@ -584,6 +590,7 @@ export const inspectRunningDaemonBuild = async ({
           ? daemon.buildTime
           : 0,
     },
+    commit: typeof daemon.commit === "string" ? daemon.commit.slice(0, 6) : "------",
     socketPath: daemon.socketPath,
     operations: Array.isArray(operations)
       ? operations.filter((operation): operation is string => typeof operation === "string")
@@ -766,3 +773,51 @@ export const isRunningDaemonOlder = async (options: {
       stateDir: options.stateDir ?? PREMIND_STATE_DIR,
     })
   ).kind !== "none";
+
+const formatBuild = (build: DaemonBuildIdentity, commit?: string) => {
+  const parts = [commit, build.buildTime > 0 ? `built ${new Date(build.buildTime * 1000).toISOString().slice(0, 10)}` : undefined]
+    .filter((part): part is string => part !== undefined && part !== "------");
+  return `v${build.version}${parts.length > 0 ? ` (${parts.join(", ")})` : ""}`;
+};
+
+/**
+ * One doctor line describing the running daemon's build relative to this
+ * host's packaged build, so an update that has not taken effect yet is
+ * visible. Never throws; a probe failure is reported in the line.
+ */
+export const describeDaemonBuild = async ({
+  host,
+  socketPath = PREMIND_SOCKET_PATH,
+  stateDir = PREMIND_STATE_DIR,
+  build,
+}: {
+  host: string;
+  socketPath?: string;
+  stateDir?: string;
+  build: DaemonBuildIdentity;
+}): Promise<string> => {
+  const plugin = formatBuild(build);
+  try {
+    const running = await inspectRunningDaemonBuild({ socketPath, host, build });
+    if (!running) {
+      if (!(await isSocketReachable(socketPath))) return `daemon build: not running; this plugin is ${plugin}`;
+      const replaceable = await identifySignalableDaemon({ socketPath, stateDir });
+      return replaceable === undefined
+        ? `daemon build: unknown (predates build reporting); this plugin is ${plugin}`
+        : `daemon build: older than this plugin's ${plugin}; the next Premind launch replaces it`;
+    }
+    const daemon = formatBuild(running.build, running.commit);
+    switch (compareDaemonBuilds(build, running.build)) {
+      case "same":
+        return `daemon build: ${daemon}, the same as this plugin`;
+      case "newer":
+        return `daemon build: ${daemon}, older than this plugin's ${plugin}; the next Premind launch replaces it`;
+      case "older":
+        return `daemon build: ${daemon}, newer than this plugin's ${plugin}; update or reload this host to match`;
+      default:
+        return `daemon build: ${daemon}; this plugin is ${plugin}`;
+    }
+  } catch (error) {
+    return `daemon build: unavailable (${error instanceof Error ? error.message : String(error)})`;
+  }
+};
