@@ -17,6 +17,7 @@ import {
   toProtocolV2Response,
   type ProtocolV2Response,
 } from "../../shared/protocol/v2.ts";
+import { readPackagedBuild } from "../../shared/build-info.ts";
 import type { InstanceDescriptorV1 } from "../../shared/protocol/descriptor.ts";
 import { PREMIND_COMMIT, PREMIND_VERSION } from "../../shared/version.ts";
 import {
@@ -69,6 +70,7 @@ const SUPPORTED_OPERATIONS = [
   "getGlobalDisabled",
   "debugStatus",
   "pruneClosedSessions",
+  "requestHandover",
 ] as const;
 
 
@@ -90,6 +92,7 @@ export class IpcServer {
 	readonly reminderHandoffs: ReminderHandoffRegistry;
 	private readonly router: Router;
 	private demandChangeListener: () => void = () => {};
+	private handoverListener: () => void = () => {};
 	private socketInode: number | undefined;
 	private readonly server = net.createServer((socket) => {
 		let buffer = "";
@@ -125,6 +128,7 @@ export class IpcServer {
 			worktreeBindings,
 			reminderHandoffs,
 			() => this.demandChangeListener(),
+			() => this.handoverListener(),
 		);
 	}
 
@@ -204,6 +208,11 @@ export class IpcServer {
 		this.reminderHandoffs.close();
 		this.worktreeBindings.close();
 		this.store.close();
+	}
+
+	/** Invoked once a strictly newer build is accepted as this daemon's successor. */
+	setHandoverListener(listener: () => void) {
+		this.handoverListener = listener;
 	}
 
 	setDemandChangeListener(listener: () => void) {
@@ -304,6 +313,7 @@ export class IpcServer {
 			pid: process.pid,
 			version: PREMIND_VERSION,
 			commit: PREMIND_COMMIT,
+			buildTime: readPackagedBuild().buildTime,
 			socketPath: this.socketPath,
 			lifecycleState: this.lifecycleState,
 		};

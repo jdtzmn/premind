@@ -436,3 +436,231 @@ export const waitForDaemon = async (
   }
   return false;
 };
+
+export { readPackagedBuild } from "./build-info.ts";
+
+// ---------------------------------------------------------------------------
+// Cooperative handover: one daemon per state directory, replaced only by a
+// strictly newer build. Kept dependency-free because Claude's launcher imports
+// the generated bundle of this module on every hook.
+
+/** Package version plus the build's commit time in seconds (0 when unknown). */
+export type DaemonBuildIdentity = { version: string; buildTime: number };
+
+export type DaemonBuildOrder = "newer" | "older" | "same" | "unordered";
+
+const parseRelease = (version: string): [number, number, number] | undefined => {
+  const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version);
+  if (!match || version === "0.0.0") return undefined;
+  return [Number(match[1]), Number(match[2]), Number(match[3])];
+};
+
+/**
+ * Orders `candidate` against `running`. An unknown candidate never orders, so
+ * it never takes over. An unknown running build is older than any known
+ * candidate, so a daemon of unknown provenance converges to a known build.
+ * Equal versions fall back to commit time and are unordered when either is
+ * unknown, so the running daemon wins.
+ */
+export const compareDaemonBuilds = (
+  candidate: DaemonBuildIdentity,
+  running: DaemonBuildIdentity,
+): DaemonBuildOrder => {
+  const candidateRelease = parseRelease(candidate.version);
+  if (!candidateRelease) return "unordered";
+  const runningRelease = parseRelease(running.version);
+  if (!runningRelease) return "newer";
+  for (let index = 0; index < 3; index += 1) {
+    const difference = candidateRelease[index]! - runningRelease[index]!;
+    if (difference !== 0) return difference > 0 ? "newer" : "older";
+  }
+  if (!(candidate.buildTime > 0) || !(running.buildTime > 0)) return "unordered";
+  if (candidate.buildTime === running.buildTime) return "same";
+  return candidate.buildTime > running.buildTime ? "newer" : "older";
+};
+
+export const REQUEST_HANDOVER_OPERATION = "requestHandover";
+export const DAEMON_HANDOVER_TIMEOUT_MS = 10_000;
+const HANDOVER_REQUEST_TIMEOUT_MS = 2_000;
+
+type RunningDaemon = {
+  build: DaemonBuildIdentity;
+  socketPath: string;
+  operations: string[];
+};
+
+const requestJson = (
+  socketPath: string,
+  message: unknown,
+  timeoutMs: number,
+): Promise<unknown> =>
+  new Promise((resolve) => {
+    const connection = net.createConnection(socketPath);
+    let buffer = "";
+    let settled = false;
+    const done = (value: unknown) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      connection.destroy();
+      resolve(value);
+    };
+    const timer = setTimeout(() => done(undefined), timeoutMs);
+    connection.setEncoding("utf8");
+    connection.once("error", () => done(undefined));
+    connection.once("close", () => done(undefined));
+    connection.once("connect", () =>
+      connection.write(`${JSON.stringify(message)}\n`),
+    );
+    connection.on("data", (chunk) => {
+      buffer += chunk;
+      const newline = buffer.indexOf("\n");
+      if (newline < 0) return;
+      try {
+        done(JSON.parse(buffer.slice(0, newline)));
+      } catch {
+        done(undefined);
+      }
+    });
+  });
+
+/**
+ * Identifies the daemon serving `socketPath` through the permanent bootstrap
+ * handshake, or returns undefined for a daemon that predates bootstrap.
+ */
+export const inspectRunningDaemonBuild = async ({
+  socketPath = PREMIND_SOCKET_PATH,
+  host,
+  build,
+  timeoutMs = HANDOVER_REQUEST_TIMEOUT_MS,
+}: {
+  socketPath?: string;
+  host: string;
+  build: DaemonBuildIdentity;
+  timeoutMs?: number;
+}): Promise<RunningDaemon | undefined> => {
+  const response = (await requestJson(
+    socketPath,
+    {
+      type: "initialize",
+      bootstrapVersion: 1,
+      payload: {
+        client: {
+          host,
+          version: build.version,
+          commit: "launcher",
+          incarnationNonce: randomUUID(),
+        },
+        protocols: { min: PREMIND_PROTOCOL_VERSION, max: 2 },
+      },
+    },
+    timeoutMs,
+  )) as
+    | {
+        ok?: unknown;
+        bootstrapVersion?: unknown;
+        result?: {
+          daemon?: { version?: unknown; buildTime?: unknown; socketPath?: unknown };
+          capabilities?: { operations?: unknown };
+        };
+      }
+    | undefined;
+  const daemon = response?.result?.daemon;
+  if (
+    response?.ok !== true ||
+    response.bootstrapVersion !== 1 ||
+    typeof daemon?.version !== "string" ||
+    typeof daemon.socketPath !== "string"
+  ) {
+    return undefined;
+  }
+  const operations = response.result?.capabilities?.operations;
+  return {
+    build: {
+      version: daemon.version,
+      buildTime:
+        typeof daemon.buildTime === "number" && Number.isSafeInteger(daemon.buildTime)
+          ? daemon.buildTime
+          : 0,
+    },
+    socketPath: daemon.socketPath,
+    operations: Array.isArray(operations)
+      ? operations.filter((operation): operation is string => typeof operation === "string")
+      : [],
+  };
+};
+
+/** True when a live daemon holds the lifetime daemon lock. */
+const daemonLockHeld = (stateDir: string) => {
+  const owner = readDaemonLockOwner(stateDir);
+  return owner !== undefined && isProcessAlive(owner.pid);
+};
+
+export type DaemonHandoverResult =
+  | "handed-over"
+  | "not-older"
+  | "unsupported"
+  | "refused"
+  | "timeout";
+
+/**
+ * Asks the running daemon to hand over when `build` is strictly newer, then
+ * waits for it to release the historical socket and the daemon lock. Callers
+ * hold the daemon start lock throughout so older launchers wait instead of
+ * restarting the old build. A daemon is never killed: on refusal or timeout it
+ * keeps serving.
+ */
+export const handOverOlderDaemon = async ({
+  build,
+  host,
+  socketPath = PREMIND_SOCKET_PATH,
+  stateDir = PREMIND_STATE_DIR,
+  timeoutMs = DAEMON_HANDOVER_TIMEOUT_MS,
+  retryMs = 50,
+}: {
+  build: DaemonBuildIdentity;
+  host: string;
+  socketPath?: string;
+  stateDir?: string;
+  timeoutMs?: number;
+  retryMs?: number;
+}): Promise<DaemonHandoverResult> => {
+  const running = await inspectRunningDaemonBuild({ socketPath, host, build });
+  if (!running) return "unsupported";
+  if (compareDaemonBuilds(build, running.build) !== "newer") return "not-older";
+  if (!running.operations.includes(REQUEST_HANDOVER_OPERATION)) return "unsupported";
+
+  const response = (await requestJson(
+    running.socketPath,
+    {
+      type: REQUEST_HANDOVER_OPERATION,
+      protocolVersion: 2,
+      payload: { version: build.version, buildTime: build.buildTime },
+    },
+    HANDOVER_REQUEST_TIMEOUT_MS,
+  )) as { ok?: unknown; result?: { accepted?: unknown } } | undefined;
+  if (response?.ok !== true || response.result?.accepted !== true) return "refused";
+
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!daemonLockHeld(stateDir) && !(await isSocketReachable(socketPath))) {
+      return "handed-over";
+    }
+    await new Promise((resolve) => setTimeout(resolve, retryMs));
+  }
+  return "timeout";
+};
+
+/** True when a reachable daemon is a strictly older build than `build`. */
+export const isRunningDaemonOlder = async (options: {
+  build: DaemonBuildIdentity;
+  host: string;
+  socketPath?: string;
+}) => {
+  const running = await inspectRunningDaemonBuild(options);
+  return (
+    running !== undefined &&
+    running.operations.includes(REQUEST_HANDOVER_OPERATION) &&
+    compareDaemonBuilds(options.build, running.build) === "newer"
+  );
+};

@@ -3,7 +3,11 @@ import {
 	PREMIND_CLIENT_LEASE_TTL_MS,
 	PREMIND_IDLE_SHUTDOWN_GRACE_MS,
 } from "../../shared/constants.ts";
-import { PREMIND_DAEMON_OPERATIONS } from "../../shared/daemon-startup.ts";
+import { readPackagedBuild } from "../../shared/build-info.ts";
+import {
+	compareDaemonBuilds,
+	PREMIND_DAEMON_OPERATIONS,
+} from "../../shared/daemon-startup.ts";
 import type { PremindResponse, RoutedPremindRequest } from "../../shared/ipc.ts";
 import {
 	type AckReminderPayload,
@@ -54,6 +58,9 @@ export class Router {
 		private readonly worktreeBindings = new WorktreeBindingRegistry(store),
 		private readonly reminderHandoffs = new ReminderHandoffRegistry(store),
 		private readonly onDemandChanged: () => void = () => {},
+		// Called once a strictly newer build is accepted; the daemon then drains
+		// through its normal graceful shutdown.
+		private readonly onHandoverAccepted: () => void = () => {},
 	) {}
 
 	private requireActiveCodexSession(
@@ -442,6 +449,18 @@ export class Router {
 					);
 				case "pruneClosedSessions":
 					return this.ok(this.store.pruneClosedOrOrphanedSessions());
+				case "requestHandover": {
+					const order = compareDaemonBuilds(request.payload, readPackagedBuild());
+					if (order !== "newer") {
+						return this.ok({
+							accepted: false,
+							reason: `requester build is ${order} than this daemon`,
+						});
+					}
+					this.logger.info("handover accepted", { requester: request.payload });
+					this.onHandoverAccepted();
+					return this.ok({ accepted: true });
+				}
 			}
 		} finally {
 			this.onDemandChanged();

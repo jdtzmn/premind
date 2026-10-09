@@ -27,6 +27,7 @@ import {
   releaseSessionLeasePayloadSchema,
   releaseSessionOwnerPayloadSchema,
   renewSessionLeasePayloadSchema,
+  requestHandoverPayloadSchema,
   reminderBatchSchema,
   reminderClaimSchema,
   settleReminderClaimPayloadSchema,
@@ -146,6 +147,11 @@ export const requestSchema = z.discriminatedUnion("type", [
     payload: unregisterSessionPayloadSchema,
   }),
   z.object({
+    type: z.literal("requestHandover"),
+    protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION),
+    payload: requestHandoverPayloadSchema,
+  }),
+  z.object({
     type: z.literal("deleteSession"),
     protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION),
     payload: deleteSessionPayloadSchema,
@@ -225,6 +231,7 @@ export const legacyRequestSchema = requestSchema.refine(
       "transferSessionLease",
       "releaseSessionLease",
       "deleteSession",
+      "requestHandover",
     ].includes(request.type),
   { message: "Operation is not available in frozen protocol v1" },
 );

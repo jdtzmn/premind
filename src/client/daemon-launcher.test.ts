@@ -14,6 +14,8 @@ import {
   createDaemonLauncher,
   type DaemonLaunchDiagnostic,
 } from "./daemon-launcher.ts";
+import { StateStore } from "../daemon/persistence/store.ts";
+import { PremindDaemonClient } from "./daemon-client.ts";
 
 const tempPaths: string[] = [];
 const childPids: number[] = [];
@@ -253,4 +255,100 @@ test("concurrent daemon starts leave exactly one daemon running", async () => {
   const running = children.filter((child) => !exited.has(child.pid!));
   assert.equal(running.length, 1);
   assert.equal(readDaemonLockOwner(stateDir)?.pid, running[0].pid);
+});
+
+test("hands over to a newer build while live sessions reconnect with their state", async () => {
+  const dir = createTempDir();
+  const daemonEntry = path.join(dir, "premind-daemon.mjs");
+  fs.copyFileSync(
+    path.resolve("plugins", "premind", "generated", "premind-daemon.mjs"),
+    daemonEntry,
+  );
+  const socketPath = path.join(dir, "premind.sock");
+  const stateDir = path.join(dir, "state");
+  const launcherFor = (build: { version: string; buildTime: number }) => {
+    const diagnostics: DaemonLaunchDiagnostic[] = [];
+    const launch = createDaemonLauncher({
+      daemonEntry,
+      socketPath,
+      stateDir,
+      nodeExecutable: process.execPath,
+      cwd: dir,
+      env: { NODE_PATH: "" },
+      startupTimeoutMs: 10_000,
+      retryMs: 25,
+      build,
+      onDiagnostic: (diagnostic) => {
+        diagnostics.push(diagnostic);
+        if (diagnostic.phase === "daemon-started" && diagnostic.spawnPid) {
+          childPids.push(diagnostic.spawnPid);
+        }
+      },
+    });
+    return { launch, diagnostics };
+  };
+  // The copied bundle cannot resolve its package, so the daemon reports an
+  // unknown build. An unknown launcher never hands over; a known newer one does.
+  const current = launcherFor({ version: "0.0.0", buildTime: 0 });
+  const newer = launcherFor({ version: "99.0.0", buildTime: 1 });
+
+  const clients = ["session-a", "session-b"].map((sessionId) => ({
+    sessionId,
+    client: new PremindDaemonClient({
+      host: "pi",
+      socketPath,
+      ensureDaemon: current.launch,
+      retryDelayMs: 10,
+    }),
+  }));
+  for (const { sessionId, client } of clients) {
+    await client.registerClient(dir, "test");
+    await client.registerSession({
+      sessionId,
+      repo: "acme/repo",
+      branch: `feature/${sessionId}`,
+      isPrimary: true,
+      status: "active",
+      busyState: "idle",
+    });
+  }
+  const before = await clients[0]!.client.debugStatus();
+  const oldPid = readDaemonLockOwner(stateDir)?.pid;
+  assert.ok(oldPid);
+  assert.equal(clients[0]!.client.selectedProtocolVersion, 2);
+
+  // A reminder persisted before the handover must survive it.
+  const store = new StateStore(path.join(stateDir, "epochs", "1", "premind.db"));
+  const batchId = store.createOrReplaceReminder("session-a", null, "Review changed", [], 0);
+  store.close();
+
+  await newer.launch();
+  const newPid = readDaemonLockOwner(stateDir)?.pid;
+  assert.ok(newPid);
+  assert.notEqual(newPid, oldPid);
+  assert.ok(newer.diagnostics.some(({ phase }) => phase === "daemon-started"));
+  assert.throws(() => process.kill(oldPid!, 0), "the old daemon exited");
+
+  // Both clients reconnect on their next request and re-register their sessions.
+  for (const { client } of clients) await client.heartbeat();
+  const after = await clients[1]!.client.debugStatus();
+  assert.equal(after.sessions.length, before.sessions.length);
+  for (const sessionId of ["session-a", "session-b"]) {
+    assert.equal(
+      after.sessions.find((session) => session.sessionId === sessionId)?.status,
+      "active",
+      sessionId,
+    );
+  }
+  const bundle = (await clients[0]!.client.claimReminderBundle("session-a")) as {
+    bundle: { batches: Array<{ batchId: string }> } | null;
+  };
+  assert.deepEqual(
+    bundle.bundle?.batches.map((batch) => batch.batchId),
+    [batchId],
+  );
+  // The unknown launcher sees the newer daemon and leaves it alone.
+  await current.launch();
+  assert.equal(readDaemonLockOwner(stateDir)?.pid, newPid);
+  for (const { client } of clients) await client.release();
 });

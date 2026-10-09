@@ -120,6 +120,12 @@ export class PremindDaemonClient {
     return this.protocolVersion;
   }
   private registered = false;
+  // Sessions this client attached, replayed after reconnecting to a new daemon
+  // (a handover or restart detaches them) so they keep receiving reminders.
+  private readonly attachedSessions = new Map<
+    string,
+    { type: "registerSession" | "ensureSessionControl"; payload: Record<string, unknown> }
+  >();
   private projectRoot?: string;
   private sessionSource?: string;
 
@@ -132,6 +138,9 @@ export class PremindDaemonClient {
     }
   >();
   async registerClient(projectRoot: string, sessionSource?: string) {
+    // Attaching a host is where a newer packaged daemon takes over from an
+    // older running one; the launcher returns at once when nothing is needed.
+    await this.ensureDaemon();
     this.projectRoot = projectRoot;
     this.sessionSource = sessionSource;
     const response = await this.requestWithRetry({
@@ -180,7 +189,9 @@ export class PremindDaemonClient {
       protocolVersion: PREMIND_PROTOCOL_VERSION,
       payload: { ...payload, clientId: this.clientId },
     });
+    this.attachedSessions.set(payload.sessionId, { type: "registerSession", payload });
   }
+
 
   async registerCodexSession(payload: CodexSessionPayload) {
     const response = await this.requestWithRetry({
@@ -228,6 +239,10 @@ export class PremindDaemonClient {
         protocolVersion: PREMIND_PROTOCOL_VERSION,
         payload: { ...payload, clientId: this.clientId },
       });
+      this.attachedSessions.set(payload.sessionId, {
+        type: "ensureSessionControl",
+        payload,
+      });
     } catch (error) {
       // A long-lived daemon from a pre-control-operation package reports the new
       // request as BAD_REQUEST. Fall back to its compatible registration path so
@@ -247,6 +262,10 @@ export class PremindDaemonClient {
       protocolVersion: PREMIND_PROTOCOL_VERSION,
       payload,
     });
+    const attached = this.attachedSessions.get(payload.sessionId);
+    if (attached && payload.busyState !== undefined) {
+      attached.payload = { ...attached.payload, busyState: payload.busyState };
+    }
   }
 
   async unregisterSession(sessionId: string) {
@@ -256,9 +275,11 @@ export class PremindDaemonClient {
       payload: { sessionId },
     });
     this.sessionLeases.delete(sessionId);
+    this.attachedSessions.delete(sessionId);
   }
 
   async deleteSession(sessionId: string) {
+    this.attachedSessions.delete(sessionId);
     try {
       await this.requestWithRetry({
         type: "deleteSession",
@@ -702,11 +723,30 @@ export class PremindDaemonClient {
           // Re-registration failed, will retry the original request.
         }
       }
+      await this.replayAttachedSessions();
 
       await new Promise((resolve) =>
         setTimeout(resolve, this.retryDelayMs * (attempt + 1)),
       );
       return this.requestWithRetry(message, attempt + 1);
+    }
+  }
+
+  private async replayAttachedSessions() {
+    for (const { type, payload } of this.attachedSessions.values()) {
+      const sessionId = payload.sessionId as string;
+      try {
+        await this.claimSessionLease(sessionId);
+        await this.request(
+          this.withNegotiatedProtocol({
+            type,
+            protocolVersion: PREMIND_PROTOCOL_VERSION,
+            payload: { ...payload, clientId: this.clientId },
+          }),
+        );
+      } catch {
+        // The original request still retries; the next reconnect replays again.
+      }
     }
   }
 

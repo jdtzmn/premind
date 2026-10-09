@@ -407,6 +407,9 @@ async function startDaemon(lock: DaemonLock) {
     },
   })
   server.setDemandChangeListener(() => lifecycle.evaluateDemand())
+  // A strictly newer build asked to take over: drain through the normal
+  // graceful shutdown, which releases the daemon lock for its successor.
+  server.setHandoverListener(() => lifecycle.requestStop("handover"))
   lifecycle.start()
   abortStartup = undefined
 
