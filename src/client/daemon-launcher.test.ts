@@ -352,3 +352,55 @@ test("hands over to a newer build while live sessions reconnect with their state
   assert.equal(readDaemonLockOwner(stateDir)?.pid, newPid);
   for (const { client } of clients) await client.release();
 });
+
+test("a successor that fails to start leaves no stale lock and the next launch recovers", async () => {
+  const dir = createTempDir();
+  const socketPath = path.join(dir, "premind.sock");
+  const stateDir = path.join(dir, "state");
+  fs.mkdirSync(stateDir);
+  const legacy = spawn(
+    process.execPath,
+    [
+      path.resolve("src/test/fixtures/legacy-daemon/premind-daemon.mjs"),
+      socketPath,
+      path.join(stateDir, "daemon.lock"),
+    ],
+    { stdio: ["ignore", "pipe", "ignore"] },
+  );
+  await new Promise((resolve) => legacy.stdout!.once("data", resolve));
+  const legacyExited = new Promise((resolve) => legacy.once("exit", resolve));
+  const brokenEntry = path.join(dir, "broken-daemon.mjs");
+  fs.writeFileSync(brokenEntry, "process.exit(1)\n");
+  const launcher = (daemonEntry: string) =>
+    createDaemonLauncher({
+      daemonEntry,
+      socketPath,
+      stateDir,
+      nodeExecutable: process.execPath,
+      cwd: dir,
+      env: { NODE_PATH: "" },
+      startupTimeoutMs: 1_500,
+      retryMs: 25,
+      build: { version: "0.1.0", buildTime: 1 },
+      onDiagnostic: (diagnostic) => {
+        if (diagnostic.phase === "daemon-started" && diagnostic.spawnPid) {
+          childPids.push(diagnostic.spawnPid);
+        }
+      },
+    });
+
+  // The old daemon hands over, then its successor exits immediately.
+  await assert.rejects(launcher(brokenEntry)(), /failed to start/);
+  await legacyExited;
+  assert.equal(readDaemonLockOwner(stateDir), undefined, "no daemon lock left behind");
+  assert.equal(fs.existsSync(path.join(stateDir, "daemon-start.lock")), false);
+
+  // The next launch starts a working daemon.
+  const bundle = path.join(dir, "premind-daemon.mjs");
+  fs.copyFileSync(path.resolve("plugins/premind/generated/premind-daemon.mjs"), bundle);
+  await launcher(bundle)();
+  assert.equal(
+    (await inspectDaemon(socketPath, CODEX_REQUIRED_DAEMON_OPERATIONS)).status,
+    "compatible",
+  );
+});
