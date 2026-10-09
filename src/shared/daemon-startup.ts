@@ -688,7 +688,13 @@ const planHandover = async ({
   readCommand?: (pid: number) => string | undefined;
 }): Promise<HandoverPlan> => {
   const running = await inspectRunningDaemonBuild({ socketPath, host, build });
-  const runningBuild = running?.build ?? UNKNOWN_BUILD;
+  // A daemon without requestHandover predates #89 and every build that can
+  // replace it. Bootstrap-era daemons (#43 to #89) report no build time, so
+  // comparing builds would leave them unordered against an equal version.
+  const runningBuild =
+    running?.operations.includes(REQUEST_HANDOVER_OPERATION) === true
+      ? running.build
+      : UNKNOWN_BUILD;
   if (compareDaemonBuilds(build, runningBuild) !== "newer") {
     return { kind: "none", result: "not-older" };
   }
@@ -807,6 +813,14 @@ export const describeDaemonBuild = async ({
         : `daemon build: older than this plugin's ${plugin}; the next Premind launch replaces it`;
     }
     const daemon = formatBuild(running.build, running.commit);
+    if (!running.operations.includes(REQUEST_HANDOVER_OPERATION)) {
+      const replaceable =
+        parseRelease(build.version) !== undefined &&
+        (await identifySignalableDaemon({ socketPath, stateDir })) !== undefined;
+      return replaceable
+        ? `daemon build: ${daemon}, older than this plugin's ${plugin}; the next Premind launch replaces it`
+        : `daemon build: ${daemon}, predates handover; it is replaced when it next exits`;
+    }
     switch (compareDaemonBuilds(build, running.build)) {
       case "same":
         return `daemon build: ${daemon}, the same as this plugin`;

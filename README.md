@@ -172,6 +172,8 @@ The server plugin registers these slash commands; the colored `/premind:status` 
 
 The complete cross-harness command and tool matrix, including intentional exceptions, is documented in [Command Capabilities](docs/command-capabilities.md).
 
+How plugins and the daemon stay compatible across releases, and how a newer daemon takes over, is documented in [Client–daemon protocol and upgrades](docs/protocol.md).
+
 OpenCode exposes `premind_set_active_checkout`, `premind_subscribe`, and `premind_unsubscribe` model tools. The Pi package exposes the same tools plus `/premind:set-active-checkout`, `/premind:subscribe`, and `/premind:unsubscribe` commands. Set the active checkout at the start of any PR work—including when already in the startup checkout—and again after switching branches before creating or following a PR. Automatic watches are limited to PRs authored by Premind's authenticated GitHub account. Manual subscriptions may intentionally target an external `owner/repo`; their reminders include a guard that changes require explicit user instruction, and status/reminders use fully qualified `owner/repo#number` identities.
 
 Every harness can pause and resume one session. Pi, Claude Code, and OpenCode provide `/premind:pause` and `/premind:resume`. Every harness provides model tools: `premind_pause` and `premind_resume`, or `pause` and `resume` in Claude Code's MCP server. Codex's tools take the session handle from lifecycle context. Pausing withholds reminders from the current session only. Every subscription stays watched, PR updates keep accumulating, and the pause lasts until you resume, including across a host reload or restart. Pause is not a substitute for the global `disable` / `enable` controls.

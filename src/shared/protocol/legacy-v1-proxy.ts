@@ -146,7 +146,17 @@ export class LegacyV1ProxyRouter {
   ): Promise<ProxyResponse> {
     const existing = this.store.getLegacyProxyLease(request.payload.sessionId);
     const proxyIncarnationNonce = randomUUID();
-    const leaseResponse = existing
+    const claim = () =>
+      this.requestModern({
+        type: "claimSessionLease",
+        protocolVersion: 2,
+        payload: {
+          sessionId: request.payload.sessionId,
+          ownerInstanceId: this.modernInstanceId,
+          clientIncarnationNonce: proxyIncarnationNonce,
+        },
+      });
+    let leaseResponse = existing
       ? await this.requestModern({
           type: "transferSessionLease",
           protocolVersion: 2,
@@ -158,15 +168,13 @@ export class LegacyV1ProxyRouter {
             },
           },
         })
-      : await this.requestModern({
-          type: "claimSessionLease",
-          protocolVersion: 2,
-          payload: {
-            sessionId: request.payload.sessionId,
-            ownerInstanceId: this.modernInstanceId,
-            clientIncarnationNonce: proxyIncarnationNonce,
-          },
-        });
+      : await claim();
+    // A daemon restart or handover clears every session lease, so a mapping
+    // that outlived it holds a stale lease. Re-registration is the legacy
+    // client's way to recover, so claim afresh rather than failing it.
+    if (existing && !leaseResponse.ok && leaseResponse.error.code === "SESSION_MOVED") {
+      leaseResponse = await claim();
+    }
     if (!leaseResponse.ok) return v1Response(leaseResponse);
     const lease = sessionLeaseTokenSchema.parse(
       (leaseResponse.result as { lease?: unknown }).lease,
