@@ -5,6 +5,7 @@ import os from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { test } from "node:test"
+import { probeDaemon } from "../generated/daemon-startup.mjs"
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
 const legacyEntry = path.join(root, "src/test/fixtures/legacy-daemon/premind-daemon.mjs")
@@ -51,8 +52,17 @@ test("Claude's launcher replaces a pre-handover daemon with its bundled daemon",
 				timeout: 20_000,
 			},
 		)
-		assert.equal(result.stdout, "true", result.stderr)
+		assert.equal(result.status, 0, result.stderr)
+		// Hooks wait at most 2s for a new daemon and then fail open, so on a slow
+		// machine the launcher can return false while its daemon is still starting.
+		assert.match(result.stdout, /^(true|false)$/, result.stderr)
 		await legacyExited
+		let serving = false
+		for (let attempt = 0; attempt < 150 && !serving; attempt += 1) {
+			serving = await probeDaemon(socketPath)
+			if (!serving) await new Promise((resolve) => setTimeout(resolve, 100))
+		}
+		assert.equal(serving, true, "the bundled daemon serves the socket")
 		daemonPid = readLockPid(stateDir)
 		assert.ok(daemonPid, "the bundled daemon holds the daemon lock")
 		assert.notEqual(daemonPid, legacy.pid)
