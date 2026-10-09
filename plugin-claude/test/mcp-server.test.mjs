@@ -30,18 +30,21 @@ test("probe reports runtime, plugin, config, daemon, and delivery health", async
       HOME: "/definitely-missing-premind-home",
       CLAUDE_PLUGIN_ROOT: "/tmp/premind-plugin",
       PREMIND_STATE_DIR: "/definitely-missing-premind-state",
+      PREMIND_SOCKET_PATH: "/definitely-missing-premind-state/premind.sock",
     },
   );
   const value = JSON.parse(result.content[0].text);
   assert.deepEqual(value.plugin, { version: "0.2.0", root: "/tmp/premind-plugin" });
   assert.equal(value.runtime.requiredNode, ">=22.13.0");
   assert.equal(value.runtime.compatible, true);
-  assert.deepEqual(value.daemon, {
+  const { build, ...daemon } = value.daemon;
+  assert.deepEqual(daemon, {
     reachable: true,
     protocolVersion: 1,
     globallyDisabled: false,
     lock: null,
   });
+  assert.match(build, /^daemon build: not running; this plugin is v\d+\.\d+\.\d+/);
   assert.equal(value.configSource, "schema defaults");
   assert.match(value.delivery, /Stop-boundary only/);
   assert.doesNotMatch(result.content[0].text, /secret/);
@@ -56,10 +59,12 @@ test("probe reports a redacted diagnostic when the daemon is unavailable", async
     {
       HOME: "/definitely-missing-premind-home",
       PREMIND_STATE_DIR: "/definitely-missing-premind-state",
+      PREMIND_SOCKET_PATH: "/definitely-missing-premind-state/premind.sock",
     },
   );
   const value = JSON.parse(result.content[0].text);
-  assert.deepEqual(value.daemon, {
+  const { build: _build, ...unavailable } = value.daemon;
+  assert.deepEqual(unavailable, {
     reachable: false,
     protocolVersion: null,
     globallyDisabled: null,

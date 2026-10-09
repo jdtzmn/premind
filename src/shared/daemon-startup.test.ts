@@ -11,6 +11,7 @@ import {
   acquireDaemonStartLock,
   compareDaemonBuilds,
   daemonLockStatus,
+  describeDaemonBuild,
   formatDaemonLockStatus,
   handOverOlderDaemon,
   holdsDaemonLock,
@@ -567,5 +568,43 @@ test("never signals a process that is not an identified Premind daemon", async (
     assert.doesNotThrow(() => process.kill(impostor.pid, 0));
   } finally {
     await impostor.stop();
+  }
+});
+
+test("describes the running daemon's build relative to this plugin", async () => {
+  const stateDir = createTempDir();
+  const missing = path.join(createTempDir(), "premind.sock");
+  assert.match(
+    await describeDaemonBuild({ host: "pi", socketPath: missing, stateDir, build: build("0.2.0", 1_791_000_000) }),
+    /^daemon build: not running; this plugin is v0\.2\.0 \(built 2026-/,
+  );
+
+  const daemon = await startFakeDaemon({ version: "0.2.0", buildTime: 1_791_000_000 });
+  try {
+    const describe = (candidate: ReturnType<typeof build>) =>
+      describeDaemonBuild({ host: "pi", socketPath: daemon.socketPath, stateDir, build: candidate });
+    assert.match(await describe(build("0.2.0", 1_791_000_000)), /, the same as this plugin$/);
+    assert.match(
+      await describe(build("0.3.0", 1_791_000_000)),
+      /^daemon build: v0\.2\.0 \(abc123, built 2026-[\d-]+\), older than this plugin's v0\.3\.0.*the next Premind launch replaces it$/,
+    );
+    assert.match(await describe(build("0.1.0", 1)), /newer than this plugin's v0\.1\.0.*update or reload this host/);
+  } finally {
+    await daemon.stop();
+  }
+
+  const legacy = await startLegacyDaemonProcess("premind-daemon.mjs");
+  try {
+    assert.match(
+      await describeDaemonBuild({
+        host: "pi",
+        socketPath: legacy.socketPath,
+        stateDir: legacy.stateDir,
+        build: build("0.2.0", 1),
+      }),
+      /^daemon build: older than this plugin's v0\.2\.0.*the next Premind launch replaces it$/,
+    );
+  } finally {
+    await legacy.stop();
   }
 });
