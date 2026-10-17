@@ -30,6 +30,12 @@ export const createSessionRecovery = (adapter: SessionRecoveryAdapter) => {
   let revision = 0;
   let attachment: Promise<void> | undefined;
 
+  // Keep this check synchronous with each dispatch: awaiting requireCurrent
+  // leaves a continuation gap in which shutdown may permanently invalidate us.
+  const requireNotInvalidated = () => {
+    if (invalidated) throw new Error("Session recovery context is no longer current");
+  };
+
   const requireCurrent = async () => {
     if (invalidated || !(await adapter.isCurrent()) || invalidated) {
       throw new Error("Session recovery context is no longer current");
@@ -38,6 +44,7 @@ export const createSessionRecovery = (adapter: SessionRecoveryAdapter) => {
 
   const attach = async () => {
     await requireCurrent();
+    requireNotInvalidated();
     await adapter.reattach();
     await requireCurrent();
     revision++;
@@ -55,6 +62,7 @@ export const createSessionRecovery = (adapter: SessionRecoveryAdapter) => {
       await requireCurrent();
       const attemptedRevision = revision;
       try {
+        requireNotInvalidated();
         return await action();
       } catch (error) {
         if (!isDaemonError(error, "SESSION_NOT_FOUND")) throw error;
@@ -67,6 +75,7 @@ export const createSessionRecovery = (adapter: SessionRecoveryAdapter) => {
         }
         await requireCurrent();
         // Deliberately outside the catch: a failed replay never recurses.
+        requireNotInvalidated();
         return action();
       }
     },

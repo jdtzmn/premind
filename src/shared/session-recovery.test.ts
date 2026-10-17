@@ -226,3 +226,37 @@ test("a successful control is returned without attachment or replay", async () =
   assert.equal(attempts, 1);
   assert.equal(attachments, 0);
 });
+
+for (const [stage, verification, expectedAttempts, expectedAttachments] of [
+  ["initial control", 1, 0, 0],
+  ["reattachment", 3, 1, 0],
+  ["control replay", 5, 1, 1],
+] as const) {
+  test(`invalidation after eligibility resolution still prevents ${stage} dispatch`, async () => {
+    const verifying = deferred();
+    const evidence = deferred<boolean>();
+    let verifications = 0;
+    let attempts = 0;
+    let attachments = 0;
+    const recovery = createSessionRecovery({
+      isCurrent: () => {
+        if (++verifications !== verification) return true;
+        verifying.resolve();
+        return evidence.promise;
+      },
+      reattach: async () => { attachments++; },
+    });
+    const request = recovery.run("subscribe", async () => {
+      if (++attempts === 1) throw missing();
+      return "ready";
+    });
+    await verifying.promise;
+    // Register after requireCurrent's await. Its final check runs first, but this
+    // End reaction runs before the caller resumes to dispatch the next effect.
+    evidence.promise.then(() => recovery.invalidate());
+    evidence.resolve(true);
+    await assert.rejects(request, /no longer current/);
+    assert.equal(attempts, expectedAttempts);
+    assert.equal(attachments, expectedAttachments);
+  });
+}
