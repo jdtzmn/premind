@@ -1,5 +1,6 @@
 import net from "node:net";
 import { randomUUID } from "node:crypto";
+import { DaemonResponseError } from "../shared/daemon-error.ts";
 import {
   PREMIND_PROTOCOL_VERSION,
   PREMIND_SOCKET_PATH,
@@ -597,8 +598,8 @@ export class PremindDaemonClient {
     const bootstrap = bootstrapResponseSchema.safeParse(response);
     if (bootstrap.success) {
       if (!bootstrap.data.ok) {
-        throw new Error(
-          `${bootstrap.data.error.code}: ${bootstrap.data.error.message}`,
+        throw new DaemonResponseError(
+          bootstrap.data.error.code, bootstrap.data.error.message,
         );
       }
       const selected = bootstrap.data.result.protocols.selected;
@@ -694,11 +695,10 @@ export class PremindDaemonClient {
     } catch (error) {
       if (attempt >= this.maxRetries) throw error;
 
+      // Only failures emitted by the socket seam may reconnect and replay.
       const isSocketError =
         error instanceof Error &&
-        ("code" in error ||
-          error.message.includes("ECONNREFUSED") ||
-          error.message.includes("ENOENT"));
+        "domain" in error && error.domain === "transport";
       // A timeout means a daemon is alive but busy. Retrying would stack more
       // work on it, and the ensureDaemon probe could misjudge it as dead and
       // start a competing daemon. Let the caller retry on its own schedule.
@@ -774,7 +774,7 @@ export class PremindDaemonClient {
         ? protocolV2ResponseSchema.parse(response)
         : responseSchema.parse(response);
     if (!parsed.ok)
-      throw new Error(`${parsed.error.code}: ${parsed.error.message}`);
+      throw new DaemonResponseError(parsed.error.code, parsed.error.message);
     return parsed.result;
   }
 
@@ -793,7 +793,7 @@ export class PremindDaemonClient {
         clearTimeout(deadline);
         if (error) {
           socket.destroy();
-          reject(error);
+          reject(Object.assign(error, { domain: "transport" as const }));
         } else {
           socket.end();
           resolve(result);

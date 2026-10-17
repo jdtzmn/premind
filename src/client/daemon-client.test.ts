@@ -503,6 +503,40 @@ describe("protocol-v1 response compatibility", () => {
   });
 });
 
+describe("daemon response error domain", () => {
+  for (const code of ["SESSION_NOT_FOUND", "SESSION_INACTIVE", "SESSION_BUSY", "SESSION_MOVED", "BAD_REQUEST", "ENOENT"]) {
+    test(`${code} preserves daemon details without reconnect or session replay`, async () => {
+      const requests: string[] = [];
+      const message = "daemon rejected operation mentioning ECONNREFUSED and ENOENT";
+      await withSocketServer((socket) => socket.once("data", (data) => {
+        const request = JSON.parse(data.toString());
+        requests.push(request.type);
+        socket.end(request.type === "updateSessionState"
+          ? `${JSON.stringify({ ok: false, protocolVersion: 1, error: { code, message } })}\n`
+          : okResponse());
+      }), async (socketPath) => {
+        let ensureCalls = 0;
+        const client = new PremindDaemonClient({
+          socketPath,
+          ensureDaemon: async () => { ensureCalls++; },
+          maxRetries: 2,
+          retryDelayMs: 0,
+        });
+        await client.registerSession({ sessionId: "session-1", repo: "acme/repo", branch: "main", isPrimary: true, status: "active", busyState: "idle" });
+        await assert.rejects(client.updateSessionState({ sessionId: "session-1", busyState: "busy" }), (error: unknown) => {
+          assert.ok(error instanceof Error);
+          assert.equal((error as Error & { domain?: string }).domain, "daemon");
+          assert.equal((error as Error & { code?: string }).code, code);
+          assert.equal((error as Error & { daemonMessage?: string }).daemonMessage, message);
+          assert.equal(error.message, `${code}: ${message}`);
+          return true;
+        });
+        assert.equal(ensureCalls, 0);
+        assert.deepEqual(requests, ["initialize", "registerSession", "updateSessionState"]);
+      });
+    });
+  }
+});
 describe("PremindDaemonClient connection loss", () => {
   test("starts a missing daemon before the first protocol handshake", async () => {
     const temporaryRoot = process.platform === "win32" ? os.tmpdir() : "/tmp";
