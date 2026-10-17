@@ -4,8 +4,13 @@
 
 Recover a live, verified host session when Premind loses its registration, without
 requiring a reload and without four independently maintained retry loops. Cover
-Pi, Claude Code, OpenCode, and Codex in the same implementation change. This is a
-plan only; no runtime changes are included in this commit.
+Pi, Claude Code, OpenCode, and Codex in the same implementation change.
+
+Implementation status: **blocked at the host-evidence gate**. Safe prerequisites
+(typed error domains and an unwired shared controller) are implemented; adapter
+recovery is not. See [host evidence and the required next experiment](shared-session-recovery-host-evidence.md).
+The original Pi subscribe failure remains reproducible. Do not mark this plan
+complete or enable a one-host workaround as its implementation.
 
 The motivating symptom is `premind_subscribe` returning `SESSION_NOT_FOUND` for a
 Pi session whose JSONL file still exists. That error identifies a missing daemon
