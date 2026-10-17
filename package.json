@@ -15,6 +15,7 @@
     "extensions",
     "plugin-claude",
     "plugins",
+    ".agents",
     "skills"
   ],
   "scripts": {
