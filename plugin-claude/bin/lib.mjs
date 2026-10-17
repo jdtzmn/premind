@@ -131,10 +131,17 @@ export const request = (
       connection.end();
       try {
         const response = JSON.parse(buffer.slice(0, newline));
-        if (!response.ok)
-          throw new Error(
-            `${response.error?.code ?? "IPC_ERROR"}: ${response.error?.message ?? "request failed"}`,
-          );
+        if (!response.ok) {
+          const code = response.error?.code ?? "IPC_ERROR";
+          const daemonMessage = response.error?.message ?? "request failed";
+          // Match the shared daemon error shape without importing a TS-only runtime.
+          throw Object.assign(new Error(`${code}: ${daemonMessage}`), {
+            name: "DaemonResponseError",
+            domain: "daemon",
+            code,
+            daemonMessage,
+          });
+        }
         finish(undefined, response.result);
       } catch (error) {
         finish(error);
