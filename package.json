@@ -40,6 +40,7 @@
     "test:codex:live": "node scripts/validate-codex-live-contract.mjs",
     "test:live": "node --import tsx src/test/live-validation.ts",
     "test:live:contract": "node --import tsx src/test/live-validation.ts --contract-only",
+    "test:native:infra": "node --import tsx --test src/test/native/*.test.ts",
     "test:harness": "node --import tsx --import ./src/test/isolate-state-dir.mjs --test src/test/delivery-reliability.test.ts src/test/pr-update-delivery.test.ts src/test/delivery-conservation.test.ts"
   },
   "keywords": [
