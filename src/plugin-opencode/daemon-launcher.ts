@@ -5,7 +5,14 @@ import { fileURLToPath } from "node:url";
 import { PREMIND_SOCKET_PATH } from "../shared/constants.ts";
 import {
   acquireDaemonStartLock,
+  DAEMON_START_LOCK_TOKEN_ENV,
+  handOverOlderDaemon,
+  inspectDaemon,
+  isRunningDaemonOlder,
   probeDaemon,
+  readPackagedBuild,
+  type DaemonBuildIdentity,
+  isDaemonStarting,
   releaseDaemonStartLock,
   waitForDaemon,
 } from "../shared/daemon-startup.ts";
@@ -37,8 +44,24 @@ async function waitForSocket(socketPath = PREMIND_SOCKET_PATH) {
   );
 }
 
-export async function ensureDaemonRunning(socketPath = PREMIND_SOCKET_PATH) {
-  if (await isDaemonRunning(socketPath)) return;
+export type EnsureDaemonOptions = {
+  /** Reported in the bootstrap handshake; diagnostic only. */
+  host?: string;
+  /** The build this launcher would start; injectable for tests. */
+  build?: DaemonBuildIdentity;
+};
+
+export async function ensureDaemonRunning(
+  socketPath = PREMIND_SOCKET_PATH,
+  { host = "opencode", build = readPackagedBuild() }: EnsureDaemonOptions = {},
+) {
+  // A running daemon serves us unless our packaged build is strictly newer, in
+  // which case it hands over below.
+  if (
+    (await isDaemonRunning(socketPath)) &&
+    !(await isRunningDaemonOlder({ build, host, socketPath }))
+  )
+    return;
 
   let lock = acquireDaemonStartLock();
   if (!lock) {
@@ -51,7 +74,19 @@ export async function ensureDaemonRunning(socketPath = PREMIND_SOCKET_PATH) {
   }
 
   try {
-    if (await isDaemonRunning(socketPath)) return;
+    const probe = await inspectDaemon(socketPath);
+    if (probe.status === "compatible" || probe.status === "incompatible") {
+      // Holding the start lock keeps older launchers from restarting the old
+      // build between its exit and our daemon's startup.
+      const handover = await handOverOlderDaemon({ build, host, socketPath });
+      if (handover !== "handed-over" && probe.status === "compatible") return;
+    }
+    // A daemon that holds the daemon lock is starting up. Spawning another
+    // would only add load; wait for it instead.
+    if (isDaemonStarting()) {
+      if (await waitForSocket(socketPath)) return;
+      throw new Error("premind daemon is still starting; retry shortly");
+    }
 
     const runner = findRunner();
     if (!runner) {
@@ -101,7 +136,7 @@ export async function ensureDaemonRunning(socketPath = PREMIND_SOCKET_PATH) {
     const child = spawn(runner.command, [...runner.args, DAEMON_ENTRY], {
       detached: true,
       stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env },
+      env: { ...process.env, [DAEMON_START_LOCK_TOKEN_ENV]: lock.token },
       cwd: spawnCwd,
     });
 

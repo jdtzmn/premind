@@ -143,7 +143,10 @@ test("relocated hook starts its adjacent daemon and registers a session", async 
 		assert.equal(result.status, 0, result.stderr);
 		assert.deepEqual(JSON.parse(result.stdout), {});
 		assert.ok(fs.existsSync(pidPath), "adjacent daemon did not start");
-		const database = new DatabaseSync(path.join(stateDirectory, "premind.db"));
+		// The historical premind.db path is quarantined; live state is epoch-scoped.
+		const database = new DatabaseSync(
+			path.join(stateDirectory, "epochs", "1", "premind.db"),
+		);
 		const session = database
 			.prepare("SELECT host, host_session_id FROM sessions WHERE session_id = ?")
 			.get("codex:thread-relocated") as

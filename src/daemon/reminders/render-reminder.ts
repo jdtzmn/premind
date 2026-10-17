@@ -46,10 +46,12 @@ const checkState = (check: PullRequestCheck) => {
   return "unverified"
 }
 
-/** No run IDs/timestamps exist in the stored check schema. Duplicate terminal
- * fail+pass results cannot be ordered: verify, rather than inventing a newest run.
- * An explicitly active rerun of the same identity retains the existing policy of
- * deferring action until it finishes. Sibling names/cancellations are not evidence.
+/** When every matching run carries a check-run ID, the newest run is the
+ * current result: a rerun supersedes the run it replaced. Snapshots without IDs
+ * cannot order duplicate terminal fail+pass results, so those verify rather
+ * than inventing a newest run, and an explicitly active rerun of the same
+ * identity defers action until it finishes. Sibling names/cancellations are
+ * not evidence.
  */
 const currentCheckState = (payload: Record<string, unknown>, checks: PullRequestCheck[]) => {
   if (typeof payload.name !== "string") return "unverified"
@@ -59,6 +61,9 @@ const currentCheckState = (payload: Record<string, unknown>, checks: PullRequest
   if (!matches.length) return "unverified"
   const identities = new Set(matches.map((check) => JSON.stringify([check.workflow ?? null, check.event ?? null])))
   if (identities.size > 1) return "unverified"
+  if (matches.every((check) => check.id !== undefined)) {
+    return checkState(matches.reduce((newest, check) => (check.id! > newest.id! ? check : newest)))
+  }
   const states = new Set(matches.map(checkState))
   if (states.has("active")) return "active"
   return states.size === 1 ? states.values().next().value! : "unverified"

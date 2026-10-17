@@ -4,7 +4,14 @@ import path from "node:path";
 import { PREMIND_SOCKET_PATH, PREMIND_STATE_DIR } from "../shared/constants.ts";
 import {
   acquireDaemonStartLock,
+  DAEMON_START_LOCK_TOKEN_ENV,
+  handOverOlderDaemon,
   inspectDaemon,
+  isRunningDaemonOlder,
+  readPackagedBuild,
+  type DaemonBuildIdentity,
+  isDaemonStarting,
+  readDaemonLockOwner,
   releaseDaemonStartLock,
   type DaemonProbeResult,
 } from "../shared/daemon-startup.ts";
@@ -41,6 +48,10 @@ export type DaemonLauncherOptions = {
   startupTimeoutMs?: number;
   retryMs?: number;
   onDiagnostic?: (diagnostic: DaemonLaunchDiagnostic) => void;
+  /** Reported in the bootstrap handshake; diagnostic only. */
+  host?: string;
+  /** The build this launcher would start; injectable for tests. */
+  build?: DaemonBuildIdentity;
 };
 
 const waitForProbe = async (
@@ -87,11 +98,20 @@ export const createDaemonLauncher = (options: DaemonLauncherOptions) => {
   const startupTimeoutMs =
     options.startupTimeoutMs ?? CONNECT_MAX_RETRIES * CONNECT_RETRY_MS;
   const retryMs = options.retryMs ?? CONNECT_RETRY_MS;
+  const host = options.host ?? "codex";
+  const build = () => options.build ?? readPackagedBuild();
 
   return async () => {
     const initialProbe = await inspectDaemon(socketPath, requiredOperations);
-    if (initialProbe.status === "compatible") return;
-    if (initialProbe.status === "incompatible") {
+    const reachable =
+      initialProbe.status === "compatible" || initialProbe.status === "incompatible";
+    // An older daemon, even one missing operations we need, hands over to us
+    // below instead of being used or reported as incompatible.
+    const replaceOlder =
+      reachable &&
+      (await isRunningDaemonOlder({ build: build(), host, socketPath, stateDir }));
+    if (initialProbe.status === "compatible" && !replaceOlder) return;
+    if (initialProbe.status === "incompatible" && !replaceOlder) {
       throw incompatibleDaemonError(initialProbe);
     }
     if (initialProbe.status === "unresponsive") {
@@ -130,13 +150,33 @@ export const createDaemonLauncher = (options: DaemonLauncherOptions) => {
 
     let failureReported = false;
     try {
-      const lockedProbe = await inspectDaemon(socketPath, requiredOperations);
+      let lockedProbe = await inspectDaemon(socketPath, requiredOperations);
+      if (lockedProbe.status === "compatible" || lockedProbe.status === "incompatible") {
+        // Holding the start lock keeps older launchers from restarting the old
+        // build between its exit and our daemon's startup.
+        const handover = await handOverOlderDaemon({ build: build(), host, socketPath, stateDir });
+        if (handover === "handed-over") lockedProbe = { status: "unreachable" };
+      }
       if (lockedProbe.status === "compatible") return;
       if (lockedProbe.status === "incompatible") {
         throw incompatibleDaemonError(lockedProbe);
       }
       if (lockedProbe.status === "unresponsive") {
         throw unresponsiveDaemonError(lockedProbe.reason);
+      }
+
+      // A daemon that holds the daemon lock is starting up. Spawning another
+      // would only add load; wait for it instead.
+      if (isDaemonStarting(stateDir)) {
+        const waited = await waitForProbe(
+          socketPath,
+          requiredOperations,
+          startupTimeoutMs,
+          retryMs,
+        );
+        if (waited.status === "compatible") return;
+        if (waited.status === "incompatible") throw incompatibleDaemonError(waited);
+        throw new Error("Premind daemon is still starting; retry shortly");
       }
 
       const runtime = resolveNodeRuntime({
@@ -173,6 +213,7 @@ export const createDaemonLauncher = (options: DaemonLauncherOptions) => {
               ...options.env,
               PREMIND_SOCKET_PATH: socketPath,
               PREMIND_STATE_DIR: stateDir,
+              ...(lock ? { [DAEMON_START_LOCK_TOKEN_ENV]: lock.token } : {}),
             },
           });
         } finally {
@@ -213,7 +254,12 @@ export const createDaemonLauncher = (options: DaemonLauncherOptions) => {
         throw incompatibleDaemonError(probe);
       }
       if (probe.status !== "compatible") {
-        child.kill("SIGTERM");
+        // A child that holds the daemon lock is a slow but healthy daemon.
+        // Killing it mid-startup is what turned slow starts into a storm.
+        const childOwnsDaemonLock =
+          child.pid !== undefined &&
+          readDaemonLockOwner(stateDir)?.pid === child.pid;
+        if (!childOwnsDaemonLock) child.kill("SIGTERM");
         failureReported = true;
         options.onDiagnostic?.({
           phase: "daemon-start-failed",

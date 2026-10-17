@@ -106,14 +106,14 @@ for (const testCase of targets) {
 		host === "claude"
 			? /\bpremind_(?:set_active_checkout|subscribe|unsubscribe|status)\b/
 			: host === "codex"
-				? /\bpremind_set_active_checkout\b/
+				? /\bpremind_activate_worktree\b/
 				: null;
 	const checkoutTool =
 		host === "pi"
 			? "premind_set_active_checkout"
 			: host === "claude"
 				? "set_active_checkout"
-				: "premind_activate_worktree";
+				: "premind_set_active_checkout";
 	const needsCheckoutTool =
 		subscriptionCase && (host !== "codex" || testCase.name !== "start-pr-work");
 	const behaviorPass = subscriptionCase

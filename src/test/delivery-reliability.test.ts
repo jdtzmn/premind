@@ -295,7 +295,7 @@ describe("delivery reliability", () => {
 
     const reapedAt = t0 + PREMIND_SESSION_STALE_MS + 1_000
     assert.equal(store.reapStaleSessions(PREMIND_SESSION_STALE_MS, reapedAt).reaped, 1)
-    assert.equal(store.getSession("session-reap")?.status, "closed")
+    assert.equal(store.getSession("session-reap")?.status, "detached")
     assert.equal(
       store.listPrWatchTargets(reapedAt).length,
       0,
@@ -418,6 +418,32 @@ describe("delivery reliability", () => {
       `expected the pre-restart comment in ${JSON.stringify(rebuilt.events.map((candidate) => candidate.summary))}`,
     )
 
+    store.close()
+  })
+
+  // 2c. Pi's real reload. session_shutdown used to unregister (delete) the
+  //     session, which cascaded its subscriptions away; the next discovery then
+  //     created a fresh automatic subscription at high water and skipped owed
+  //     updates (#86). Shutdown now leaves the session dormant instead.
+  test("a Pi reload (dormant, then re-registered) keeps automatic updates still owed", () => {
+    const store = createStore()
+    const original = attachAutomatic(store, "pi-reload", "feature/test")
+    store.insertEvents(REPO, PR, [event(1)])
+    assert.equal(store.listUndeliveredEventsForSubscription(original.subscriptionId).length, 1)
+
+    // session_shutdown (reason: "reload"), then session_start for the same file.
+    assert.equal(store.releaseSessionOwner("pi-reload"), true)
+    assert.equal(store.getSession("pi-reload")?.status, "dormant")
+    attachAutomatic(store, "pi-reload", "feature/test")
+    assert.equal(store.getSession("pi-reload")?.status, "active")
+
+    const after = store.getSubscription("pi-reload", REPO, PR)
+    assert.equal(after?.subscriptionId, original.subscriptionId, "the reload kept the subscription")
+    assert.equal(
+      store.listUndeliveredEventsForSubscription(original.subscriptionId).length,
+      1,
+      "the update owed before the reload is still owed after it",
+    )
     store.close()
   })
 

@@ -7,5 +7,6 @@ Claude's session-scoped tools derive identity from CLAUDE_CODE_SESSION_ID. If ho
 - At the start of PR work, even in the startup checkout, call `set_active_checkout` with the active checkout path. Call it again after switching branches or worktrees, before following or creating a PR.
 - Call `subscribe` immediately after creating, opening, discovering, or starting work on a PR, before reporting its URL or status. Use `unsubscribe` when the user asks to stop tracking. Include `repo` as `owner/name` for a PR outside the current repository.
 - Use `status` to inspect redacted status.
+- When the user asks to pause, mute, or quiet Premind, call `pause`. It withholds reminders from this session only and keeps every subscription. Call `resume` to restore delivery. Do not change subscriptions or global polling for this.
 
 A skill helps use controls; lifecycle hooks own registration and delivery. Do not claim that a tool call itself delivered a reminder.

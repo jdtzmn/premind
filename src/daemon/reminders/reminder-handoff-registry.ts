@@ -7,6 +7,7 @@ import type {
   SettleReminderClaimPayload,
 } from "../../shared/schema.ts";
 import type {
+  HandoffExecutionOwner,
   ReminderBatchRecord,
   ReminderBundleClaim,
   StateStore,
@@ -36,6 +37,7 @@ export class ReminderHandoffRegistry {
     sessionId: string,
     now = Date.now(),
   ): ReminderBatch | null {
+    if (this.store.isSessionPaused(sessionId)) return null;
     // An adapter that died mid-handoff leaves its batch invisible to the query
     // below and holding the subscription's only batch slot. Reclaim abandoned
     // handoffs first so delivery resumes without waiting for a daemon restart.
@@ -58,8 +60,9 @@ export class ReminderHandoffRegistry {
   claimReminderBundle(
     sessionId: string,
     now = Date.now(),
+    owner?: HandoffExecutionOwner,
   ): ReminderBundleClaim | null {
-    const bundle = this.store.claimReminderBundle(sessionId, now);
+    const bundle = this.store.claimReminderBundle(sessionId, now, owner);
     for (const batch of bundle?.batches ?? []) {
       const record = this.store.getReminderBatchRecord(batch.batchId, sessionId);
       if (record) this.actorFor(record);

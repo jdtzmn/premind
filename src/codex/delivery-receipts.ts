@@ -100,41 +100,52 @@ export const acquireSessionLifecycleLock = async (
     )
   `);
 
+	const isSqliteBusy = (error: unknown) =>
+		typeof error === "object" &&
+		error !== null &&
+		"errcode" in error &&
+		(error.errcode === 5 || error.errcode === 6);
 	const token = randomUUID();
 	const deadline = now() + timeoutMs;
 	let acquired = false;
 	try {
 		while (!acquired) {
 			const createdAt = now();
-			const inserted = database
-				.prepare(
-					`INSERT INTO codex_lifecycle_locks (session_id, token, pid, created_at)
+			try {
+				const inserted = database
+					.prepare(
+						`INSERT INTO codex_lifecycle_locks (session_id, token, pid, created_at)
            VALUES (?, ?, ?, ?)
            ON CONFLICT(session_id) DO NOTHING`,
-				)
-				.run(sessionId, token, process.pid, createdAt);
-			if (Number(inserted.changes) === 1) {
-				acquired = true;
-				break;
-			}
-
-			const owner = lockOwner(database, sessionId);
-			const reclaimable =
-				owner !== undefined &&
-				createdAt - owner.createdAt >= staleMs &&
-				!isProcessAlive(owner.pid);
-			if (reclaimable) {
-				const reclaimed = database
-					.prepare(
-						`UPDATE codex_lifecycle_locks
-             SET token = ?, pid = ?, created_at = ?
-             WHERE session_id = ? AND token = ?`,
 					)
-					.run(token, process.pid, createdAt, sessionId, owner.token);
-				if (Number(reclaimed.changes) === 1) {
+					.run(sessionId, token, process.pid, createdAt);
+				if (Number(inserted.changes) === 1) {
 					acquired = true;
 					break;
 				}
+
+				const owner = lockOwner(database, sessionId);
+				const reclaimable =
+					owner !== undefined &&
+					createdAt - owner.createdAt >= staleMs &&
+					!isProcessAlive(owner.pid);
+				if (reclaimable) {
+					const reclaimed = database
+						.prepare(
+							`UPDATE codex_lifecycle_locks
+             SET token = ?, pid = ?, created_at = ?
+             WHERE session_id = ? AND token = ?`,
+						)
+						.run(token, process.pid, createdAt, sessionId, owner.token);
+					if (Number(reclaimed.changes) === 1) {
+						acquired = true;
+						break;
+					}
+				}
+			} catch (error) {
+				// Another hook process is writing the lock table. That is ordinary
+				// contention, so retry until the deadline instead of failing.
+				if (!isSqliteBusy(error)) throw error;
 			}
 
 			if (now() >= deadline) {

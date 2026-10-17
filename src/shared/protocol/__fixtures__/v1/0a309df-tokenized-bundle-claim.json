@@ -1,0 +1,13 @@
+{
+  "bundle": {
+    "handoffId": "d7ee0ec2-2ed9-458c-9b73-38b28cb8a4a2",
+    "batches": [
+      {
+        "batchId": "batch-v1-tokenized",
+        "sessionId": "session-v1",
+        "reminderText": "Tokenized protocol v1 bundle",
+        "events": []
+      }
+    ]
+  }
+}

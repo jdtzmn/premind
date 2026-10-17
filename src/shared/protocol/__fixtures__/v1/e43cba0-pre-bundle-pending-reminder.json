@@ -1,0 +1,8 @@
+{
+  "batch": {
+    "batchId": "batch-v1",
+    "sessionId": "session-v1",
+    "reminderText": "Protocol v1 reminder",
+    "events": []
+  }
+}

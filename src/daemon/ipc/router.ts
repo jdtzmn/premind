@@ -3,11 +3,14 @@ import {
 	PREMIND_CLIENT_LEASE_TTL_MS,
 	PREMIND_IDLE_SHUTDOWN_GRACE_MS,
 } from "../../shared/constants.ts";
-import { PREMIND_DAEMON_OPERATIONS } from "../../shared/daemon-startup.ts";
-import type { PremindRequest, PremindResponse } from "../../shared/ipc.ts";
+import { readPackagedBuild } from "../../shared/build-info.ts";
+import {
+	compareDaemonBuilds,
+	PREMIND_DAEMON_OPERATIONS,
+} from "../../shared/daemon-startup.ts";
+import type { PremindResponse, RoutedPremindRequest } from "../../shared/ipc.ts";
 import {
 	type AckReminderPayload,
-	type ActivateWorktreePayload,
 	debugStatusResponseSchema,
 	type RegisterClientPayload,
 	type SubscribePayload,
@@ -19,6 +22,23 @@ import { ReminderHandoffRegistry } from "../reminders/reminder-handoff-registry.
 import { resolveGitWorktree } from "../worktrees/git-resolver.ts";
 import type { ActiveWorktree } from "../worktrees/worktree-binding.ts";
 import { WorktreeBindingRegistry } from "../worktrees/worktree-binding-registry.ts";
+
+const SESSION_LEASE_REQUIRED_OPERATIONS = new Set([
+	"registerSession",
+	"ensureSessionControl",
+	"updateSessionState",
+	"unregisterSession",
+	"deleteSession",
+	"pauseSession",
+	"resumeSession",
+	"activateWorktree",
+	"subscribe",
+	"unsubscribe",
+	"claimReminderBundle",
+	"ackReminderBundle",
+	"getPendingReminder",
+	"ackReminder",
+]);
 
 export type WorktreeResolver = (
 	requestedPath: string,
@@ -38,6 +58,9 @@ export class Router {
 		private readonly worktreeBindings = new WorktreeBindingRegistry(store),
 		private readonly reminderHandoffs = new ReminderHandoffRegistry(store),
 		private readonly onDemandChanged: () => void = () => {},
+		// Called once a strictly newer build is accepted; the daemon then drains
+		// through its normal graceful shutdown.
+		private readonly onHandoverAccepted: () => void = () => {},
 	) {}
 
 	private requireActiveCodexSession(
@@ -50,7 +73,17 @@ export class Router {
 		}
 		return this.fail("SESSION_INACTIVE", "Codex session is no longer active");
 	}
-	async handle(request: PremindRequest): Promise<PremindResponse> {
+
+	async handle(request: RoutedPremindRequest): Promise<PremindResponse> {
+		if (
+			request.protocolVersion === 2 &&
+			SESSION_LEASE_REQUIRED_OPERATIONS.has(request.type) &&
+			!request.sessionLease
+		) {
+			return this.fail("SESSION_MOVED", "Protocol v2 session operation requires a lease");
+		}
+		const leaseFailure = this.attachedSessionLeaseFailure(request);
+		if (leaseFailure) return leaseFailure;
 		try {
 			switch (request.type) {
 				case "registerClient":
@@ -67,10 +100,45 @@ export class Router {
 				case "releaseClient":
 					this.store.releaseClient(request.payload.clientId);
 					return this.ok({ released: true });
+				case "claimSessionLease":
+					try {
+						return this.ok({ lease: this.store.claimSessionLease(request.payload) });
+					} catch (error) {
+						return this.sessionLeaseFailure(error);
+					}
+				case "renewSessionLease": {
+					const lease = this.store.renewSessionLease(request.payload.lease);
+					return lease
+						? this.ok({ lease })
+						: this.fail("SESSION_MOVED", "Session lease is stale or expired");
+				}
+				case "transferSessionLease":
+					try {
+						return this.ok({
+							lease: this.store.transferSessionLease(
+								request.payload.lease,
+								request.payload.nextOwner,
+							),
+						});
+					} catch (error) {
+						return this.sessionLeaseFailure(error);
+					}
+				case "releaseSessionLease": {
+					const released = this.store.releaseSessionLease(request.payload.lease);
+					return released
+						? this.ok({ released: true })
+						: this.fail("SESSION_MOVED", "Session lease is stale or expired");
+				}
 				case "registerSession": {
-					const { created, superseded } = this.store.registerSession(
-						request.payload,
-					);
+					let registered;
+					try {
+						registered = this.withAttachedSessionLease(request, () =>
+							this.store.registerSession(request.payload),
+						);
+					} catch (error) {
+						return this.sessionLeaseFailure(error);
+					}
+					const { created, superseded } = registered;
 					this.logger.info(
 						created ? "session registered" : "session re-registered",
 						{
@@ -90,9 +158,15 @@ export class Router {
 							`Unknown client: ${request.payload.clientId}`,
 						);
 					}
-					const { created, superseded } = this.store.ensureSessionControl(
-						request.payload,
-					);
+					let controlled;
+					try {
+						controlled = this.withAttachedSessionLease(request, () =>
+							this.store.ensureSessionControl(request.payload),
+						);
+					} catch (error) {
+						return this.sessionLeaseFailure(error);
+					}
+					const { created, superseded } = controlled;
 					this.logger.info(
 						created ? "session control attached" : "session control refreshed",
 						{
@@ -185,7 +259,14 @@ export class Router {
 					return this.ok({ suspended: true });
 				}
 				case "updateSessionState": {
-					const result = this.store.updateSessionState(request.payload);
+					let result;
+					try {
+						result = this.withAttachedSessionLease(request, () =>
+							this.store.updateSessionState(request.payload),
+						);
+					} catch (error) {
+						return this.sessionLeaseFailure(error);
+					}
 					if (!result.updated)
 						return this.fail(
 							"SESSION_NOT_FOUND",
@@ -205,14 +286,44 @@ export class Router {
 					return this.ok({ updated: true, revived: result.revived });
 				}
 				case "unregisterSession":
+					try {
+						this.withAttachedSessionLease(request, () => {
+							if (request.sessionLease) {
+								this.store.releaseSessionLease(request.sessionLease);
+							}
+							this.store.unregisterSession(request.payload.sessionId);
+						});
+					} catch (error) {
+						return this.sessionLeaseFailure(error);
+					}
 					this.worktreeBindings.closeSession(request.payload.sessionId);
-					this.store.unregisterSession(request.payload.sessionId);
 					return this.ok({ unregistered: true });
+				case "deleteSession": {
+					let deleted;
+					try {
+						deleted = this.withAttachedSessionLease(request, () =>
+							this.store.deleteSession(request.payload.sessionId),
+						);
+					} catch (error) {
+						return this.sessionLeaseFailure(error);
+					}
+					if (!deleted)
+						return this.fail(
+							"SESSION_NOT_FOUND",
+							`Unknown session: ${request.payload.sessionId}`,
+						);
+					this.worktreeBindings.closeSession(request.payload.sessionId);
+					return this.ok({ deleted: true });
+				}
 				case "pauseSession": {
-					const paused = this.store.setSessionPaused(
-						request.payload.sessionId,
-						true,
-					);
+					let paused;
+					try {
+						paused = this.withAttachedSessionLease(request, () =>
+							this.store.setSessionPaused(request.payload.sessionId, true),
+						);
+					} catch (error) {
+						return this.sessionLeaseFailure(error);
+					}
 					if (!paused)
 						return this.fail(
 							"SESSION_NOT_FOUND",
@@ -221,10 +332,14 @@ export class Router {
 					return this.ok({ paused: true });
 				}
 				case "resumeSession": {
-					const resumed = this.store.setSessionPaused(
-						request.payload.sessionId,
-						false,
-					);
+					let resumed;
+					try {
+						resumed = this.withAttachedSessionLease(request, () =>
+							this.store.setSessionPaused(request.payload.sessionId, false),
+						);
+					} catch (error) {
+						return this.sessionLeaseFailure(error);
+					}
 					if (!resumed)
 						return this.fail(
 							"SESSION_NOT_FOUND",
@@ -233,31 +348,80 @@ export class Router {
 					return this.ok({ resumed: true });
 				}
 				case "activateWorktree":
-					return await this.handleActivateWorktree(request.payload);
+					return await this.handleActivateWorktree(request);
 				case "subscribe":
-					return this.handleSubscribe(request.payload);
+					try {
+						return this.withAttachedSessionLease(request, () =>
+							this.handleSubscribe(request.payload),
+						);
+					} catch (error) {
+						return this.sessionLeaseFailure(error);
+					}
 				case "unsubscribe":
-					return this.handleUnsubscribe(request.payload);
+					try {
+						return this.withAttachedSessionLease(request, () =>
+							this.handleUnsubscribe(request.payload),
+						);
+					} catch (error) {
+						return this.sessionLeaseFailure(error);
+					}
 				case "claimReminderBundle":
-					return this.ok({
-						bundle: this.reminderHandoffs.claimReminderBundle(
-							request.payload.sessionId,
-						),
-					});
+					try {
+						return this.withAttachedSessionLease(request, () => {
+							const claim = this.reminderHandoffs.claimReminderBundle(
+								request.payload.sessionId,
+								Date.now(),
+								request.sessionLease
+									? {
+										ownerInstanceId: request.sessionLease.ownerInstanceId,
+										sessionGeneration: request.sessionLease.generation,
+									}
+									: undefined,
+							);
+							// The execution generation is daemon-internal fencing state; the
+							// wire bundle is frozen to `{ handoffId, batches }`, which strict
+							// released clients reject any additions to.
+							return this.ok({
+								bundle: claim
+									? { handoffId: claim.handoffId, batches: claim.batches }
+									: null,
+							});
+						});
+					} catch (error) {
+						return this.sessionLeaseFailure(error);
+					}
 				case "ackReminderBundle":
-					return this.ok({
-						acknowledged: this.reminderHandoffs.acknowledgeBundle(
-							request.payload,
-						),
-					});
+					try {
+						return this.withAttachedSessionLease(request, () =>
+							this.ok({
+								acknowledged: this.reminderHandoffs.acknowledgeBundle(
+									request.payload,
+								),
+							}),
+						);
+					} catch (error) {
+						return this.sessionLeaseFailure(error);
+					}
 				case "getPendingReminder":
-					return this.ok({
-						batch: this.reminderHandoffs.getPendingReminder(
-							request.payload.sessionId,
-						),
-					});
+					try {
+						return this.withAttachedSessionLease(request, () =>
+							this.ok({
+								batch: this.reminderHandoffs.getPendingReminder(
+									request.payload.sessionId,
+								),
+							}),
+						);
+					} catch (error) {
+						return this.sessionLeaseFailure(error);
+					}
 				case "ackReminder":
-					return this.handleAckReminder(request.payload);
+					try {
+						return this.withAttachedSessionLease(request, () =>
+							this.handleAckReminder(request.payload),
+						);
+					} catch (error) {
+						return this.sessionLeaseFailure(error);
+					}
 				case "setGlobalDisabled":
 					this.store.setGloballyDisabled(request.payload.disabled);
 					return this.ok({ disabled: request.payload.disabled });
@@ -280,11 +444,23 @@ export class Router {
 							activeWatchers: this.store.countActiveWatchers(),
 							lastReapAt: this.store.getLastReapAt(),
 							lastReapCount: this.store.getLastReapCount(),
-							sessions: this.store.listSessionSummaries(),
+							sessions: this.store.listSessionSummaries(request.payload.includeSnapshots === true),
 						}),
 					);
 				case "pruneClosedSessions":
 					return this.ok(this.store.pruneClosedOrOrphanedSessions());
+				case "requestHandover": {
+					const order = compareDaemonBuilds(request.payload, readPackagedBuild());
+					if (order !== "newer") {
+						return this.ok({
+							accepted: false,
+							reason: `requester build is ${order} than this daemon`,
+						});
+					}
+					this.logger.info("handover accepted", { requester: request.payload });
+					this.onHandoverAccepted();
+					return this.ok({ accepted: true });
+				}
 			}
 		} finally {
 			this.onDemandChanged();
@@ -304,8 +480,9 @@ export class Router {
 	}
 
 	private async handleActivateWorktree(
-		payload: ActivateWorktreePayload,
+		request: RoutedPremindRequest & { type: "activateWorktree" },
 	): Promise<PremindResponse> {
+		const payload = request.payload;
 		const inactive = this.requireActiveCodexSession(payload.sessionId);
 		if (inactive) return inactive;
 		if (!this.store.getSession(payload.sessionId)) {
@@ -315,18 +492,9 @@ export class Router {
 			);
 		}
 
+		let worktree: ActiveWorktree;
 		try {
-			const binding = await this.worktreeBindings.activateWorktree(
-				payload.sessionId,
-				payload.path,
-				this.resolveWorktree,
-				() => {
-					if (this.requireActiveCodexSession(payload.sessionId)) {
-						throw new InactiveCodexSessionError();
-					}
-				},
-			);
-			return this.ok({ binding, watching: binding.branch !== null });
+			worktree = await this.resolveWorktree(payload.path);
 		} catch (error) {
 			if (error instanceof InactiveCodexSessionError) {
 				return this.fail("SESSION_INACTIVE", error.message);
@@ -335,6 +503,24 @@ export class Router {
 				"WORKTREE_RESOLUTION_FAILED",
 				error instanceof Error ? error.message : "Unable to resolve Git worktree",
 			);
+		}
+		try {
+			const binding = this.withAttachedSessionLease(request, () => {
+				if (this.requireActiveCodexSession(payload.sessionId)) {
+					throw new InactiveCodexSessionError();
+				}
+				return this.worktreeBindings.activateResolvedWorktree(
+					payload.sessionId,
+					payload.path,
+					worktree,
+				);
+			});
+			return this.ok({ binding, watching: binding.branch !== null });
+		} catch (error) {
+			if (error instanceof InactiveCodexSessionError) {
+				return this.fail("SESSION_INACTIVE", error.message);
+			}
+			return this.sessionLeaseFailure(error);
 		}
 	}
 
@@ -437,6 +623,49 @@ export class Router {
 			return this.fail(result.code, result.message);
 		}
 		return this.ok(result);
+	}
+
+	private attachedSessionLeaseFailure(
+		request: RoutedPremindRequest,
+	): PremindResponse | null {
+		if (!request.sessionLease) return null;
+		const sessionId = (request.payload as { sessionId?: unknown }).sessionId;
+		if (
+			typeof sessionId !== "string" ||
+			request.sessionLease.sessionId !== sessionId ||
+			!this.store.validateSessionLease(request.sessionLease)
+		) {
+			return this.fail("SESSION_MOVED", "Session lease is stale or belongs elsewhere");
+		}
+		return null;
+	}
+
+
+	private withAttachedSessionLease<T>(
+		request: RoutedPremindRequest,
+		operation: () => T,
+	): T {
+		if (!request.sessionLease) return operation();
+		const sessionId = (request.payload as { sessionId?: unknown }).sessionId;
+		if (
+			typeof sessionId !== "string" ||
+			request.sessionLease.sessionId !== sessionId
+		) {
+			throw new Error("SESSION_MOVED: session lease belongs elsewhere");
+		}
+		return this.store.withSessionLease(request.sessionLease, operation);
+	}
+
+
+	private sessionLeaseFailure(error: unknown): PremindResponse {
+		const message = error instanceof Error ? error.message : String(error);
+		if (message.startsWith("SESSION_BUSY:")) {
+			return this.fail("SESSION_BUSY", message);
+		}
+		if (message.startsWith("SESSION_MOVED:")) {
+			return this.fail("SESSION_MOVED", message);
+		}
+		throw error;
 	}
 
 	private ok(result: unknown): PremindResponse {

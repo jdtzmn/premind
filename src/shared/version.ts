@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { bundledBuild } from "./build-info.ts"
 import { PREMIND_BUILD_COMMIT } from "./version.generated.ts"
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -50,8 +51,8 @@ const readCommitHash = (): string => {
 export const formatPremindVersion = (version: string, commit: string): string =>
   `v${version} (${commit.slice(0, 6)})`;
 
-export const PREMIND_VERSION = readPackageVersion();
-export const PREMIND_COMMIT = readCommitHash();
+export const PREMIND_VERSION = bundledBuild()?.version ?? readPackageVersion();
+export const PREMIND_COMMIT = bundledBuild()?.commit ?? readCommitHash();
 export const PREMIND_VERSION_LABEL = formatPremindVersion(
   PREMIND_VERSION,
   PREMIND_COMMIT,

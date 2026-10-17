@@ -51,6 +51,21 @@ afterEach(() => {
 })
 
 describe("ReminderHandoffRegistry", () => {
+  test("withholds an existing pending reminder while the session is paused", () => {
+    const store = createStore()
+    seed(store)
+    const registry = new ReminderHandoffRegistry(store)
+    const batch = registry.getPendingReminder("session")
+    assert.ok(batch)
+
+    store.setSessionPaused("session", true)
+    assert.equal(registry.getPendingReminder("session"), null)
+    assert.equal(store.getReminderBatchRecord(batch.batchId)?.state, "built")
+
+    store.setSessionPaused("session", false)
+    assert.equal(registry.getPendingReminder("session")?.batchId, batch.batchId)
+  })
+
   test("rejects illegal transitions and advances only after confirmation", () => {
     const store = createStore()
     const subscription = seed(store)
@@ -86,6 +101,16 @@ describe("ReminderHandoffRegistry", () => {
 
     store.recoverFromRestart(1_000)
     assert.equal(store.getReminderBatchRecord(batch.batchId)?.state, "failed")
+    store.registerClient("client-restarted", { pid: 2, projectRoot: "/repo" }, 1_001)
+    store.ensureSessionControl({
+      clientId: "client-restarted",
+      sessionId: "session",
+      repo: "acme/repo",
+      branch: "feature/x",
+      isPrimary: true,
+      busyState: "idle",
+      paused: false,
+    }, 1_001)
     registry = new ReminderHandoffRegistry(store)
     assert.equal(registry.getPendingReminder("session")?.batchId, batch.batchId)
     assert.equal(store.getReminderBatchRecord(batch.batchId)?.state, "built")
@@ -190,6 +215,8 @@ describe("pending reminder live reconciliation", () => {
     { name: "different workflow is not a match", checks: [check("SUCCESS", "other")], kind: "check.unverified", summary: /UNVERIFIED/, action: false },
     { name: "different event is not a match", checks: [check("SUCCESS", "CI", "label")], kind: "check.unverified", summary: /UNVERIFIED/, action: false },
     { name: "terminal duplicates cannot be ordered", checks: [check("SUCCESS"), check("FAILURE")], kind: "check.unverified", summary: /UNVERIFIED/, action: false },
+    { name: "a newer passing run supersedes a failure", checks: [{ ...check("SUCCESS"), id: 2 }, { ...check("FAILURE"), id: 1 }], kind: "check.resolved", summary: /now passed/, action: false },
+    { name: "a newer failing run supersedes a cancellation", checks: [{ ...check("CANCELLED"), id: 1 }, { ...check("FAILURE"), id: 2 }], kind: "check.failed", summary: /Check failed: lint/, action: true },
     { name: "unknown state is not an active rerun", checks: [check("MYSTERY")], kind: "check.unverified", summary: /UNVERIFIED/, action: false },
     { name: "workflow isolates a genuine failure", checks: [check("SUCCESS", "other"), check("FAILURE")], kind: "check.failed", summary: /Check failed: lint/, action: true },
   ]) {

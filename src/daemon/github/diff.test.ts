@@ -670,4 +670,104 @@ describe("diffSnapshot", () => {
 
     assert.equal(events.length, 0)
   })
+  test("reports a rerun that fails again on the same commit", () => {
+    const shard = "Frontend E2E Shard (5/8)"
+    const sibling = "Frontend E2E Shard (4/8)"
+    const firstAttempt: PullRequestSnapshot = {
+      ...baseSnapshot(),
+      checks: [
+        { name: shard, state: "fail", workflow: "UI CI", id: 1 },
+        { name: sibling, state: "pass", workflow: "UI CI", id: 2 },
+      ],
+    }
+    const rerunning: PullRequestSnapshot = {
+      ...firstAttempt,
+      checks: [
+        { name: shard, state: "in_progress", workflow: "UI CI", id: 3 },
+        { name: sibling, state: "pass", workflow: "UI CI", id: 2 },
+      ],
+    }
+    const failedAgain: PullRequestSnapshot = {
+      ...firstAttempt,
+      checks: [
+        { name: shard, state: "fail", workflow: "UI CI", id: 3 },
+        { name: sibling, state: "pass", workflow: "UI CI", id: 2 },
+      ],
+    }
+
+    const firstFailure = diffSnapshot(
+      { ...firstAttempt, checks: [] },
+      firstAttempt,
+    ).find((event) => event.kind === "check.failed")
+    const repeatFailure = diffSnapshot(rerunning, failedAgain).find(
+      (event) => event.kind === "check.failed",
+    )
+    // Even when a poll misses the in-progress phase, the new run is news.
+    const missedRerun = diffSnapshot(firstAttempt, failedAgain).find(
+      (event) => event.kind === "check.failed",
+    )
+
+    assert.ok(firstFailure)
+    assert.ok(repeatFailure)
+    assert.ok(missedRerun)
+    assert.notEqual(repeatFailure.dedupeKey, firstFailure.dedupeKey)
+    assert.equal(repeatFailure.payload.checkRunId, 3)
+  })
+
+  test("does not re-announce checks when a stored snapshot predates check-run IDs", () => {
+    const previous: PullRequestSnapshot = {
+      ...baseSnapshot(),
+      checks: [{ name: "build", state: "pass" }],
+    }
+    const next: PullRequestSnapshot = {
+      ...previous,
+      checks: [{ name: "build", state: "pass", id: 7 }],
+    }
+
+    assert.deepEqual(diffSnapshot(previous, next), [])
+  })
+
+  test("the newest run of a check name is its current state, in any order", () => {
+    const previous: PullRequestSnapshot = {
+      ...baseSnapshot(),
+      checks: [{ name: "lint", state: "queued", id: 10 }],
+    }
+    const superseded = { name: "lint", state: "cancelled", id: 10 }
+    const current = { name: "lint", state: "pass", id: 11 }
+
+    for (const checks of [[superseded, current], [current, superseded]]) {
+      const events = diffSnapshot(previous, { ...previous, checks })
+      assert.deepEqual(
+        events.map((event) => event.kind),
+        ["check.succeeded"],
+      )
+    }
+
+    // Once the current run is recorded, the superseded duplicate is not news.
+    const settled = { ...previous, checks: [superseded, current] }
+    assert.deepEqual(diffSnapshot(settled, { ...settled, checks: [current, superseded] }), [])
+  })
+
+  test("keys grouped events by their members rather than their count", () => {
+    const previous: PullRequestSnapshot = {
+      ...baseSnapshot(),
+      checks: [
+        { name: "a", state: "queued", id: 1 },
+        { name: "b", state: "queued", id: 2 },
+        { name: "c", state: "queued", id: 3 },
+        { name: "d", state: "queued", id: 4 },
+      ],
+    }
+    const groupKey = (passing: string[]) =>
+      diffSnapshot(previous, {
+        ...previous,
+        checks: previous.checks.map((check) =>
+          passing.includes(check.name) ? { ...check, state: "pass" } : check,
+        ),
+      }).find((event) => event.kind === "check.succeeded")?.dedupeKey
+
+    // Two different pairs passing must not collide just because both are pairs.
+    assert.notEqual(groupKey(["a", "b"]), groupKey(["c", "d"]))
+    assert.equal(groupKey(["a", "b"]), groupKey(["b", "a"]))
+  })
 })

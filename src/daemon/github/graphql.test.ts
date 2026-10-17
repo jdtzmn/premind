@@ -126,7 +126,9 @@ const fullFixture = (): Fixture => ({
                   nodes: [
                     {
                       __typename: "CheckRun",
+                      databaseId: 9001,
                       name: "build",
+                      startedAt: "2026-04-08T00:01:00Z",
                       status: "COMPLETED",
                       conclusion: "SUCCESS",
                       detailsUrl: "https://ci.example/build/1",
@@ -143,6 +145,7 @@ const fullFixture = (): Fixture => ({
                     {
                       __typename: "StatusContext",
                       context: "netlify/deploy",
+                      createdAt: "2026-04-08T00:02:00Z",
                       state: "SUCCESS",
                       targetUrl: "https://netlify.example",
                     },
@@ -195,6 +198,12 @@ describe("fetchPullRequestSnapshotGraphQL", () => {
     assert.equal(byName.build.state, "pass")
     assert.equal(byName.test.state, "fail")
     assert.equal(byName["netlify/deploy"].state, "pass")
+    // Check-run IDs tell a rerun apart from the run it replaced.
+    assert.equal(byName.build.id, 9001)
+    assert.equal(byName.build.startedAt, "2026-04-08T00:01:00Z")
+    assert.equal(byName.test.id, undefined)
+    assert.equal(byName["netlify/deploy"].id, undefined)
+    assert.equal(byName["netlify/deploy"].startedAt, "2026-04-08T00:02:00Z")
     assert.equal(snapshot.fetchedAt, now)
   })
 

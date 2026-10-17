@@ -1,0 +1,26 @@
+{
+  "daemon": {
+    "protocolVersion": 1,
+    "heartbeatMs": 10000,
+    "leaseTtlMs": 30000,
+    "idleShutdownGraceMs": 15000
+  },
+  "globallyDisabled": false,
+  "activeClients": 1,
+  "activeSessions": 1,
+  "closedSessions": 0,
+  "activeWatchers": 1,
+  "lastReapAt": null,
+  "lastReapCount": 0,
+  "sessions": [
+    {
+      "sessionId": "session-pre-host",
+      "repo": "acme/premind",
+      "branch": "feature/protocol-fixture",
+      "prNumber": 40,
+      "status": "active",
+      "busyState": "idle",
+      "pendingReminderCount": 0
+    }
+  ]
+}

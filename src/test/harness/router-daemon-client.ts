@@ -20,8 +20,12 @@ import type { PremindRequest } from "../../shared/ipc.ts"
 import type {
 	AckReminderPayload,
 	AckReminderBundlePayload,
+	ClaimReminderPayload,
+	CodexSessionPayload,
 	RegisterSessionPayload,
 	ReminderBatch,
+	ReminderClaim,
+	SettleReminderClaimPayload,
 } from "../../shared/schema.ts"
 
 export type RouterDaemonClient = ReturnType<typeof createRouterDaemonClient>
@@ -81,6 +85,9 @@ export const createRouterDaemonClient = (
 	return {
 		operations,
 		clientId,
+		/** Raw IPC passthrough for hosts whose runtime speaks the wire protocol directly (Claude). */
+		call: (type: string, payload: unknown) =>
+			send({ type, protocolVersion: PREMIND_PROTOCOL_VERSION, payload } as PremindRequest),
 
 		registerClient: async (projectRoot: string, sessionSource?: string) => {
 			await request("registerClient", {
@@ -145,20 +152,20 @@ export const createRouterDaemonClient = (
 			await request("unregisterSession", { sessionId })
 		},
 		pauseSession: async (sessionId: string) => {
-			await request("updateSessionState", { sessionId, status: "paused" })
+			await request("pauseSession", { sessionId })
 		},
 		resumeSession: async (sessionId: string) => {
-			await request("updateSessionState", { sessionId, status: "active" })
+			await request("resumeSession", { sessionId })
 		},
-		activateWorktree: async (payload: { sessionId: string; path: string }) => {
-			await request("activateWorktree", payload)
-		},
-		subscribe: async (payload: { sessionId: string; prNumber: number; repo?: string }) => {
-			await request("subscribe", payload)
-		},
-		unsubscribe: async (payload: { sessionId: string; prNumber: number; repo?: string }) => {
-			await request("unsubscribe", payload)
-		},
+		// Return router results so adapters that read them (OpenCode, Codex MCP) see real data.
+		activateWorktree: async (payload: { sessionId: string; path: string }) =>
+			(await request("activateWorktree", payload)) as { binding: { repo: string } },
+		subscribe: async (payload: { sessionId: string; prNumber: number; repo?: string }) =>
+			(await request("subscribe", payload)) as {
+				subscription: { repo: string; prNumber: number; writePolicy?: string }
+			},
+		unsubscribe: async (payload: { sessionId: string; prNumber: number; repo?: string }) =>
+			(await request("unsubscribe", payload)) as { unsubscribed: boolean },
 		claimReminderBundle: async (sessionId: string) =>
 			(await request("claimReminderBundle", { sessionId })) as {
 				bundle: { handoffId: string; batches: ReminderBatch[] } | null
@@ -183,10 +190,19 @@ export const createRouterDaemonClient = (
 				sessions: number
 				reminderBatches: number
 			},
-		setGlobalDisabled: async (disabled: boolean) => {
-			await request("setGlobalDisabled", { disabled })
-		},
+		setGlobalDisabled: async (disabled: boolean) =>
+			(await request("setGlobalDisabled", { disabled })) as { disabled: boolean },
 		getGlobalDisabled: async () =>
 			(await request("getGlobalDisabled", {})) as { disabled: boolean },
+
+		// Codex lifecycle surface (`CodexDaemonClient`).
+		registerCodexSession: async (payload: CodexSessionPayload) =>
+			(await request("registerCodexSession", payload)) as { active?: boolean },
+		claimReminder: async (payload: ClaimReminderPayload) =>
+			(await request("claimReminder", payload)) as { claim: ReminderClaim | null },
+		settleReminderClaim: async (payload: SettleReminderClaimPayload) =>
+			(await request("settleReminderClaim", payload)) as { settled: boolean },
+		releaseSessionOwner: async (sessionId: string) =>
+			await request("releaseSessionOwner", { sessionId }),
 	}
 }

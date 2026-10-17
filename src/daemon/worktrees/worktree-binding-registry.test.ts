@@ -175,7 +175,7 @@ describe("WorktreeBindingRegistry", () => {
 		store.close();
 	});
 
-	test("removes actors for sessions closed by the stale-session reaper", () => {
+	test("removes actors for sessions detached by the stale-session reaper", () => {
 		const store = createStore();
 		registerSession(store);
 		const registry = new WorktreeBindingRegistry(store);

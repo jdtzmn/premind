@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto"
 import type { NormalizedPrEvent, PullRequestCheck, PullRequestSnapshot } from "./types.ts"
 
 export const stableMergeStateStatus = (state?: string) => {
@@ -47,6 +48,12 @@ const wasEdited = (
   const next = (nextBody ?? "").trim()
   return prev !== next || (previousUpdatedAt ?? "") !== (nextUpdatedAt ?? "")
 }
+
+const groupDigest = (events: NormalizedPrEvent[]) =>
+  createHash("sha256")
+    .update(events.map((event) => event.dedupeKey).sort().join("\n"))
+    .digest("hex")
+    .slice(0, 16)
 
 const groupKinds = new Set([
   "check.created",
@@ -448,23 +455,37 @@ export function diffSnapshot(previous: PullRequestSnapshot | null, next: PullReq
     })
   }
 
-  const previousChecks = new Map(previous.checks.map((check) => [check.name, check]))
-
   // GitHub's statusCheckRollup can list more than one check-run per name in
   // the same poll tick when two runs raced on this commit (e.g. a push and a
   // label event both triggering CI). Group by name so a stale fail/cancelled
   // entry never wins over an active rerun of the same check that's already
   // in flight.
-  const nextChecksByName = new Map<string, PullRequestCheck[]>()
-  for (const check of next.checks) {
-    const bucket = nextChecksByName.get(check.name)
-    if (bucket) bucket.push(check)
-    else nextChecksByName.set(check.name, [check])
+  const checksByName = (checks: PullRequestCheck[]) => {
+    const byName = new Map<string, PullRequestCheck[]>()
+    for (const check of checks) {
+      const bucket = byName.get(check.name)
+      if (bucket) bucket.push(check)
+      else byName.set(check.name, [check])
+    }
+    return byName
   }
+  const nextChecksByName = checksByName(next.checks)
 
   const ACTIVE_CHECK_KINDS = new Set(["check.in_progress", "check.queued", "check.created"])
   const representativeCheck = (checks: PullRequestCheck[]): PullRequestCheck => {
     if (checks.length === 1) return checks[0]!
+    // When GitHub reports check-run IDs, the newest run is the current result
+    // for that name: a rerun or a later workflow run supersedes older runs,
+    // whatever their state. Choosing by array order instead made the reported
+    // state flap between a superseded run and the current one.
+    if (checks.some((check) => check.id !== undefined)) {
+      return checks.reduce((newest, check) =>
+        (check.id ?? -1) > (newest.id ?? -1) ||
+        ((check.id ?? -1) === (newest.id ?? -1) && (check.startedAt ?? "") > (newest.startedAt ?? ""))
+          ? check
+          : newest,
+      )
+    }
     const active = checks.find((check) => ACTIVE_CHECK_KINDS.has(checkKind(check.state)))
     if (active) return active
     // Multiple terminal results with no active rerun (rare) — prefer a
@@ -521,10 +542,18 @@ export function diffSnapshot(previous: PullRequestSnapshot | null, next: PullReq
   }
   const TERMINAL_CHECK_KINDS = new Set(["check.succeeded", "check.failed", "check.cancelled"])
 
+  const previousChecks = new Map(
+    [...checksByName(previous.checks)].map(([name, checks]) => [name, representativeCheck(checks)]),
+  )
+
   for (const checks of nextChecksByName.values()) {
     const check = representativeCheck(checks)
     const prev = previousChecks.get(check.name)
-    if (prev && prev.state === check.state) continue
+    // A different check-run ID with the same state is a rerun that reached the
+    // same result, which is news. Snapshots stored without IDs compare by
+    // state alone so upgrading does not re-announce every check.
+    const sameRun = prev?.id === undefined || check.id === undefined || prev.id === check.id
+    if (prev && prev.state === check.state && sameRun) continue
 
     let kind = checkKind(check.state)
     let summary = checkSummary(check, kind)
@@ -559,7 +588,9 @@ export function diffSnapshot(previous: PullRequestSnapshot | null, next: PullReq
     }
 
     events.push({
-      dedupeKey: `${kind}:${check.name}:${next.core.headRefOid}`,
+      // The check-run ID keeps a rerun's result from colliding with the
+      // stored result of the run it replaced on the same commit.
+      dedupeKey: `${kind}:${check.name}:${next.core.headRefOid}${check.id !== undefined ? `:${check.id}` : ""}`,
       kind,
       priority: checkPriority(kind),
       summary,
@@ -570,6 +601,7 @@ export function diffSnapshot(previous: PullRequestSnapshot | null, next: PullReq
         workflow: check.workflow ?? null,
         event: check.event ?? null,
         headSha: next.core.headRefOid,
+        checkRunId: check.id ?? null,
       },
     })
   }
@@ -594,7 +626,9 @@ export function diffSnapshot(previous: PullRequestSnapshot | null, next: PullReq
     }
 
     ordered.push({
-      dedupeKey: `${kind}:group:${next.core.headRefOid}:${bucket.length}`,
+      // Key the group by its members. A count-based key dropped a later group
+      // of the same size and re-announced members in a group of another size.
+      dedupeKey: `${kind}:group:${next.core.headRefOid}:${groupDigest(bucket)}`,
       kind,
       priority: bucket.some((event) => event.priority === "high")
         ? "high"

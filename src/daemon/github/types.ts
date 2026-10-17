@@ -50,6 +50,14 @@ export type PullRequestCheck = {
   link?: string
   event?: string
   workflow?: string
+  /**
+   * GitHub check-run database ID. A rerun creates a new check run, so this
+   * tells repeated results of the same check apart. Absent for commit
+   * statuses and for snapshots stored before it was recorded.
+   */
+  id?: number
+  /** When the check run started (or the status was created), as ISO 8601. */
+  startedAt?: string
 }
 
 export type PullRequestSnapshot = {

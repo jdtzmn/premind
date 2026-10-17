@@ -9,6 +9,11 @@ const USER_AGENT = "premind-daemon"
 const GITHUB_API_BASE = "https://api.github.com"
 const DEFAULT_ACCEPT = "application/vnd.github+json"
 const API_VERSION = "2022-11-28"
+// Every GitHub request and token lookup is bounded. The PR watcher polls one PR
+// at a time, so a request stuck on a dead connection (for example after the
+// laptop changes networks) would otherwise stall polling for every PR.
+export const DEFAULT_GITHUB_REQUEST_TIMEOUT_MS = 30_000
+const TOKEN_LOOKUP_TIMEOUT_MS = 15_000
 
 export type GitHubHttpOptions = {
   /** Override the fetch implementation (test seam). */
@@ -19,6 +24,8 @@ export type GitHubHttpOptions = {
   rateLimit?: RateLimitTracker
   /** Override the base URL (test seam). */
   baseUrl?: string
+  /** Abort a request, including reading its body, after this long. */
+  requestTimeoutMs?: number
 }
 
 export type GitHubResponse<T> =
@@ -45,7 +52,9 @@ export class GitHubHttpError extends Error {
 }
 
 const defaultTokenProvider = async () => {
-  const { stdout } = await execFileAsync("gh", ["auth", "token"])
+  const { stdout } = await execFileAsync("gh", ["auth", "token"], {
+    timeout: TOKEN_LOOKUP_TIMEOUT_MS,
+  })
   const token = stdout.trim()
   if (!token) throw new Error("gh auth token returned empty token")
   return token
@@ -63,6 +72,7 @@ export class GitHubHttpClient {
   private readonly fetchImpl: typeof fetch
   private readonly tokenProvider: () => Promise<string>
   private readonly baseUrl: string
+  private readonly requestTimeoutMs: number
   readonly rateLimit: RateLimitTracker
   private cachedToken: string | null = null
 
@@ -70,6 +80,7 @@ export class GitHubHttpClient {
     this.fetchImpl = options.fetchImpl ?? fetch
     this.tokenProvider = options.tokenProvider ?? defaultTokenProvider
     this.baseUrl = options.baseUrl ?? GITHUB_API_BASE
+    this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_GITHUB_REQUEST_TIMEOUT_MS
     this.rateLimit = options.rateLimit ?? new RateLimitTracker()
   }
 
@@ -87,7 +98,11 @@ export class GitHubHttpClient {
     const headers = await this.buildHeaders(options.headers)
     if (options.etag) headers["If-None-Match"] = options.etag
 
-    const response = await this.fetchImpl(url, { method: "GET", headers })
+    const response = await this.fetchImpl(url, {
+      method: "GET",
+      headers,
+      signal: AbortSignal.timeout(this.requestTimeoutMs),
+    })
     this.ingestRateLimit(response)
 
     const etag = response.headers.get("etag")
@@ -121,6 +136,7 @@ export class GitHubHttpClient {
       method: "POST",
       headers,
       body: JSON.stringify({ query, variables }),
+      signal: AbortSignal.timeout(this.requestTimeoutMs),
     })
     this.ingestRateLimit(response)
 

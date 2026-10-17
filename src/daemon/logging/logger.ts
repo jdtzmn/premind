@@ -53,6 +53,8 @@ export class Logger {
     const entry = {
       ts: new Date().toISOString(),
       level,
+      // Several daemons can append to one log file; the PID tells them apart.
+      pid: process.pid,
       service: this.service,
       message,
       ...(extra ? { extra } : {}),

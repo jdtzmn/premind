@@ -29,17 +29,22 @@ test("probe reports runtime, plugin, config, daemon, and delivery health", async
     {
       HOME: "/definitely-missing-premind-home",
       CLAUDE_PLUGIN_ROOT: "/tmp/premind-plugin",
+      PREMIND_STATE_DIR: "/definitely-missing-premind-state",
+      PREMIND_SOCKET_PATH: "/definitely-missing-premind-state/premind.sock",
     },
   );
   const value = JSON.parse(result.content[0].text);
   assert.deepEqual(value.plugin, { version: "0.2.0", root: "/tmp/premind-plugin" });
   assert.equal(value.runtime.requiredNode, ">=22.13.0");
   assert.equal(value.runtime.compatible, true);
-  assert.deepEqual(value.daemon, {
+  const { build, ...daemon } = value.daemon;
+  assert.deepEqual(daemon, {
     reachable: true,
     protocolVersion: 1,
     globallyDisabled: false,
+    lock: null,
   });
+  assert.match(build, /^daemon build: not running; this plugin is v\d+\.\d+\.\d+/);
   assert.equal(value.configSource, "schema defaults");
   assert.match(value.delivery, /Stop-boundary only/);
   assert.doesNotMatch(result.content[0].text, /secret/);
@@ -51,31 +56,88 @@ test("probe reports a redacted diagnostic when the daemon is unavailable", async
     async () => {
       throw new Error("private/session/path");
     },
-    { HOME: "/definitely-missing-premind-home" },
+    {
+      HOME: "/definitely-missing-premind-home",
+      PREMIND_STATE_DIR: "/definitely-missing-premind-state",
+      PREMIND_SOCKET_PATH: "/definitely-missing-premind-state/premind.sock",
+    },
   );
   const value = JSON.parse(result.content[0].text);
-  assert.deepEqual(value.daemon, {
+  const { build: _build, ...unavailable } = value.daemon;
+  assert.deepEqual(unavailable, {
     reachable: false,
     protocolVersion: null,
     globallyDisabled: null,
     error: "Premind daemon is unavailable.",
+    lock: null,
   });
   assert.equal(value.runtime.requiredNode, ">=22.13.0");
   assert.equal(value.configSource, "schema defaults");
   assert.doesNotMatch(result.content[0].text, /private\/session\/path/);
 });
 
+test("global controls refuse calls without explicit global confirmation", async () => {
+  const listed = await handleMcpRequest({ method: "tools/list" });
+  for (const name of ["enable", "disable"]) {
+    const definition = listed.tools.find((tool) => tool.name === name);
+    assert.match(definition.description, /globally, for every session and project/);
+    assert.match(definition.description, /only when the user explicitly asks/);
+    assert.deepEqual(definition.inputSchema.required, ["confirmGlobal"]);
+    for (const args of [{}, { confirmGlobal: false }]) {
+      const result = await handleMcpRequest(
+        { method: "tools/call", params: { name, arguments: args } },
+        async () => assert.fail("unconfirmed global control reached the daemon"),
+        {},
+      );
+      assert.equal(result.isError, true);
+      assert.match(result.content[0].text, /refused to (enable|disable) polling globally.*confirmGlobal: true/);
+    }
+  }
+});
+
+test("pause and resume act only on the bound Claude session", async () => {
+  const calls = [];
+  const ipc = async (type, payload) => {
+    calls.push({ type, payload });
+    return {};
+  };
+  const environment = { CLAUDE_CODE_SESSION_ID: "claude-session" };
+  const paused = await handleMcpRequest(
+    { method: "tools/call", params: { name: "pause", arguments: {} } },
+    ipc,
+    environment,
+  );
+  const resumed = await handleMcpRequest(
+    { method: "tools/call", params: { name: "resume", arguments: {} } },
+    ipc,
+    environment,
+  );
+  assert.deepEqual(calls, [
+    { type: "pauseSession", payload: { sessionId: "claude-session" } },
+    { type: "resumeSession", payload: { sessionId: "claude-session" } },
+  ]);
+  assert.match(paused.content[0].text, /this session only/);
+  assert.match(resumed.content[0].text, /Subscriptions are unchanged/);
+
+  const unbound = await handleMcpRequest(
+    { method: "tools/call", params: { name: "pause", arguments: {} } },
+    async () => assert.fail("unbound pause reached the daemon"),
+    {},
+  );
+  assert.match(unbound.content[0].text, /cannot verify this Claude session/);
+});
+
 test("global controls are model-callable and describe their daemon-wide effect", async () => {
   const calls = [];
   const result = await handleMcpRequest(
-    { method: "tools/call", params: { name: "disable", arguments: {} } },
+    { method: "tools/call", params: { name: "disable", arguments: { confirmGlobal: true } } },
     async (type, payload) => {
       calls.push({ type, payload });
       return { disabled: true };
     },
     {},
   );
-  assert.match(result.content[0].text, /disabled globally/i);
+  assert.match(result.content[0].text, /disabled globally, across all sessions and projects/i);
   assert.deepEqual(calls, [
     { type: "setGlobalDisabled", payload: { disabled: true } },
   ]);
