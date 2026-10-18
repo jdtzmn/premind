@@ -1,32 +1,85 @@
 # Native test infrastructure
 
-Run `npm run test:native:infra` with Node 22.13+ and installed repository dependencies.
-These tests do not need agent binaries, provider keys, or GitHub credentials.
+## Fast infrastructure checks
 
-- `sandbox.ts`: isolated HOME/config/workspace/state and short socket paths; explicit
-  environment allowlist, never copies personal configuration or credentials.
-- `process.ts`: real subprocess supervision, bounded output/deadlines, graceful and
-  forced process-group shutdown. Output assertions fail if the process has died.
-- `ipc.ts`: real newline-framed Unix socket exchange with a whole-operation deadline
-  and response size limit. Negative controls cover invalid JSON, EOF and timeouts.
-- `daemon.ts`: launches the unmodified production daemon source entrypoint with real
-  sockets and SQLite. A fixture `gh` executable exits without authentication or
-  network access. This is not an upstream-update fixture or a packaged-agent test.
+Run `npm run test:native:infra` with Node 22.13+ and repository dependencies.
+These tests need neither agent binaries nor provider/GitHub credentials.
 
-The daemon tests bootstrap each of Pi, Claude Code, OpenCode and Codex as protocol
-host identities. They exercise daemon-side compatibility and restart persistence,
-**not** actual native host execution, lifecycle callbacks, reminder consumption,
-reconnection, or delivery confirmation. Legacy requests in the persistence test
-are explicitly labelled test controls, not substitutes for integration tools.
+- `sandbox.ts`: isolated HOME/config/workspace/state, short sockets and an explicit
+  environment allowlist. Personal configuration and credentials are never copied.
+- `process.ts`: bounded subprocess output, readiness deadlines and process-group cleanup.
+- `ipc.ts`: real Unix socket framing, deadlines and response limits.
+- `daemon.ts`: production daemon source, sockets and SQLite; bootstrap identity and
+  restart persistence. Its `gh` shim deliberately cannot authenticate.
+- `jsonl.ts`: bounded host RPC, correlated responses, future-event listeners and
+  explicit malformed/truncated/dead-host failures.
+- `provider.ts`: external OpenAI-compatible SSE fixture. Receipts require the marker
+  in model-visible text; tool schemas, metadata and credentials cannot satisfy it.
+- `github.ts`: external GitHub API and credential fixture. A child-only fetch preload
+  redirects `api.github.com` to loopback and rejects other origins. Production daemon
+  policy, watcher, diffing, storage, handoff and host lifecycle code remain unchanged.
 
-All four native host drivers and their lifecycle scenarios remain unimplemented at
-this layer. No native host pass, skip, or unsupported exception is inferred from
-these infrastructure tests. See `docs/plans/native-agent-lifecycle-harness.md` for
-the stack and the evidence needed before claiming native coverage.
+## Installed Pi transport smoke
 
-Every fixture owns its sandbox and subprocesses. Tests stop processes before
-removing state. Startup failures terminate the child before surfacing diagnostics;
-the supervisor bounds captured output. Subsequent delivery scenarios must replace
-only external services with scripted fixtures, load packed production integrations,
-and prove a unique reminder marker reached the real model request before accepting
-a marker-dependent receipt.
+With actual Pi on PATH and Node 22.19+:
+
+```sh
+node --import tsx --test src/test/native/pi-smoke.native.ts
+```
+
+Missing Pi fails rather than skips. The driver disables discovered extensions,
+skills, templates, themes, MCP and context files; uses isolated configuration and a
+credential-free local model; waits for `agent_settled`; and closes stdin for orderly
+shutdown. The smoke restarts the host with its saved session and checks restored
+context in a real model request. Its marker intentionally comes from a user prompt:
+this control does **not** prove Premind reminder delivery.
+
+## Packed Premind explicit-delivery baseline
+
+Provide an absolute path to an extracted `npm pack` artifact with dependencies
+installed. Do not point at the source checkout. With Pi on PATH:
+
+```sh
+PREMIND_NATIVE_PACKAGE=/absolute/path/to/extracted/package \
+  node --import tsx --test src/test/native/pi-package.native.ts
+```
+
+The scenario loads the packed Pi extension and bundled daemon. A real Pi model/tool
+turn subscribes to the fixture PR; the first snapshot establishes a negative control.
+Only then does the external GitHub fixture publish a fresh unique comment marker.
+No user prompt, tool argument or schema supplies that marker. After the next real
+upstream poll, the public `/premind:deliver` command crosses the delivery boundary.
+
+Assertions require a marker-conditioned assistant receipt from an actual model
+request, the persisted production event, a covering subscription cursor and a
+confirmed handoff settlement. Production Pi acknowledges host enqueue, not model
+consumption: this test observes consumption separately and does not establish that
+acknowledgement occurs after consumption or globally exactly-once delivery.
+
+An earlier autonomous-idle attempt timed out without a receipt; its cause is not yet
+established. The passing explicit-delivery scenario is **not** evidence that idle
+delivery works. Keep an autonomous-idle regression separate rather than quietly
+claiming this command-boundary test covers it.
+
+Native lanes are separate from infrastructure checks. Reproducible package
+preparation, pinned host installation, CI wiring and lifecycle/fault scenarios remain.
+Use a fresh marker for every new delivery: a historical receipt or reminder cannot
+prove a later delivery after a lifecycle transition.
+
+## Coverage boundaries
+
+| Harness | Native scenarios at this layer | Still missing |
+| --- | --- | --- |
+| Pi | RPC/model transport and native resume control; packed explicit delivery | Autonomous idle, packed resume, child/switch/reload, fault matrix and CI |
+| Claude Code | None | Native driver and scenarios |
+| OpenCode | None | Native driver and scenarios |
+| Codex | None | Native driver and scenarios |
+
+Report execution outcomes separately from scenario existence. Bootstrap identities
+in daemon tests are not native four-host coverage. Missing hosts are not skips
+converted to passes or unsupported exceptions. See
+`docs/plans/native-agent-lifecycle-harness.md` for remaining proof obligations.
+
+Fixtures own cleanup before fallible startup, stop processes before removing state,
+and bound diagnostics. Model/GitHub fixtures replace external services only; no
+handwritten lifecycle callback or alternate daemon router proves native behavior.
