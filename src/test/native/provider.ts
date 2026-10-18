@@ -1,7 +1,18 @@
 import http from "node:http"
 import { once } from "node:events"
 
-/** External model fixture only. Receipts depend solely on visible message content. */
+type Message = { role?: string; content?: unknown }
+function inputText(message: Message): string {
+	// Our own previous receipt is never fresh input evidence. Every actual
+	// delivery scenario must additionally supply a new marker for that boundary.
+	if (message.role === "assistant") return ""
+	if (typeof message.content === "string") return message.content
+	if (!Array.isArray(message.content)) return ""
+	return message.content.filter((part) => part?.type === "text")
+		.map((part) => typeof part.text === "string" ? part.text : "").join("\n")
+}
+
+/** External model fixture only; receipts depend on visible, non-assistant text. */
 export async function startScriptedProvider(marker: string) {
 	if (marker.length < 16 || /\s/.test(marker)) throw new Error("Invalid reminder marker")
 	const observations: Array<{ markerObserved: boolean }> = []
@@ -22,20 +33,14 @@ export async function startScriptedProvider(marker: string) {
 			if (!Array.isArray(payload.messages) || payload.stream !== true || observations.length >= 32) {
 				throw new Error("Unsupported fixture request")
 			}
-			// Deliberately do not inspect tool schemas, request metadata, model names,
-			// or authentication headers: those are not model-visible reminder content.
-			const content = payload.messages.map((message: { content?: unknown }) => {
-				if (typeof message.content === "string") return message.content
-				if (!Array.isArray(message.content)) return ""
-				return message.content.filter((part: { type?: unknown }) => part?.type === "text")
-					.map((part: { text?: unknown }) => typeof part.text === "string" ? part.text : "").join("\n")
-			}).join("\n")
-			const markerObserved = content.includes(marker)
+			// Never inspect tool schemas, request metadata, model names or auth headers.
+			const markerObserved = payload.messages.map(inputText).join("\n").includes(marker)
 			observations.push({ markerObserved })
 			const tool = tools.shift()
-			const delta = tool ? { role: "assistant", tool_calls: [{ index: 0, id: `fixture-${observations.length}`, type: "function", function: {
-				name: tool.name, arguments: JSON.stringify(tool.arguments),
-			} }] } : { role: "assistant", content: markerObserved ? receipt : "No reminder marker observed." }
+			const delta = tool ? {
+				role: "assistant", tool_calls: [{ index: 0, id: `fixture-${observations.length}`, type: "function",
+					function: { name: tool.name, arguments: JSON.stringify(tool.arguments) } }],
+			} : { role: "assistant", content: markerObserved ? receipt : "No reminder marker observed." }
 			const chunk = (value: unknown) => `data: ${JSON.stringify(value)}\n\n`
 			const base = { id: `fixture-${observations.length}`, object: "chat.completion.chunk", created: 1, model: "premind-native-fixture" }
 			response.writeHead(200, { "content-type": "text/event-stream" })
