@@ -15,8 +15,7 @@ export function nativeJsonl(process: NativeProcess) {
 		for (const listener of listeners) listener(undefined, failure)
 	}
 	process.child.stdin.on("error", () => fail(new Error("Native host stdin failed")))
-	// A leader's exit can precede the final stdout data. Drain the pipe before
-	// rejecting outstanding requests; spawn errors have no output to drain.
+	// Drain final stdout before rejecting waits: leader exit can precede data.
 	process.exited.then((exit) => { if (exit.error) fail(new Error("Native host exited")) })
 	process.child.stdout.once("end", () => fail(new Error(buffer ? "Truncated native JSONL record" : "Native host exited")))
 	process.child.stdout.on("data", (chunk: string) => {
@@ -36,12 +35,13 @@ export function nativeJsonl(process: NativeProcess) {
 		}
 		if (buffer.length > limit) fail(new Error("Native JSONL record exceeds limit"))
 	})
-	function waitFor(predicate: (record: Record) => boolean, timeoutMs = 10_000) {
+	function waitFor(predicate: (record: Record) => boolean, timeoutMs = 10_000, signal?: AbortSignal) {
 		if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error("Invalid JSONL deadline")
 		return new Promise<Record>((resolve, reject) => {
 			const finish = (record?: Record, error?: Error) => {
 				clearTimeout(timer)
 				listeners.delete(check)
+				signal?.removeEventListener("abort", abort)
 				if (error) reject(error)
 				else resolve(record!)
 			}
@@ -50,9 +50,12 @@ export function nativeJsonl(process: NativeProcess) {
 				try { if (record && predicate(record)) finish(record) }
 				catch (error) { finish(undefined, error instanceof Error ? error : new Error("Native event predicate failed")) }
 			}
+			const abort = () => finish(undefined, new Error("Native JSONL wait aborted"))
 			const timer = setTimeout(() => finish(undefined, new Error("Native JSONL wait timed out")), timeoutMs)
 			listeners.add(check)
-			if (failure) finish(undefined, failure)
+			signal?.addEventListener("abort", abort, { once: true })
+			if (signal?.aborted) abort()
+			else if (failure) finish(undefined, failure)
 		})
 	}
 	return {
@@ -61,7 +64,6 @@ export function nativeJsonl(process: NativeProcess) {
 			if (failure) throw failure
 			if (pending >= 32) throw new Error("Native RPC request limit exceeded")
 			const id = randomUUID()
-			// Validate before creating a waiter: invalid local input cannot leak a timer.
 			const frame = `${JSON.stringify({ ...command, id })}\n`
 			if (frame.length > limit) throw new Error("Native RPC command exceeds limit")
 			const response = waitFor((record) => record.type === "response" && record.id === id, timeoutMs)
