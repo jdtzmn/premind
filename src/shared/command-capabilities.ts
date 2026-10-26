@@ -81,6 +81,37 @@ export type CapabilityException =
 	  }
 	| { kind: "host-naming"; reason: string };
 
+export type LifecycleBehaviorCoverage =
+	| { kind: "implemented" }
+	| Extract<CapabilityException, { kind: "deferred" }>;
+
+/**
+ * Missing-registration recovery is lifecycle behavior, not a command or tool.
+ * The user approved Pi-only recovery with shared safety checks; the remaining
+ * harnesses are deferred in #103, not permanently unsupported.
+ */
+export const sessionRecoveryCoverage = {
+	pi: { kind: "implemented" },
+	claude: {
+		kind: "deferred",
+		reason:
+			"Recovery remains gated: proof of the exact live Claude host incarnation is not yet supported and requires native lifecycle evidence.",
+		tracking: "#103",
+	},
+	opencode: {
+		kind: "deferred",
+		reason:
+			"Recovery migration and native OpenCode lifecycle proof are pending.",
+		tracking: "#103",
+	},
+	codex: {
+		kind: "deferred",
+		reason:
+			"Recovery remains gated: proof of the exact live Codex host incarnation is not yet supported and requires native lifecycle evidence.",
+		tracking: "#103",
+	},
+} as const satisfies Record<PremindHarness, LifecycleBehaviorCoverage>;
+
 /** Builds an `unsupported` exception from an approved host limitation. */
 export const unsupported = (limitation: HostLimitationId): CapabilityException => ({
 	kind: "unsupported",
