@@ -925,11 +925,28 @@ export class StateStore {
 	): { created: boolean; superseded: number } {
 		return this.transaction(() => {
 			const existing = this.getSession(payload.sessionId);
+			const { recoverOnly, ...registration } = payload;
+			if (recoverOnly) {
+				if (
+					!this.hasActiveClient(payload.clientId, now) ||
+					(payload.status !== "active" && payload.status !== "paused") ||
+					(existing &&
+						((existing.status !== "active" && existing.status !== "paused") ||
+							existing.client_id !== payload.clientId ||
+							existing.host !== (payload.host ?? "opencode") ||
+							existing.host_session_id !== (payload.hostSessionId ?? payload.sessionId)))
+				) {
+					throw new Error(`SESSION_MOVED: session cannot be recovered: ${payload.sessionId}`);
+				}
+				// Recovery is not registration replay: existing durable metadata and all
+				// delivery state win over the client's potentially stale attachment.
+				if (existing) return { created: false, superseded: 0 };
+			}
 			this.db
 				.prepare(
 					`
           INSERT INTO sessions (session_id, host, host_session_id, client_id, repo, branch, pr_number, is_primary, status, busy_state, last_delivered_event_seq, last_activity_at, created_at, updated_at)
-          VALUES (:sessionId, :host, :hostSessionId, :clientId, :repo, :branch, NULL, :isPrimary, :status, :busyState, 0, :now, :now, :now)
+          VALUES (:sessionId, :host, :hostSessionId, :clientId, :repo, :branch, NULL, :isPrimary, :status, :busyState, :cursor, :now, :now, :now)
           ON CONFLICT(session_id) DO UPDATE SET
             host = excluded.host,
             host_session_id = excluded.host_session_id,
@@ -944,10 +961,15 @@ export class StateStore {
         `,
 				)
 				.run({
-					...payload,
+					...registration,
 					host: payload.host ?? "opencode",
 					hostSessionId: payload.hostSessionId ?? payload.sessionId,
 					isPrimary: payload.isPrimary ? 1 : 0,
+					// A recreated legacy row must not replay historical events. Separate
+					// subscription cursors/handoffs (when present) remain untouched.
+					cursor: recoverOnly
+						? (this.db.prepare(`SELECT COALESCE(MAX(seq), 0) AS seq FROM pr_events`).get() as { seq: number }).seq
+						: 0,
 					now,
 				});
 			this.touchBranchWatcher(payload.repo, payload.branch, now);
@@ -1111,17 +1133,19 @@ export class StateStore {
 	}
 
 	releaseSessionOwner(sessionId: string, now = Date.now()): boolean {
-		const session = this.getSession(sessionId);
-		if (!session || session.status === "closed") return false;
-		this.db
-			.prepare(
-				`UPDATE sessions
-				 SET status = 'dormant', busy_state = 'idle', updated_at = :now
-				 WHERE session_id = :sessionId`,
-			)
-			.run({ sessionId, now });
-		this.refreshWatcherCounts(now);
-		return true;
+		return this.transaction(() => {
+			// End invalidates authority even when the session row was lost.
+			this.revokeSessionLeases(sessionId);
+			const result = this.db
+				.prepare(
+					`UPDATE sessions
+					 SET status = 'dormant', busy_state = 'idle', updated_at = :now
+					 WHERE session_id = :sessionId AND status != 'closed'`,
+				)
+				.run({ sessionId, now });
+			if ((result.changes as number) > 0) this.refreshWatcherCounts(now);
+			return (result.changes as number) > 0;
+		});
 	}
 
 	suspendClaudeSession(sessionId: string, now = Date.now()): boolean {
@@ -1155,14 +1179,22 @@ export class StateStore {
 	}
 
 	deleteSession(sessionId: string, now = Date.now()): boolean {
-		const result = this.db
-			.prepare(
-				`UPDATE sessions
-				 SET status = 'closed', busy_state = 'idle', updated_at = :now
-				 WHERE session_id = :sessionId AND status != 'closed'`,
-			)
-			.run({ sessionId, now });
-		if ((result.changes as number) === 0) return false;
+		return this.transaction(() => {
+			// Keep the lease tombstone even for missing/already-closed rows.
+			this.revokeSessionLeases(sessionId);
+			const result = this.db
+				.prepare(
+					`UPDATE sessions
+					 SET status = 'closed', busy_state = 'idle', updated_at = :now
+					 WHERE session_id = :sessionId AND status != 'closed'`,
+				)
+				.run({ sessionId, now });
+			if ((result.changes as number) > 0) this.refreshWatcherCounts(now);
+			return (result.changes as number) > 0;
+		});
+	}
+
+	private revokeSessionLeases(sessionId: string): void {
 		this.db
 			.prepare(
 				`UPDATE session_daemon_leases
@@ -1171,8 +1203,6 @@ export class StateStore {
 				 WHERE session_id = ?`,
 			)
 			.run(sessionId);
-		this.refreshWatcherCounts(now);
-		return true;
 	}
 
 	upsertWorktreeBinding(

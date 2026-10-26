@@ -193,6 +193,28 @@ export class PremindDaemonClient {
     this.attachedSessions.set(payload.sessionId, { type: "registerSession", payload });
   }
 
+  async recoverSession(sessionId: string) {
+    const attachment = this.attachedSessions.get(sessionId);
+    const lease = this.sessionLeases.get(sessionId);
+    if (!lease || !attachment || attachment.type !== "registerSession") {
+      throw new Error("SESSION_MOVED: recovery requires an existing lease and registration");
+    }
+    // Do not use requestWithRetry: reconnect replays ordinary registrations and
+    // can claim a new authority. Recovery must fail closed, including on transport
+    // failure, daemon replacement, and old daemons rejecting the strict flag.
+    await this.initializeProtocol();
+    if (this.sessionLeases.get(sessionId) !== lease) {
+      throw new Error("SESSION_MOVED: recovery authority changed during initialization");
+    }
+    const response = await this.request({
+      type: "registerSession",
+      protocolVersion: this.protocolVersion,
+      sessionLease: lease,
+      payload: { ...attachment.payload, clientId: this.clientId, recoverOnly: true },
+    });
+    return registerSessionResponseSchema.parse(response);
+  }
+
 
   async registerCodexSession(payload: CodexSessionPayload) {
     const response = await this.requestWithRetry({

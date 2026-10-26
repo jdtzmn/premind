@@ -75,6 +75,8 @@ export const registerSessionPayloadSchema = z
     hostSessionId: z.string().min(1).optional(),
     status: sessionStatusSchema.default("active"),
     busyState: busyStateSchema.default("idle"),
+    // Recovery may only reuse an existing authority; old strict daemons reject it.
+    recoverOnly: z.literal(true).optional(),
   })
   .strict();
 

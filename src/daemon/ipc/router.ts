@@ -76,7 +76,8 @@ export class Router {
 
 	async handle(request: RoutedPremindRequest): Promise<PremindResponse> {
 		if (
-			request.protocolVersion === 2 &&
+			(request.protocolVersion === 2 ||
+				(request.type === "registerSession" && request.payload.recoverOnly === true)) &&
 			SESSION_LEASE_REQUIRED_OPERATIONS.has(request.type) &&
 			!request.sessionLease
 		) {
@@ -132,9 +133,13 @@ export class Router {
 				case "registerSession": {
 					let registered;
 					try {
-						registered = this.withAttachedSessionLease(request, () =>
-							this.store.registerSession(request.payload),
-						);
+						registered = this.withAttachedSessionLease(request, () => {
+							if (request.payload.recoverOnly &&
+								request.sessionLease?.clientIncarnationNonce !== request.payload.clientId) {
+								throw new Error("SESSION_MOVED: recovery client does not own the lease");
+							}
+							return this.store.registerSession(request.payload);
+						});
 					} catch (error) {
 						return this.sessionLeaseFailure(error);
 					}
