@@ -89,7 +89,8 @@ for (const operation of ["releaseSessionOwner", "deleteSession"] as const) {
   test(`late client recovery after ${operation} never claims or re-registers ordinarily`, async (t) => {
     const { store, client, registration, counts, leaseRow } = await setup(t);
     await client.registerSession(registration);
-    store[operation]("session");
+    if (operation === "releaseSessionOwner") await client.releaseSessionOwner("session");
+    else store.deleteSession("session");
     const before = counts();
     const lease = leaseRow();
     await assert.rejects(client.recoverSession("session"), /SESSION_MOVED/);
@@ -104,5 +105,41 @@ test("transport failure in recoverSession cannot start a daemon, reconnect, clai
   const before = counts();
   await close();
   await assert.rejects(client.recoverSession("session"), (error: unknown) => error instanceof Error && "domain" in error && error.domain === "transport");
+  assert.deepEqual(counts(), before);
+});
+
+
+test("stale client End sends only its retained lease and never reclaims or replays", async (t) => {
+  const { client, store, registration, counts, leaseRow } = await setup(t);
+  await client.registerSession(registration);
+  const leases = (client as unknown as { sessionLeases: Map<string, import("../shared/schema.ts").SessionLeaseToken> }).sessionLeases;
+  const old = leases.get("session")!;
+  const next = store.transferSessionLease(old, { ownerInstanceId: "replacement", clientIncarnationNonce: "B" });
+  const before = counts();
+  const row = leaseRow();
+  await assert.rejects(client.releaseSessionOwner("session"), /SESSION_MOVED/);
+  assert.deepEqual(counts(), before);
+  assert.deepEqual(leaseRow(), row);
+  assert.equal(store.validateSessionLease(next), true);
+  assert.equal(store.getSession("session")?.status, "active");
+});
+
+test("End without a retained modern lease cannot claim cleanup authority", async (t) => {
+  const { client, registration, counts, leaseRow } = await setup(t);
+  await client.registerSession(registration);
+  (client as unknown as { sessionLeases: Map<string, unknown> }).sessionLeases.clear();
+  const before = counts();
+  const row = leaseRow();
+  await assert.rejects(client.releaseSessionOwner("session"), /SESSION_MOVED/);
+  assert.deepEqual(counts(), before);
+  assert.deepEqual(leaseRow(), row);
+});
+
+test("End transport failure never reconnects, claims or replays attachments", async (t) => {
+  const { client, close, registration, counts } = await setup(t);
+  await client.registerSession(registration);
+  await close();
+  const before = counts();
+  await assert.rejects(client.releaseSessionOwner("session"), (error: unknown) => error instanceof Error && "domain" in error && error.domain === "transport");
   assert.deepEqual(counts(), before);
 });

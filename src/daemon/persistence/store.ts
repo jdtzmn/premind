@@ -85,6 +85,7 @@ type SessionLeaseRow = {
 	session_id: string;
 	owner_instance_id: string | null;
 	generation: number;
+	storage_epoch: number;
 	client_incarnation_nonce: string | null;
 	lease_token_hash: string | null;
 	expires_at: number | null;
@@ -632,6 +633,7 @@ export class StateStore {
 				.get(claim.sessionId) as SessionLeaseRow | undefined;
 			const active =
 				existing !== undefined &&
+				existing.storage_epoch === this.getStorageEpoch() &&
 				existing.owner_instance_id !== null &&
 				existing.expires_at !== null &&
 				existing.expires_at > now;
@@ -651,20 +653,22 @@ export class StateStore {
 			this.db
 				.prepare(
 					`INSERT INTO session_daemon_leases
-					 (session_id, owner_instance_id, generation, client_incarnation_nonce, lease_token_hash, expires_at)
-					 VALUES (:sessionId, :ownerInstanceId, :generation, :clientIncarnationNonce, :leaseTokenHash, :expiresAt)
+					 (session_id, owner_instance_id, generation, client_incarnation_nonce, lease_token_hash, expires_at, storage_epoch)
+					 VALUES (:sessionId, :ownerInstanceId, :generation, :clientIncarnationNonce, :leaseTokenHash, :expiresAt, :storageEpoch)
 					 ON CONFLICT(session_id) DO UPDATE SET
 					   owner_instance_id = excluded.owner_instance_id,
 					   generation = excluded.generation,
 					   client_incarnation_nonce = excluded.client_incarnation_nonce,
 					   lease_token_hash = excluded.lease_token_hash,
-					   expires_at = excluded.expires_at`,
+					   expires_at = excluded.expires_at,
+					   storage_epoch = excluded.storage_epoch`,
 				)
 				.run({
 					...claim,
 					generation,
 					leaseTokenHash: hashLeaseToken(leaseToken),
 					expiresAt,
+					storageEpoch: this.getStorageEpoch(),
 				});
 			this.db.exec("COMMIT");
 			return { ...claim, generation, leaseToken, claimedAt: now, expiresAt };
@@ -680,6 +684,7 @@ export class StateStore {
 				.prepare(
 					`SELECT 1 FROM session_daemon_leases
 					 WHERE session_id = :sessionId
+					   AND storage_epoch = (SELECT storage_epoch FROM storage_metadata WHERE singleton = 1)
 					   AND owner_instance_id = :ownerInstanceId
 					   AND generation = :generation
 					   AND client_incarnation_nonce = :clientIncarnationNonce
@@ -719,6 +724,7 @@ export class StateStore {
 			.prepare(
 				`UPDATE session_daemon_leases SET expires_at = :expiresAt
 				 WHERE session_id = :sessionId
+				   AND storage_epoch = (SELECT storage_epoch FROM storage_metadata WHERE singleton = 1)
 				   AND owner_instance_id = :ownerInstanceId
 				   AND generation = :generation
 				   AND client_incarnation_nonce = :clientIncarnationNonce
@@ -750,6 +756,7 @@ export class StateStore {
 					     lease_token_hash = :nextLeaseTokenHash,
 					     expires_at = :expiresAt
 					 WHERE session_id = :sessionId
+					   AND storage_epoch = (SELECT storage_epoch FROM storage_metadata WHERE singleton = 1)
 					   AND owner_instance_id = :ownerInstanceId
 					   AND generation = :generation
 					   AND client_incarnation_nonce = :clientIncarnationNonce
@@ -790,6 +797,7 @@ export class StateStore {
 				 SET owner_instance_id = NULL, client_incarnation_nonce = NULL,
 				     lease_token_hash = NULL, expires_at = NULL
 				 WHERE session_id = :sessionId
+				   AND storage_epoch = (SELECT storage_epoch FROM storage_metadata WHERE singleton = 1)
 				   AND owner_instance_id = :ownerInstanceId
 				   AND generation = :generation
 				   AND client_incarnation_nonce = :clientIncarnationNonce
@@ -1132,8 +1140,18 @@ export class StateStore {
 		return { updated: true, revived };
 	}
 
-	releaseSessionOwner(sessionId: string, now = Date.now()): boolean {
+	releaseSessionOwner(sessionId: string, now = Date.now(), lease?: SessionLeaseToken): boolean {
 		return this.transaction(() => {
+			if (lease) {
+				if (lease.sessionId !== sessionId || !this.validateSessionLease(lease, now)) {
+					throw new Error(`SESSION_MOVED: ${sessionId}`);
+				}
+			} else if (this.db.prepare(
+				`SELECT 1 FROM session_daemon_leases WHERE session_id = ? AND owner_instance_id IS NOT NULL`,
+			).get(sessionId)) {
+				// Legacy cleanup has no proof of ownership, even after lease expiry.
+				throw new Error(`SESSION_MOVED: ${sessionId}`);
+			}
 			// End invalidates authority even when the session row was lost.
 			this.revokeSessionLeases(sessionId);
 			const result = this.db
@@ -1824,11 +1842,7 @@ export class StateStore {
 	 */
 	pruneClosedSessions(retentionMs: number, now = Date.now()): number {
 		const cutoff = now - retentionMs;
-		const result = this.db
-			.prepare(
-				`DELETE FROM sessions WHERE status = 'closed' AND updated_at < :cutoff`,
-			)
-			.run({ cutoff });
+		const removed = this.pruneClosedSessionRows(cutoff);
 		// Drop pauses whose session never came back within the same retention.
 		this.db
 			.prepare(
@@ -1837,7 +1851,7 @@ export class StateStore {
 				   AND session_id NOT IN (SELECT session_id FROM sessions)`,
 			)
 			.run({ cutoff });
-		return result.changes as number;
+		return removed;
 	}
 
 	pruneClosedOrOrphanedSessions(
@@ -1859,16 +1873,30 @@ export class StateStore {
 				)
 				.get({ cutoff }) as { count: number }
 		).count;
-		const deletedSessions = this.db
-			.prepare(
-				`DELETE FROM sessions
-				 WHERE status = 'closed' AND updated_at < :cutoff`,
-			)
-			.run({ cutoff });
+		const deletedSessions = this.pruneClosedSessionRows(cutoff);
 		return {
-			sessions: deletedSessions.changes as number,
+			sessions: deletedSessions,
 			reminderBatches: deletedBatches,
 		};
+	}
+
+	private pruneClosedSessionRows(cutoff: number): number {
+		return this.transaction(() => {
+			// A closed row may predate End revocation. Keep its lease tombstone
+			// after deletion so a previously rejected recovery stays rejected.
+			this.db.prepare(
+				`UPDATE session_daemon_leases
+				 SET owner_instance_id = NULL, client_incarnation_nonce = NULL,
+				     lease_token_hash = NULL, expires_at = NULL
+				 WHERE session_id IN (
+				   SELECT session_id FROM sessions
+				   WHERE status = 'closed' AND updated_at < :cutoff
+				 )`,
+			).run({ cutoff });
+			return this.db.prepare(
+				`DELETE FROM sessions WHERE status = 'closed' AND updated_at < :cutoff`,
+			).run({ cutoff }).changes as number;
+		});
 	}
 
 	/**
@@ -3886,7 +3914,8 @@ export class StateStore {
         generation INTEGER NOT NULL,
         client_incarnation_nonce TEXT,
         lease_token_hash TEXT,
-        expires_at INTEGER
+        expires_at INTEGER,
+        storage_epoch INTEGER NOT NULL DEFAULT 0
       );
       CREATE TABLE IF NOT EXISTS legacy_proxy_session_leases (
         session_id TEXT PRIMARY KEY,
@@ -4110,6 +4139,14 @@ export class StateStore {
         paused_at INTEGER NOT NULL
       );
     `);
+
+		// Historical leases have unknown provenance; never backfill current authority.
+		const sessionLeaseColumns = this.db
+			.prepare("PRAGMA table_info(session_daemon_leases)")
+			.all() as Array<{ name: string }>;
+		if (!sessionLeaseColumns.some((column) => column.name === "storage_epoch")) {
+			this.db.exec("ALTER TABLE session_daemon_leases ADD COLUMN storage_epoch INTEGER NOT NULL DEFAULT 0");
+		}
 
 		const sessionColumns = this.db
 			.prepare(`PRAGMA table_info(sessions)`)

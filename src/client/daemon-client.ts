@@ -244,9 +244,20 @@ export class PremindDaemonClient {
   }
 
   async releaseSessionOwner(sessionId: string) {
-    const response = await this.requestWithRetry({
+    const lease = this.sessionLeases.get(sessionId);
+    // Cleanup must not reconnect/replay registrations or claim new authority.
+    await this.initializeProtocol();
+    if (this.sessionLeases.get(sessionId) !== lease ||
+        (lease && this.protocolVersion !== PROTOCOL_V2) ||
+        (!lease && this.protocolVersion === PROTOCOL_V2 && this.attachedSessions.has(sessionId))) {
+      throw new Error("SESSION_MOVED: cleanup requires the retained session lease");
+    }
+    const response = await this.request({
       type: "releaseSessionOwner",
-      protocolVersion: PREMIND_PROTOCOL_VERSION,
+      // Host-owned legacy sessions have no lease; the store rejects this path
+      // whenever any modern owner exists. Never borrow or claim its authority.
+      protocolVersion: lease ? PROTOCOL_V2 : 1,
+      ...(lease ? { sessionLease: lease } : {}),
       payload: { sessionId },
     });
     return releaseSessionOwnerResponseSchema.parse(response);

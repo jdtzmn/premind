@@ -29,6 +29,7 @@ const SESSION_LEASE_REQUIRED_OPERATIONS = new Set([
 	"updateSessionState",
 	"unregisterSession",
 	"deleteSession",
+	"releaseSessionOwner",
 	"pauseSession",
 	"resumeSession",
 	"activateWorktree",
@@ -243,7 +244,14 @@ export class Router {
 						),
 					});
 				case "releaseSessionOwner": {
-					const released = this.store.releaseSessionOwner(request.payload.sessionId);
+					let released;
+					try {
+						released = this.withAttachedSessionLease(request, () =>
+							this.store.releaseSessionOwner(request.payload.sessionId, Date.now(), request.sessionLease),
+						);
+					} catch (error) {
+						return this.sessionLeaseFailure(error);
+					}
 					if (!released)
 						return this.fail(
 							"SESSION_NOT_FOUND",

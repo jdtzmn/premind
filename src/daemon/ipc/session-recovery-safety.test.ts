@@ -91,14 +91,14 @@ test("missing row repair retains separately durable state and starts legacy curs
 
 for (const host of ["pi", "claude", "opencode", "codex"] as const) {
   test(`shared recovery preserves active/paused authority for ${host}`, async (t) => {
-    const { store, db, recover, loseRow } = setup(t);
+    const { store, db, recover, loseRow, lease } = setup(t);
     db.prepare("UPDATE sessions SET host = ?, status = 'paused'").run(host);
     assert.equal((await recover(undefined, { host })).ok, true);
     assert.equal(store.getSession("session")?.status, "paused");
     loseRow();
     assert.equal((await recover(undefined, { host })).ok, true);
     assert.equal(store.getSession("session")?.host, host);
-    store.releaseSessionOwner("session");
+    store.releaseSessionOwner("session", Date.now(), lease);
     moved(await recover(undefined, { host }));
   });
 }
@@ -130,7 +130,7 @@ for (const operation of ["releaseSessionOwner", "deleteSession"] as const) {
     test(`${operation} permanently invalidates recovery with ${missing ? "missing" : "existing"} row`, async (t) => {
       const { store, lease, recover, rows, loseRow } = setup(t);
       if (missing) loseRow();
-      assert.equal(store[operation]("session"), !missing);
+      assert.equal((operation === "releaseSessionOwner" ? store.releaseSessionOwner("session", Date.now(), lease) : store.deleteSession("session")), !missing);
       assert.equal(store.validateSessionLease(lease), false);
       moved(await recover());
       store.pruneClosedSessions(0, Date.now() + 1);
@@ -144,7 +144,7 @@ for (const operation of ["releaseSessionOwner", "deleteSession"] as const) {
   }
   test(`${operation} rolls back both authority invalidation and lifecycle change`, (t) => {
     const { store, lease } = setup(t);
-    assert.throws(() => store.transaction(() => { store[operation]("session"); throw new Error("rollback"); }), /rollback/);
+    assert.throws(() => store.transaction(() => { (operation === "releaseSessionOwner" ? store.releaseSessionOwner("session", Date.now(), lease) : store.deleteSession("session")); throw new Error("rollback"); }), /rollback/);
     assert.equal(store.validateSessionLease(lease), true);
     assert.equal(store.getSession("session")?.status, "active");
   });
@@ -200,7 +200,7 @@ test("End between preliminary validation and recovery write is rechecked transac
   let first = true;
   store.validateSessionLease = (lease, now) => {
     const valid = validate(lease, now);
-    if (first) { first = false; store.releaseSessionOwner("session"); }
+    if (first) { first = false; store.releaseSessionOwner("session", Date.now(), lease); }
     return valid;
   };
   moved(await recover());
