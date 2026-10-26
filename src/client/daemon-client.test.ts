@@ -212,6 +212,8 @@ describe("PremindDaemonClient Codex operations", () => {
     const requests: Request[] = [];
     const testClient = client as unknown as {
       requestWithRetry: (request: Request) => Promise<unknown>;
+      request: (request: Request) => Promise<unknown>;
+      initializeProtocol: () => Promise<void>;
     };
     testClient.requestWithRetry = async (request) => {
       requests.push(request);
@@ -228,6 +230,8 @@ describe("PremindDaemonClient Codex operations", () => {
           throw new Error(`unexpected request: ${request.type}`);
       }
     };
+    testClient.request = testClient.requestWithRetry;
+    testClient.initializeProtocol = async () => {};
 
     await client.registerCodexSession({
       sessionId: "codex:session-1",

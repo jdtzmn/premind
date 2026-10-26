@@ -133,7 +133,9 @@ export class LegacyV1ProxyRouter {
         ...request,
         // Protocol v2 requires a session lease that host-owned sessions never
         // hold, so forward their requests with v1 semantics.
-        protocolVersion: isHostOwnedSession ? 1 : 2,
+        // Never borrow the current proxy lease for an unauthenticated old End.
+        // The store permits legacy cleanup only when no modern lease is owned.
+        protocolVersion: isHostOwnedSession || request.type === "releaseSessionOwner" ? 1 : 2,
       } as RoutedPremindRequest),
     );
   }
