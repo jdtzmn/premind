@@ -1,3 +1,7 @@
+import {
+	createSessionRecovery,
+	type RecoverableSessionOperation,
+} from "../shared/session-recovery.ts";
 import { PREMIND_VERSION_LABEL } from "../shared/version.ts";
 import { renderCurrentStatus } from "../shared/status-view.ts";
 import { commandCapabilities } from "../shared/command-capabilities.ts";
@@ -72,6 +76,7 @@ type DaemonClientLike = {
     }>;
 	unsubscribe: (payload: UnsubscribePayload) => Promise<unknown>;
 	setGlobalDisabled: (disabled: boolean) => Promise<{ disabled: boolean }>;
+	recoverSession?: (sessionId: string) => Promise<unknown>;
 	updateSessionState: (payload: {
 		sessionId: string;
 		busyState: "busy" | "idle";
@@ -291,6 +296,14 @@ const formatStatusbar = (
 	return undefined;
 };
 
+type PiSessionContext = {
+	cwd: string;
+	sessionManager?: {
+		getSessionFile?: () => string | undefined;
+		getSessionId?: () => string;
+	};
+};
+
 const getPiSessionId = (ctx: {
 	cwd: string;
 	sessionManager?: { getSessionFile?: () => string | undefined };
@@ -346,6 +359,16 @@ export const createPremindPiExtension = (
 		let sessionGeneration = 0;
 		let config = normalizePremindPiConfig(dependencies.config);
 		let currentSessionId: string | undefined;
+		let sessionEnded = false;
+		let matchesSessionContext: ((ctx: PiSessionContext) => boolean) | undefined;
+		let attachment: {
+			client: DaemonClientLike;
+			sessionId: string;
+			requireCurrent: (ctx: PiSessionContext) => void;
+			recovery: ReturnType<typeof createSessionRecovery>;
+			ready: Promise<void>;
+			initialMutation?: Promise<unknown>;
+		} | undefined;
 
 		const clearHeartbeat = () => {
 			if (heartbeatTimer) clearInterval(heartbeatTimer);
@@ -359,41 +382,99 @@ export const createPremindPiExtension = (
 
 		const getClient = () => sessionClient ?? createDaemonClient();
 
-		const attachPiSession = async (ctx: {
-			cwd: string;
-			sessionManager?: { getSessionFile?: () => string | undefined };
-		}) => {
-			const client = sessionClient ?? createDaemonClient();
-			const sessionId = currentSessionId ?? getPiSessionId(ctx);
-			const lease = await client.registerClient(ctx.cwd, SESSION_SOURCE);
-			const git = await detectGit(ctx.cwd);
-			await client.registerSession({
-				sessionId,
-				host: "pi",
-				repo: git.repo,
-				branch: git.branch,
-				isPrimary: true,
-				status: "active",
-				busyState: "idle",
-			});
+		const attachPiSession = (ctx: PiSessionContext) => {
+			if (sessionEnded || !config.enabled || (matchesSessionContext && !matchesSessionContext(ctx)))
+				throw new Error("Session recovery context is no longer current");
+			const generation = sessionGeneration;
+			const client = createDaemonClient();
+			const sessionId = getPiSessionId(ctx);
+			const hostSessionId = ctx.sessionManager?.getSessionId?.();
+			const matchesContext = (candidate: PiSessionContext) =>
+				getPiSessionId(candidate) === sessionId &&
+				candidate.sessionManager?.getSessionId?.() === hostSessionId;
+			// Retain the live host identity even if a failed initial attempt is discarded.
+			matchesSessionContext ??= (candidate) => matchesContext(ctx) && matchesContext(candidate);
+			const isCurrent = () =>
+				!sessionEnded && config.enabled && generation === sessionGeneration &&
+				currentSessionId === sessionId && sessionClient === client &&
+				matchesContext(ctx);
+			const requireCurrent = (candidate: PiSessionContext) => {
+				if (!isCurrent() || !matchesContext(candidate))
+					throw new Error("Session recovery context is no longer current");
+			};
 			sessionClient = client;
 			currentSessionId = sessionId;
-			clearHeartbeat();
-			const heartbeatMs = lease.heartbeatMs ?? DEFAULT_HEARTBEAT_MS;
-			heartbeatTimer = setInterval(() => {
-				void client.heartbeat().catch(() => {});
-			}, heartbeatMs);
-			heartbeatTimer.unref?.();
-			return { client, sessionId };
+			const recovery = createSessionRecovery({
+				isCurrent,
+				reattach: async () => {
+					requireCurrent(ctx);
+					// Never acquire a new lease or use ordinary registration to repair.
+					await client.recoverSession!(sessionId);
+				},
+			});
+			// Publish the attachment before starting stages that may throw synchronously.
+			const current: NonNullable<typeof attachment> = {
+				client, sessionId, recovery, requireCurrent, ready: Promise.resolve(),
+			};
+			attachment = current;
+			const mutateInitial = async <T>(mutate: () => Promise<T>): Promise<T> => {
+				const mutation = mutate();
+				current.initialMutation = mutation;
+				try {
+					return await mutation;
+				} finally {
+					current.initialMutation = undefined;
+				}
+			};
+			current.ready = (async () => {
+				requireCurrent(ctx);
+				const lease = await mutateInitial(() => client.registerClient(ctx.cwd, SESSION_SOURCE));
+				requireCurrent(ctx);
+				const git = await detectGit(ctx.cwd);
+				requireCurrent(ctx);
+				await mutateInitial(() => client.registerSession({
+					sessionId,
+					host: "pi",
+					repo: git.repo,
+					branch: git.branch,
+					isPrimary: true,
+					status: "active",
+					busyState: "idle",
+				}));
+				requireCurrent(ctx);
+				clearHeartbeat();
+				const heartbeatMs = lease.heartbeatMs ?? DEFAULT_HEARTBEAT_MS;
+				heartbeatTimer = setInterval(() => {
+					void client.heartbeat().catch(() => {});
+				}, heartbeatMs);
+				heartbeatTimer.unref?.();
+			})();
+			// Observe ready even when the caller fails its identity check before awaiting it.
+			void current.ready.catch(() => {
+				if (attachment === current && isCurrent()) {
+					recovery.invalidate();
+					attachment = undefined;
+				}
+			});
+			return current;
 		};
-		const ensurePiSessionAttached = async (ctx: {
-			cwd: string;
-			sessionManager?: { getSessionFile?: () => string | undefined };
-		}) => {
-			if (sessionClient && currentSessionId) {
-				return { client: sessionClient, sessionId: currentSessionId };
-			}
-			return attachPiSession(ctx);
+		const runSessionOperation = async <T>(
+			ctx: PiSessionContext,
+			operation: RecoverableSessionOperation,
+			action: (client: DaemonClientLike, sessionId: string) => Promise<T>,
+		): Promise<T> => {
+			// Capture once, before any await. Late work must never adopt a replacement.
+			const current = attachment ?? attachPiSession(ctx);
+			current.requireCurrent(ctx);
+			await current.ready;
+			const dispatch = () => {
+				current.requireCurrent(ctx);
+				return action(current.client, current.sessionId);
+			};
+			// Old clients fail closed with the original missing-registration error.
+			return current.client.recoverSession
+				? current.recovery.run(operation, dispatch)
+				: dispatch();
 		};
 
 		const getStatusText = async (ctx: { cwd: string; sessionManager?: { getSessionFile?: () => string | undefined } }) => {
@@ -456,9 +537,8 @@ export const createPremindPiExtension = (
 			},
 			paused: boolean,
 		) => {
-			const { client, sessionId } = await ensurePiSessionAttached(ctx);
-			if (paused) await client.pauseSession(sessionId);
-			else await client.resumeSession(sessionId);
+			await runSessionOperation(ctx, paused ? "pauseSession" : "resumeSession",
+				(client, sessionId) => paused ? client.pauseSession(sessionId) : client.resumeSession(sessionId));
 			return paused ? SESSION_PAUSED_MESSAGE : SESSION_RESUMED_MESSAGE;
 		};
 
@@ -619,12 +699,10 @@ export const createPremindPiExtension = (
 			}
 		};
 
-		const markBusyState = async (busyState: "busy" | "idle") => {
-			if (!currentSessionId || !sessionClient) return;
-			await sessionClient.updateSessionState({
-				sessionId: currentSessionId,
-				busyState,
-			});
+		const markBusyState = async (ctx: PiSessionContext, busyState: "busy" | "idle") => {
+			if (!attachment) return;
+			await runSessionOperation(ctx, "updateSessionState", (client, sessionId) =>
+				client.updateSessionState({ sessionId, busyState }));
 		};
 
 		const pollStatus = async (
@@ -699,23 +777,29 @@ export const createPremindPiExtension = (
 		);
 
 		pi.on("session_start", async (_event, ctx) => {
+			attachment?.recovery.invalidate();
+			attachment = undefined;
+			matchesSessionContext = undefined;
+			sessionEnded = true;
 			const generation = ++sessionGeneration;
+			sessionClient = undefined;
+			currentSessionId = undefined;
 			clearHeartbeat();
 			clearStatusPoll();
+			const projectConfig = await loadProjectConfig(ctx);
+			if (generation !== sessionGeneration) return;
 			config = normalizePremindPiConfig({
 				...dependencies.config,
-				...(await loadProjectConfig(ctx)),
+				...projectConfig,
 			});
+			sessionEnded = false;
 			if (!config.enabled) {
 				setStatus(ctx, `${PR_ICON} disabled`);
 				return;
 			}
 			try {
-				const { client, sessionId } = await attachPiSession(ctx);
-				await client.activateWorktree({
-					sessionId,
-					path: ctx.cwd,
-				});
+				await runSessionOperation(ctx, "activateWorktree", (client, sessionId) =>
+					client.activateWorktree({ sessionId, path: ctx.cwd }));
 				await refreshStatusbar(ctx, generation);
 				if (generation !== sessionGeneration) return;
 				startStatusPoll(ctx, generation);
@@ -730,17 +814,17 @@ export const createPremindPiExtension = (
 			}
 		});
 
-		pi.on("agent_start", async () => {
+		pi.on("agent_start", async (_event, ctx) => {
 			try {
-				await markBusyState("busy");
+				await markBusyState(ctx, "busy");
 			} catch {
 				// Busy-state updates are advisory; status/debug commands can surface daemon health.
 			}
 		});
 
-		pi.on("agent_end", async () => {
+		pi.on("agent_end", async (_event, ctx) => {
 			try {
-				await markBusyState("idle");
+				await markBusyState(ctx, "idle");
 			} catch {
 				// Busy-state updates are advisory; status/debug commands can surface daemon health.
 			}
@@ -769,6 +853,12 @@ export const createPremindPiExtension = (
 		});
 
 		pi.on("session_shutdown", async (_event, ctx) => {
+			const pending = attachment;
+			pending?.recovery.invalidate();
+			const mutation = pending?.initialMutation;
+			attachment = undefined;
+			matchesSessionContext = undefined;
+			sessionEnded = true;
 			sessionGeneration++;
 			clearHeartbeat();
 			clearStatusPoll();
@@ -779,6 +869,9 @@ export const createPremindPiExtension = (
 			setStatus(ctx, undefined);
 
 			if (!client) return;
+			// Only wait for a dispatched mutation (including registerSession's lease claim),
+			// never read-only Git discovery. Invalidation fences its later continuation.
+			await mutation?.catch(() => {});
 			try {
 				// Pi fires session_shutdown for reload, quit, new, resume, and fork.
 				// Release ownership instead of deleting the session: a dormant
@@ -908,8 +1001,8 @@ export const createPremindPiExtension = (
 					return;
 				}
 				try {
-					const { client, sessionId } = await ensurePiSessionAttached(ctx);
-					await client.activateWorktree({ sessionId, path });
+					await runSessionOperation(ctx, "activateWorktree", (client, sessionId) =>
+						client.activateWorktree({ sessionId, path }));
 					ctx.ui.notify(`premind set active checkout ${path}.`, "info");
 				} catch (error) {
 					ctx.ui.notify(
@@ -925,8 +1018,8 @@ export const createPremindPiExtension = (
 			handler: async (args, ctx) => {
 				try {
 					const subscription = parseSubscriptionArguments(args);
-					const { client, sessionId } = await ensurePiSessionAttached(ctx);
-					await client.subscribe({ sessionId, ...subscription });
+					await runSessionOperation(ctx, "subscribe", (client, sessionId) =>
+						client.subscribe({ sessionId, ...subscription }));
 					ctx.ui.notify(
 						`premind subscribed to ${subscription.repo ?? "active worktree"}#${subscription.prNumber}.`,
 						"info",
@@ -945,8 +1038,8 @@ export const createPremindPiExtension = (
 			handler: async (args, ctx) => {
 				try {
 					const subscription = parseSubscriptionArguments(args);
-					const { client, sessionId } = await ensurePiSessionAttached(ctx);
-					await client.unsubscribe({ sessionId, ...subscription });
+					await runSessionOperation(ctx, "unsubscribe", (client, sessionId) =>
+						client.unsubscribe({ sessionId, ...subscription }));
 					ctx.ui.notify(
 						`premind unsubscribed from ${subscription.repo ?? "active worktree"}#${subscription.prNumber}.`,
 						"info",
@@ -1027,8 +1120,8 @@ export const createPremindPiExtension = (
 			],
 			parameters: Type.Object({ path: Type.String({ minLength: 1 }) }),
 			async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-				const { client, sessionId } = await ensurePiSessionAttached(ctx);
-				await client.activateWorktree({ sessionId, path: params.path });
+				await runSessionOperation(ctx, "activateWorktree", (client, sessionId) =>
+					client.activateWorktree({ sessionId, path: params.path }));
 				return {
 					content: [
 						{
@@ -1057,8 +1150,8 @@ export const createPremindPiExtension = (
 				),
 			}),
 			async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-				const { client, sessionId } = await ensurePiSessionAttached(ctx);
-				const result = await client.subscribe({ sessionId, ...params });
+				const result = await runSessionOperation(ctx, "subscribe", (client, sessionId) =>
+					client.subscribe({ sessionId, ...params }));
 				const target = `${params.repo ?? "active worktree"}#${params.prNumber}`;
 				return {
 					content: [
@@ -1081,8 +1174,8 @@ export const createPremindPiExtension = (
 				repo: Type.Optional(Type.String({ minLength: 1 })),
 			}),
 			async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-				const { client, sessionId } = await ensurePiSessionAttached(ctx);
-				await client.unsubscribe({ sessionId, ...params });
+				await runSessionOperation(ctx, "unsubscribe", (client, sessionId) =>
+					client.unsubscribe({ sessionId, ...params }));
 				const target = `${params.repo ?? "active worktree"}#${params.prNumber}`;
 				return {
 					content: [
