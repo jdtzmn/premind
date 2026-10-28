@@ -2637,6 +2637,39 @@ describe("migrate: session hosts", () => {
   })
 
 describe("subscription authorization", () => {
+  for (const [writePolicy, authorizationMode] of [
+    ["observe-only", "explicit-observe"],
+    ["user-authorized", "explicit-user-authorized"],
+  ] as const) {
+    test(`preserves manual ${authorizationMode} when resubscribing with omitted policy`, () => {
+      const store = createStore()
+      try {
+        store.registerClient("manual-client", { pid: 1, projectRoot: "/tmp/project" })
+        store.registerSession({
+          clientId: "manual-client", sessionId: "manual-session", repo: "acme/repo",
+          branch: "feature/manual", isPrimary: true, status: "active", busyState: "idle",
+        })
+        store.upsertWorktreeBinding({
+          sessionId: "manual-session", root: "/tmp/manual", gitDir: "/tmp/.git/worktrees/manual",
+          repo: "acme/repo", branch: "feature/manual", headSha: "head", state: "watching",
+        })
+        const original = store.upsertSubscription({
+          sessionId: "manual-session", repo: "acme/repo", prNumber: 7, source: "manual", writePolicy,
+        })
+        const resubscribed = store.upsertSubscription({
+          sessionId: "manual-session", repo: "acme/repo", prNumber: 7, source: "manual",
+        })
+        assert.equal(resubscribed.subscriptionId, original.subscriptionId)
+        assert.deepEqual([resubscribed.authorizationMode, resubscribed.writePolicy], [authorizationMode, writePolicy])
+        store.reconcileSubscriptionPolicies("acme/repo", 7, "feature/manual", "octocat", "octocat")
+        const verified = store.getSubscriptionById(original.subscriptionId)!
+        assert.deepEqual([verified.authorizationMode, verified.writePolicy], [authorizationMode, writePolicy])
+      } finally {
+        store.close()
+      }
+    })
+  }
+
   test("keeps explicit authority while omitted policies await verification", () => {
     const store = createStore()
     store.registerClient("policy-client", { pid: 1, projectRoot: "/tmp/project" })

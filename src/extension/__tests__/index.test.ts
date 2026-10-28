@@ -12,11 +12,13 @@ import {
 	renderPremindReminderText,
 	STATUS_POLL_STALE_MS,
 } from "../index.ts";
+import { formatSubscriptionConfirmation } from "../../shared/subscription-confirmation.ts";
 import { PremindDaemonClient } from "../../client/daemon-client.ts";
 import type {
 	DebugStatusResponse,
 	RegisterSessionPayload,
 	ReminderBatch,
+	SubscriptionWritePolicy,
 } from "../../shared/schema.ts";
 
 const status: DebugStatusResponse = {
@@ -195,6 +197,7 @@ const createClient = (
 		pendingBatch?: ReminderBatch | null;
 		pendingBatches?: ReminderBatch[];
 		statusResult?: DebugStatusResponse;
+		subscriptionResult?: { writePolicy?: SubscriptionWritePolicy };
 	} = {},
 ) => {
 	const operations: string[] = [];
@@ -256,7 +259,7 @@ const createClient = (
 				operations.push(
 					`subscribe:${payload.sessionId}:${payload.repo ?? "default"}:${payload.prNumber}:${payload.writePolicy ?? "inferred"}`,
 				);
-				return { subscription: { writePolicy: payload.writePolicy ?? "observe-only" } };
+				return { subscription: options.subscriptionResult ?? { writePolicy: payload.writePolicy ?? "observe-only" } };
 			},
 			unsubscribe: async (payload: {
 				sessionId: string;
@@ -1179,7 +1182,7 @@ test("Pi interactive status colors Unicode signals without styling tool text", a
 			undefined,
 			ctx,
 		);
-		await subscribeTool.execute(
+		const subscribeResult = await subscribeTool.execute(
 			"tool-call-2",
 			{ prNumber: 13, writePolicy: "user-authorized" },
 			undefined,
@@ -1204,6 +1207,7 @@ test("Pi interactive status colors Unicode signals without styling tool text", a
 			"subscribe:/tmp/session.jsonl:default:13:user-authorized",
 			"unsubscribe:/tmp/session.jsonl:default:13",
 		]);
+		assert.equal(subscribeResult.content[0]?.text, formatSubscriptionConfirmation("active worktree#13", "user-authorized"));
 		assert.deepEqual(
 			notifications.map((notification) => notification.message),
 			[
@@ -1213,6 +1217,36 @@ test("Pi interactive status colors Unicode signals without styling tool text", a
 			],
 		);
 	});
+
+	for (const [effective, requested] of [
+		["observe-only", undefined],
+		["owned-active", undefined],
+		["user-authorized", undefined],
+		[undefined, undefined],
+		["observe-only", "user-authorized"],
+		["user-authorized", "observe-only"],
+		[undefined, "user-authorized"],
+	] as const) {
+		test(`subscribe reports returned ${effective ?? "unreported"} policy with requested ${requested ?? "omitted"}`, async () => {
+			const mock = createMockPi();
+			const client = createClient({ subscriptionResult: effective ? { writePolicy: effective } : {} });
+			const notifications: Array<{ message: string; level: string }> = [];
+			createPremindPiExtension({
+				createDaemonClient: () => client.client,
+				config: { statusPollIntervalMs: 0 },
+				detectGit: async () => ({ repo: "owner/repo", branch: "feature/pi" }),
+			})(mock.pi as never);
+			const ctx = createCommandContext(notifications);
+			await mock.commands.get("premind:subscribe")!.handler("42 owner/repo", ctx);
+			assert.equal(notifications[0]?.message, formatSubscriptionConfirmation("owner/repo#42", effective));
+			const result = await mock.tools.get("premind_subscribe")!.execute(
+				"subscribe", { prNumber: 42, repo: "owner/repo", ...(requested ? { writePolicy: requested } : {}) },
+				undefined, undefined, ctx,
+			);
+			assert.equal(result.content[0]?.text, formatSubscriptionConfirmation("owner/repo#42", effective));
+			assert.equal(client.operations.at(-1), `subscribe:/tmp/session.jsonl:owner/repo:42:${requested ?? "inferred"}`);
+		});
+	}
 
 	test("pause and resume control only the current session's delivery", async () => {
 		const mock = createMockPi();

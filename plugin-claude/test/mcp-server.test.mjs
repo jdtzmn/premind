@@ -2,6 +2,30 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { handleMcpRequest } from "../bin/mcp-server.mjs";
 
+for (const [effective, requested, suffix] of [
+  ["observe-only", undefined, "Current Premind policy: observe-only. Notifications alone do not authorize edits or replies; follow the user-assigned task and repository policy."],
+  ["owned-active", undefined, "Current Premind policy: owned-active. Premind verified ownership and the active checkout; follow the assigned task and repository policy."],
+  ["user-authorized", undefined, "Current Premind policy: user-authorized. Follow-up is limited to the user-assigned scope and repository policy."],
+  [undefined, undefined, "Premind did not report a write policy. Do not infer ownership or write permission from this confirmation."],
+  ["observe-only", "user-authorized", "Current Premind policy: observe-only. Notifications alone do not authorize edits or replies; follow the user-assigned task and repository policy."],
+  ["user-authorized", "observe-only", "Current Premind policy: user-authorized. Follow-up is limited to the user-assigned scope and repository policy."],
+  [undefined, "user-authorized", "Premind did not report a write policy. Do not infer ownership or write permission from this confirmation."],
+]) {
+  test(`subscribe renders returned ${effective ?? "unreported"} policy with requested ${requested ?? "omitted"}`, async () => {
+    const args = { prNumber: 42, repo: "acme/repo", ...(requested ? { writePolicy: requested } : {}) };
+    const result = await handleMcpRequest(
+      { method: "tools/call", params: { name: "subscribe", arguments: args } },
+      async (type, payload) => {
+        assert.equal(type, "subscribe");
+        assert.deepEqual(payload, { sessionId: "claude-1", ...args });
+        return { subscription: { repo: "acme/repo", prNumber: 42, ...(effective ? { writePolicy: effective } : {}) } };
+      },
+      { CLAUDE_CODE_SESSION_ID: "claude-1" },
+    );
+    assert.equal(result.content[0].text, `Subscribed to acme/repo#42 for CI and review updates. ${suffix}`);
+  });
+}
+
 test("status redacts session records", async () => {
   const result = await handleMcpRequest(
     { method: "tools/call", params: { name: "status" } },
