@@ -278,7 +278,7 @@ describe("premind plugin compatibility harness", () => {
       { prNumber: 13, repo: "acme/repo" },
       { sessionID: "session-1" },
     )
-    assert.match(toolSubscribeResult, /subscribed to acme\/repo#13/)
+    assert.match(toolSubscribeResult, /Subscribed to acme\/repo#13/)
 
     const toolUnsubscribeResult = await runtime.tool.premind_unsubscribe.execute(
       { prNumber: 13, repo: "acme/repo" },

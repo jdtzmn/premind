@@ -170,7 +170,7 @@ test("subscribe forwards an explicit write policy from the Claude session", asyn
     { CLAUDE_CODE_SESSION_ID: "claude-1" },
   );
   assert.match(result.content[0].text, /acme\/repo#42/);
-  assert.match(result.content[0].text, /write policy user-authorized/);
+  assert.match(result.content[0].text, /Current Premind policy: user-authorized\. Follow-up is limited/);
   assert.deepEqual(calls, [
     {
       type: "subscribe",
@@ -200,7 +200,7 @@ test("subscribe omits write policy by default and accepts legacy responses", asy
     },
     { CLAUDE_CODE_SESSION_ID: "claude-1" },
   );
-  assert.match(result.content[0].text, /write policy observe-only/);
+  assert.match(result.content[0].text, /Premind did not report a write policy\. Do not infer ownership or write permission/);
   assert.deepEqual(calls, [
     {
       type: "subscribe",

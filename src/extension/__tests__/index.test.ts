@@ -1208,7 +1208,7 @@ test("Pi interactive status colors Unicode signals without styling tool text", a
 			notifications.map((notification) => notification.message),
 			[
 				"premind set active checkout /tmp/other-worktree.",
-				"premind subscribed to owner/repo#42.",
+				"Subscribed to owner/repo#42 for CI and review updates. Current Premind policy: observe-only. Notifications alone do not authorize edits or replies; follow the user-assigned task and repository policy.",
 				"premind unsubscribed from owner/repo#42.",
 			],
 		);

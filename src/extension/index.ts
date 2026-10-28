@@ -1,6 +1,7 @@
 import { PREMIND_VERSION_LABEL } from "../shared/version.ts";
 import { renderCurrentStatus } from "../shared/status-view.ts";
 import { commandCapabilities } from "../shared/command-capabilities.ts";
+import { formatSubscriptionConfirmation } from "../shared/subscription-confirmation.ts";
 import {
 	GLOBAL_CONFIRMATION_DESCRIPTION,
 	globalControlRefusal,
@@ -926,9 +927,12 @@ export const createPremindPiExtension = (
 				try {
 					const subscription = parseSubscriptionArguments(args);
 					const { client, sessionId } = await ensurePiSessionAttached(ctx);
-					await client.subscribe({ sessionId, ...subscription });
+					const result = await client.subscribe({ sessionId, ...subscription });
 					ctx.ui.notify(
-						`premind subscribed to ${subscription.repo ?? "active worktree"}#${subscription.prNumber}.`,
+						formatSubscriptionConfirmation(
+							`${subscription.repo ?? "active worktree"}#${subscription.prNumber}`,
+							result.subscription.writePolicy,
+						),
 						"info",
 					);
 				} catch (error) {
@@ -1064,7 +1068,7 @@ export const createPremindPiExtension = (
 					content: [
 						{
 							type: "text" as const,
-							text: `premind subscribed to ${target} with write policy ${result.subscription.writePolicy ?? "observe-only"}.`,
+							text: formatSubscriptionConfirmation(target, result.subscription.writePolicy),
 						},
 					],
 					details: {},
