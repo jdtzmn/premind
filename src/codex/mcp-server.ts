@@ -4,6 +4,7 @@ import path from "node:path";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
 import { commandCapabilities } from "../shared/command-capabilities.ts";
+import { formatSubscriptionConfirmation } from "../shared/subscription-confirmation.ts";
 import {
 	SESSION_PAUSED_MESSAGE,
 	SESSION_RESUMED_MESSAGE,
@@ -355,7 +356,10 @@ const callTool = async (
 				...(tool.args.repo ? { repo: tool.args.repo } : {}),
 			});
 			return text(
-				`Premind subscribed this Codex session to ${result.subscription.repo}#${result.subscription.prNumber}.`,
+				formatSubscriptionConfirmation(
+					`${result.subscription.repo}#${result.subscription.prNumber}`,
+					result.subscription.writePolicy,
+				),
 			);
 		}
 

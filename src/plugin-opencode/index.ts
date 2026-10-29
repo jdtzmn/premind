@@ -3,6 +3,8 @@ import { PREMIND_CLIENT_HEARTBEAT_MS, PREMIND_IDLE_DELIVERY_THRESHOLD_MS } from 
 import type { PremindConfig } from "../shared/schema.ts"
 import { PREMIND_VERSION_LABEL } from "../shared/version.ts"
 import { commandCapabilities } from "../shared/command-capabilities.ts"
+import { formatSubscriptionConfirmation } from "../shared/subscription-confirmation.ts"
+import type { SubscriptionWritePolicy } from "../shared/schema.ts"
 import { GLOBAL_CONFIRMATION_DESCRIPTION, globalControlRefusal } from "../shared/global-control.ts"
 import { SESSION_PAUSED_DELIVERY_MESSAGE, SESSION_PAUSED_MESSAGE, SESSION_RESUMED_MESSAGE } from "../shared/session-pause.ts"
 import { ensureUserConfigTemplate, getDefaultUserConfigPath, getLegacyUserConfigPath, loadPremindConfig } from "../shared/config-loader.ts"
@@ -981,11 +983,15 @@ export const createPremindPlugin = (dependencies: PremindPluginDependencies = {}
           const sessionId = ctx.sessionID ?? lastPrimarySessionId
           if (!sessionId) return "premind subscribe failed: no active session"
           ownedSessions.add(sessionId)
-          const subscribed = await withReattach(sessionId, () =>
-            daemon.subscribe({ sessionId, ...args }),
-          )
+          let writePolicy: SubscriptionWritePolicy | undefined
+          const subscribed = await withReattach(sessionId, async () => {
+            const result = await daemon.subscribe({ sessionId, ...args }) as {
+              subscription?: { writePolicy?: SubscriptionWritePolicy }
+            } | undefined
+            writePolicy = result?.subscription?.writePolicy
+          })
           if (!subscribed) return `premind subscribe failed for session ${sessionId}`
-          return `premind subscribed to ${args.repo ?? "active worktree"}#${args.prNumber}.`
+          return formatSubscriptionConfirmation(`${args.repo ?? "active worktree"}#${args.prNumber}`, writePolicy)
         },
       }),
       premind_unsubscribe: tool({

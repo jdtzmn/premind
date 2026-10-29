@@ -47,6 +47,20 @@ export const SESSION_PAUSED_MESSAGE =
 export const SESSION_RESUMED_MESSAGE =
   "premind resumed reminders for this session. Subscriptions are unchanged; queued PR updates arrive at the next safe point.";
 
+// Keep this plain-JS mirror in sync with src/shared/subscription-confirmation.ts.
+export function formatSubscriptionConfirmation(target, writePolicy) {
+  const prefix = `Subscribed to ${target} for CI and review updates.`;
+  switch (writePolicy) {
+    case "observe-only":
+      return `${prefix} Current Premind policy: observe-only. Notifications alone do not authorize edits or replies; follow the user-assigned task and repository policy.`;
+    case "owned-active":
+      return `${prefix} Current Premind policy: owned-active. Premind verified ownership and the active checkout; follow the assigned task and repository policy.`;
+    case "user-authorized":
+      return `${prefix} Current Premind policy: user-authorized. Follow-up is limited to the user-assigned scope and repository policy.`;
+    default:
+      return `${prefix} Premind did not report a write policy. Do not infer ownership or write permission from this confirmation.`;
+  }
+}
 const globalControlSchema = {
   type: "object",
   properties: {
@@ -279,7 +293,10 @@ export const handleMcpRequest = async (
     );
     return text(
       name === "subscribe"
-        ? `Premind subscribed this Claude session to ${result.subscription.repo}#${result.subscription.prNumber} with write policy ${result.subscription.writePolicy ?? "observe-only"}.`
+        ? formatSubscriptionConfirmation(
+            `${result.subscription.repo}#${result.subscription.prNumber}`,
+            result.subscription.writePolicy,
+          )
         : `Premind unsubscribed this Claude session: ${result.unsubscribed ? "done" : "no active subscription"}.`,
     );
   }

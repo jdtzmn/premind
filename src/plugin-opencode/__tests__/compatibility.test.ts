@@ -1,9 +1,12 @@
 import assert from "node:assert/strict"
 import { describe, test } from "node:test"
 import { createPremindPlugin } from "../index.ts"
+import { formatSubscriptionConfirmation } from "../../shared/subscription-confirmation.ts"
+import type { SubscriptionWritePolicy } from "../../shared/schema.ts"
 
 describe("premind plugin compatibility harness", () => {
-  test("matches expected OpenCode event, command, and tool flow", async () => {
+  test("matches expected OpenCode event, command, and tool flow", async (t) => {
+    let subscriptionWritePolicy: SubscriptionWritePolicy | undefined
     const asyncPrompts: Array<{ sessionId: string; text: string }> = []
     const syncPrompts: Array<{ sessionId: string; text: string; noReply?: boolean }> = []
     const acknowledgements: Array<{ batchId: string; state: string }> = []
@@ -36,6 +39,7 @@ describe("premind plugin compatibility harness", () => {
       },
       subscribe: async ({ sessionId, prNumber, repo }: { sessionId: string; prNumber: number; repo?: string }) => {
         operations.push(`subscribe:${sessionId}:${repo ?? "default"}:${prNumber}`)
+        return { subscription: subscriptionWritePolicy ? { writePolicy: subscriptionWritePolicy } : {} }
       },
       unsubscribe: async ({ sessionId, prNumber, repo }: { sessionId: string; prNumber: number; repo?: string }) => {
         operations.push(`unsubscribe:${sessionId}:${repo ?? "default"}:${prNumber}`)
@@ -274,11 +278,16 @@ describe("premind plugin compatibility harness", () => {
     )
     assert.match(toolSetActiveCheckoutResult, /set active checkout \/tmp\/other-worktree/)
 
-    const toolSubscribeResult = await runtime.tool.premind_subscribe.execute(
-      { prNumber: 13, repo: "acme/repo" },
-      { sessionID: "session-1" },
-    )
-    assert.match(toolSubscribeResult, /subscribed to acme\/repo#13/)
+    for (const effective of ["observe-only", "owned-active", "user-authorized", undefined] as const) {
+      await t.test(`subscribe renders returned ${effective ?? "unreported"} policy with omitted input`, async () => {
+        subscriptionWritePolicy = effective
+        const result = await runtime.tool.premind_subscribe.execute(
+          { prNumber: 13, repo: "acme/repo" },
+          { sessionID: "session-1" },
+        )
+        assert.equal(result, formatSubscriptionConfirmation("acme/repo#13", effective))
+      })
+    }
 
     const toolUnsubscribeResult = await runtime.tool.premind_unsubscribe.execute(
       { prNumber: 13, repo: "acme/repo" },

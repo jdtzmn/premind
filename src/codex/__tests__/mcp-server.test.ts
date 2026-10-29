@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
+import { formatSubscriptionConfirmation } from "../../shared/subscription-confirmation.ts";
 import { PremindDaemonClient } from "../../client/daemon-client.ts";
 import { PremindPrerequisiteError } from "../../client/prerequisites.ts";
 import { IpcServer } from "../../daemon/ipc/server.ts";
@@ -45,6 +46,42 @@ const unusedDependencies = (): CodexMcpDependencies => {
 		ensureDaemon: async () => undefined,
 	};
 };
+
+for (const effective of ["observe-only", "owned-active", "user-authorized", undefined] as const) {
+	test(`subscribe renders returned ${effective ?? "unreported"} policy with omitted input`, async () => {
+		const pluginData = createTempDir();
+		try {
+			const binding = ensureCodexSessionBinding(pluginData, "codex:thread-1", pluginData);
+			const dependencies = unusedDependencies();
+			dependencies.pluginData = pluginData;
+			dependencies.cwd = pluginData;
+			dependencies.client.debugStatus = async () => ({
+				daemon: { protocolVersion: 1, heartbeatMs: 10_000, leaseTtlMs: 30_000, idleShutdownGraceMs: 15_000 },
+				globallyDisabled: false, activeClients: 1, activeSessions: 1, closedSessions: 0, activeWatchers: 1,
+				lastReapAt: null, lastReapCount: 0,
+				sessions: [{
+					sessionId: binding.sessionId, host: "codex", repo: "acme/repo", branch: "feature/test",
+					prNumber: 42, status: "active", busyState: "idle", pendingReminderCount: 0,
+				}],
+			});
+			dependencies.client.subscribe = async (payload) => {
+				assert.deepEqual(payload, { sessionId: binding.sessionId, prNumber: 42, repo: "acme/repo" });
+				return { subscription: {
+					subscriptionId: "subscription-1", sessionId: binding.sessionId, repo: "acme/repo", prNumber: 42,
+					source: "manual", state: "active", lastDeliveredEventSeq: 0, updatedAt: 1,
+					...(effective ? { writePolicy: effective } : {}),
+				} };
+			};
+			const result = await handleCodexMcpRequest(
+				call("premind_subscribe", { sessionHandle: binding.sessionHandle, prNumber: 42, repo: "acme/repo" }),
+				dependencies,
+			);
+			assert.deepEqual(result, { content: [{ type: "text", text: formatSubscriptionConfirmation("acme/repo#42", effective) }] });
+		} finally {
+			fs.rmSync(pluginData, { recursive: true, force: true });
+		}
+	});
+}
 
 test("resolves the hook-shared plugin data directory for legacy Codex MCPs", () => {
 	assert.equal(
