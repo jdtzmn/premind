@@ -200,7 +200,7 @@ describe("reactive session re-attach", () => {
       { prNumber: 13, repo: "acme/repo" },
       { sessionID: "resumed-session" },
     )
-    assert.match(result, /subscribed to acme\/repo#13/)
+    assert.match(result, /Subscribed to acme\/repo#13/)
 
     assert.deepEqual(daemon._operations, [
       "subscribe:resumed-session",
