@@ -8,6 +8,7 @@ import {
   DEFAULT_REQUEST_TIMEOUT_MS,
   PremindDaemonClient,
 } from "./daemon-client.ts";
+import { DaemonResponseError } from "../shared/daemon-error.ts";
 import type { ReminderBatch } from "../shared/schema.ts";
 
 type Request = { type: string; payload: Record<string, unknown> };
@@ -469,6 +470,117 @@ describe("PremindDaemonClient protocol negotiation and session leases", () => {
       ["claimSessionLease", "updateSessionState"],
     );
     assert.deepEqual(requests[1]?.sessionLease, lease);
+  });
+
+  const createLeasedClient = (
+    respond: (request: LeaseRequest, claims: number) => unknown,
+  ) => {
+    const client = createClient();
+    const requests: LeaseRequest[] = [];
+    let claims = 0;
+    const testClient = client as unknown as {
+      initialized: boolean;
+      protocolVersion: number;
+      daemonInstanceId?: string;
+      supportedOperations: Set<string>;
+      request: (request: LeaseRequest) => Promise<unknown>;
+    };
+    testClient.initialized = true;
+    testClient.protocolVersion = 2;
+    testClient.daemonInstanceId = "daemon-a";
+    testClient.supportedOperations = new Set([
+      "claimSessionLease",
+      "renewSessionLease",
+      "releaseSessionLease",
+    ]);
+    testClient.request = async (request) => {
+      requests.push(request);
+      if (request.type === "claimSessionLease") claims++;
+      const response = respond(request, claims);
+      if (response instanceof Error) throw response;
+      if (request.type === "claimSessionLease") {
+        return {
+          lease: {
+            sessionId: "session-1",
+            ownerInstanceId: "daemon-a",
+            generation: claims,
+            clientIncarnationNonce: client.clientId,
+            leaseToken: `00000000-0000-4000-8000-00000000000${claims}`,
+            claimedAt: 1,
+            expiresAt: 30_001,
+          },
+        };
+      }
+      return response;
+    };
+    const leaseTokens = () =>
+      requests
+        .filter(({ type }) => type !== "claimSessionLease")
+        .map(({ type, sessionLease }) => [
+          type,
+          (sessionLease as { leaseToken?: string } | undefined)?.leaseToken?.at(-1),
+        ]);
+    return { client, requests, leaseTokens };
+  };
+  const sessionMoved = () =>
+    new DaemonResponseError("SESSION_MOVED", "Session lease is stale or belongs elsewhere");
+
+  test("re-claims once after a renewal is rejected", async () => {
+    const { client, leaseTokens } = createLeasedClient((request) =>
+      request.type === "renewSessionLease"
+        ? new DaemonResponseError("SESSION_MOVED", "Session lease is stale or expired")
+        : request.type === "claimReminderBundle"
+          ? { bundle: null }
+          : {},
+    );
+    await client.updateSessionState({ sessionId: "session-1", busyState: "idle" });
+    await assert.rejects(client.heartbeat(), /SESSION_MOVED/);
+    await client.claimReminderBundle("session-1");
+
+    assert.deepEqual(leaseTokens(), [
+      ["updateSessionState", "1"],
+      ["heartbeatClient", undefined],
+      ["renewSessionLease", undefined],
+      ["claimReminderBundle", "2"],
+    ]);
+  });
+
+  test("replays a request rejected for a stale lease only once", async () => {
+    const { client, requests } = createLeasedClient((request) =>
+      request.type === "claimSessionLease" ? {} : sessionMoved(),
+    );
+    await assert.rejects(
+      client.claimReminderBundle("session-1"),
+      /SESSION_MOVED: Session lease is stale or belongs elsewhere/,
+    );
+    assert.deepEqual(
+      requests.map(({ type }) => type),
+      ["claimSessionLease", "claimReminderBundle", "claimSessionLease", "claimReminderBundle"],
+    );
+  });
+
+  test("surfaces SESSION_BUSY instead of taking over a live owner's session", async () => {
+    const { client, requests } = createLeasedClient((request, claims) => {
+      if (request.type === "claimSessionLease" && claims > 1) {
+        return new DaemonResponseError("SESSION_BUSY", "session-1");
+      }
+      return request.type === "claimSessionLease" ? {} : sessionMoved();
+    });
+    await assert.rejects(client.claimReminderBundle("session-1"), /SESSION_BUSY/);
+    assert.deepEqual(
+      requests.map(({ type }) => type),
+      ["claimSessionLease", "claimReminderBundle", "claimSessionLease"],
+    );
+  });
+
+  test("does not re-claim for lease-exempt operations", async () => {
+    const { client, requests } = createLeasedClient((request) =>
+      request.type === "claimSessionLease"
+        ? {}
+        : new DaemonResponseError("SESSION_MOVED", "Legacy session must re-register"),
+    );
+    await assert.rejects(client.releaseSessionOwner("session-1"), /SESSION_MOVED/);
+    assert.deepEqual(requests.map(({ type }) => type), ["releaseSessionOwner"]);
   });
 });
 
