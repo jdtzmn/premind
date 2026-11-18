@@ -2427,6 +2427,21 @@ describe("StateStore", () => {
 
     assert.equal(preparedStatementsFor(20), preparedStatementsFor(2))
   })
+
+  test("pending event counts seek past delivered events instead of scanning the PR stream", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "premind-store-test-"))
+    tempPaths.push(dir)
+    const dbPath = path.join(dir, "premind.db")
+    new StateStore(dbPath).close()
+    const db = new DatabaseSync(dbPath)
+    const plan = db
+      .prepare(
+        `EXPLAIN QUERY PLAN SELECT COUNT(*) FROM pr_events WHERE repo = ? AND pr_number = ? AND seq > ?`,
+      )
+      .all("acme/repo", 1, 0) as Array<{ detail: string }>
+    db.close()
+    assert.match(plan.map(({ detail }) => detail).join("\n"), /repo=\? AND pr_number=\? AND seq>\?/)
+  })
 })
 
 describe("migrate: legacy pr_watchers upgrade", () => {
