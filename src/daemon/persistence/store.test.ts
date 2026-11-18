@@ -2359,6 +2359,89 @@ describe("StateStore", () => {
     assert.equal(store.hasDaemonDemand(), false)
     store.close()
   })
+
+  // Liveness probes evaluate demand on every request, so a storm of launchers
+  // must not turn each probe into a full rewrite of the watcher tables.
+  test("evaluating daemon demand is read-only and still sees branch-only demand", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "premind-store-test-"))
+    tempPaths.push(dir)
+    const dbPath = path.join(dir, "premind.db")
+    const store = new StateStore(dbPath)
+    store.registerClient("client-branch-demand", { pid: 1, projectRoot: "/repo" })
+    store.registerSession({
+      clientId: "client-branch-demand", sessionId: "session-branch-demand", repo: "acme/repo",
+      branch: "legacy-branch", isPrimary: true, status: "active", busyState: "idle",
+    })
+    store.upsertWorktreeBinding({
+      sessionId: "session-branch-demand", root: "/repo/.trees/feature",
+      gitDir: "/repo/.git/worktrees/feature", repo: "acme/repo", branch: "feature-branch",
+      headSha: "abc123", state: "waiting_for_pr",
+    })
+    store.ensureBranchWatcher("acme/repo", "feature-branch")
+    store.releaseClient("client-branch-demand")
+
+    const reader = new DatabaseSync(dbPath)
+    const watcherRows = () => reader.prepare(`SELECT * FROM branch_watchers ORDER BY repo, branch`).all()
+    const before = watcherRows()
+    assert.equal(store.hasDaemonDemand(Date.now() + 60_000), true)
+    assert.deepEqual(watcherRows(), before)
+
+    store.unregisterSession("session-branch-demand")
+    assert.equal(store.hasDaemonDemand(), false)
+    reader.close()
+    store.close()
+  })
+
+  test("session summaries use a fixed number of queries regardless of session count", () => {
+    const preparedStatementsFor = (sessionCount: number) => {
+      const store = createStore()
+      store.registerClient("client-summaries", { pid: 1, projectRoot: "/repo" })
+      for (let index = 0; index < sessionCount; index++) {
+        const sessionId = `session-summaries-${index}`
+        store.registerSession({
+          clientId: "client-summaries", sessionId, repo: "acme/repo",
+          branch: `feature/${index}`, isPrimary: false, status: "active", busyState: "idle",
+        })
+        store.upsertWorktreeBinding({
+          sessionId, root: `/repo/.trees/${index}`, gitDir: `/repo/.git/worktrees/${index}`,
+          repo: "acme/repo", branch: `feature/${index}`, headSha: "abc123", state: "waiting_for_pr",
+        })
+        store.upsertSubscription({ sessionId, repo: "acme/repo", prNumber: index + 1, source: "manual" })
+      }
+      store.setSessionPaused("session-summaries-0", true)
+      const db = (store as unknown as { db: DatabaseSync }).db
+      const prepare = db.prepare.bind(db)
+      let prepared = 0
+      db.prepare = (sql: string) => {
+        prepared++
+        return prepare(sql)
+      }
+      const summaries = store.listSessionSummaries()
+      db.prepare = prepare
+      assert.equal(summaries.length, sessionCount)
+      assert.equal(summaries.find(({ sessionId }) => sessionId === "session-summaries-0")?.status, "paused")
+      assert.ok(summaries.every((summary) => summary.subscriptions.length === 1 && summary.worktreeBinding))
+      store.close()
+      return prepared
+    }
+
+    assert.equal(preparedStatementsFor(20), preparedStatementsFor(2))
+  })
+
+  test("pending event counts seek past delivered events instead of scanning the PR stream", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "premind-store-test-"))
+    tempPaths.push(dir)
+    const dbPath = path.join(dir, "premind.db")
+    new StateStore(dbPath).close()
+    const db = new DatabaseSync(dbPath)
+    const plan = db
+      .prepare(
+        `EXPLAIN QUERY PLAN SELECT COUNT(*) FROM pr_events WHERE repo = ? AND pr_number = ? AND seq > ?`,
+      )
+      .all("acme/repo", 1, 0) as Array<{ detail: string }>
+    db.close()
+    assert.match(plan.map(({ detail }) => detail).join("\n"), /repo=\? AND pr_number=\? AND seq>\?/)
+  })
 })
 
 describe("migrate: legacy pr_watchers upgrade", () => {
