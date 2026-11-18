@@ -1,6 +1,6 @@
 import net from "node:net";
 import { randomUUID } from "node:crypto";
-import { DaemonResponseError } from "../shared/daemon-error.ts";
+import { DaemonResponseError, isDaemonError } from "../shared/daemon-error.ts";
 import {
   PREMIND_PROTOCOL_VERSION,
   PREMIND_SOCKET_PATH,
@@ -540,11 +540,18 @@ export class PremindDaemonClient {
     const current = this.sessionLeases.get(sessionId);
     if (!current || !this.supportsSessionLeaseOperation("renewSessionLease"))
       return;
-    const response = await this.requestWithRetry({
-      type: "renewSessionLease",
-      protocolVersion: PREMIND_PROTOCOL_VERSION,
-      payload: { lease: current },
-    });
+    let response: unknown;
+    try {
+      response = await this.requestWithRetry({
+        type: "renewSessionLease",
+        protocolVersion: PREMIND_PROTOCOL_VERSION,
+        payload: { lease: current },
+      });
+    } catch (error) {
+      // The daemon no longer honours this lease; the next request claims anew.
+      if (isDaemonError(error, "SESSION_MOVED")) this.forgetSessionLease(current);
+      throw error;
+    }
     const renewed = sessionLeaseTokenSchema.parse(
       (response as { lease?: unknown }).lease,
     );
@@ -561,6 +568,35 @@ export class PremindDaemonClient {
       );
     }
     this.sessionLeases.set(sessionId, renewed);
+  }
+
+  /** Drops a cached lease unless a newer claim has already replaced it. */
+  private forgetSessionLease(lease: SessionLeaseToken) {
+    if (this.sessionLeases.get(lease.sessionId)?.leaseToken === lease.leaseToken) {
+      this.sessionLeases.delete(lease.sessionId);
+    }
+  }
+
+  /**
+   * Sends a request under the session's cached lease. A lease that expired
+   * while the host was suspended, or was superseded, is rejected with
+   * SESSION_MOVED before the operation takes effect, so the request is replayed
+   * once under a fresh claim. A claim another live owner holds fails with
+   * SESSION_BUSY instead of taking the session over.
+   */
+  private async requestWithSessionLease(message: unknown): Promise<unknown> {
+    const request = this.withNegotiatedProtocol(message) as {
+      sessionLease?: SessionLeaseToken;
+    };
+    try {
+      return await this.request(request);
+    } catch (error) {
+      const stale = request.sessionLease;
+      if (!stale || !isDaemonError(error, "SESSION_MOVED")) throw error;
+      this.forgetSessionLease(stale);
+      await this.claimSessionLease(stale.sessionId);
+      return await this.request(this.withNegotiatedProtocol(message));
+    }
   }
 
   private async releaseSessionLease(sessionId: string): Promise<void> {
@@ -691,7 +727,7 @@ export class PremindDaemonClient {
       // failing the very first request with ENOENT.
       await this.initializeProtocol();
       await this.ensureRequestSessionLease(message);
-      return await this.request(this.withNegotiatedProtocol(message));
+      return await this.requestWithSessionLease(message);
     } catch (error) {
       if (attempt >= this.maxRetries) throw error;
 
@@ -748,13 +784,11 @@ export class PremindDaemonClient {
       const sessionId = payload.sessionId as string;
       try {
         await this.claimSessionLease(sessionId);
-        await this.request(
-          this.withNegotiatedProtocol({
-            type,
-            protocolVersion: PREMIND_PROTOCOL_VERSION,
-            payload: { ...payload, clientId: this.clientId },
-          }),
-        );
+        await this.requestWithSessionLease({
+          type,
+          protocolVersion: PREMIND_PROTOCOL_VERSION,
+          payload: { ...payload, clientId: this.clientId },
+        });
       } catch {
         // The original request still retries; the next reconnect replays again.
       }
