@@ -357,6 +357,7 @@ export const inspectDaemon = (
           type: "debugStatus",
           protocolVersion: PREMIND_PROTOCOL_VERSION,
           payload: {},
+          probe: true,
         })}\n`,
       );
     });

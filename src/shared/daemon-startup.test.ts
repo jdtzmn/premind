@@ -220,6 +220,25 @@ test("classifies unreachable, malformed, and capability-incompatible daemons", a
   }
 });
 
+test("probes ask the daemon to skip per-session status", async () => {
+  const dir = createTempDir();
+  const socketPath = path.join(dir, "premind.sock");
+  let request: unknown;
+  const server = net.createServer((socket) => {
+    socket.once("data", (chunk) => {
+      request = JSON.parse(chunk.toString());
+      socket.end(`${JSON.stringify({ ok: true, protocolVersion: 1, result: { daemon: { protocolVersion: 1 } } })}\n`);
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+  try {
+    assert.equal((await inspectDaemon(socketPath)).status, "compatible");
+    assert.deepEqual(request, { type: "debugStatus", protocolVersion: 1, payload: {}, probe: true });
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
 test("waits for a daemon that answers slower than a single probe instead of resending", async () => {
   const dir = createTempDir();
   const socketPath = path.join(dir, "premind.sock");
