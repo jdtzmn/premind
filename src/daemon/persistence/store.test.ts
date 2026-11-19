@@ -3017,6 +3017,32 @@ describe("daemon and coordinator fencing", () => {
     }
   })
 
+  test("prunes expired daemon instance leases without disturbing live ones", () => {
+    const store = createStore()
+    try {
+      const exited = store.claimDaemonInstanceLease({
+        instanceId: "daemon-a",
+        incarnationNonce: "daemon-a-1",
+      }, 1_000)
+      const live = store.claimDaemonInstanceLease({
+        instanceId: "daemon-b",
+        incarnationNonce: "daemon-b-1",
+      }, exited.expiresAt - 1)
+
+      assert.equal(store.pruneExpiredDaemonInstanceLeases(exited.expiresAt), 1)
+      assert.equal(store.pruneExpiredDaemonInstanceLeases(exited.expiresAt), 0)
+      assert.equal(store.validateDaemonInstanceLease(live, exited.expiresAt), true)
+      // Generations come from a counter, so a pruned row's generation is never reissued.
+      const restarted = store.claimDaemonInstanceLease({
+        instanceId: "daemon-a",
+        incarnationNonce: "daemon-a-2",
+      }, exited.expiresAt)
+      assert.equal(restarted.generation, 3)
+    } finally {
+      store.close()
+    }
+  })
+
   test("transfers expired handoff execution without changing its stable id", () => {
     const store = createStore()
     try {
