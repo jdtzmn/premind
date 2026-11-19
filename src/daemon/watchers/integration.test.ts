@@ -80,6 +80,10 @@ class FixtureGitHubClient implements GitHubClientLike {
     return next
   }
 
+  get fetchCount() {
+    return this.resultIndex
+  }
+
   pushSnapshot(snapshot: PullRequestSnapshot, etag: string | null = null) {
     this.results.push({ kind: "ok", snapshot, etag })
   }
@@ -582,6 +586,87 @@ describe("watcher integration", () => {
     const events = store.listUndeliveredEvents("session-conflict")
     assert.ok(events.some((event) => event.kind === "merge_conflict.detected"))
     assert.equal(store.getSnapshot("acme/repo", 42)?.core.lastStableMergeStateStatus, "DIRTY")
+
+    store.close()
+  })
+
+  test("PR watcher re-polls an UNKNOWN merge state on the next tick until it settles", async () => {
+    const store = createStore()
+    const github = new FixtureGitHubClient()
+    const schedule = new AdaptiveSchedule({ tiers: [], idleIntervalMs: 10_000 })
+    const prWatcher = new PullRequestWatcher(store, github, { schedule })
+
+    store.registerClient("client-unknown", { pid: 4, projectRoot: "/tmp" })
+    store.registerSession({
+      clientId: "client-unknown",
+      sessionId: "session-unknown",
+      repo: "acme/repo",
+      branch: "feature/unknown",
+      isPrimary: true,
+      status: "active",
+      busyState: "idle",
+    })
+    store.recordBranchAssociation("acme/repo", "feature/unknown", 42)
+
+    const snapshotWithMergeState = (mergeStateStatus: string) => {
+      const snapshot = makeSnapshot()
+      return { ...snapshot, core: { ...snapshot.core, mergeStateStatus } }
+    }
+    github.pushSnapshot(snapshotWithMergeState("UNKNOWN"))
+    github.pushSnapshot(snapshotWithMergeState("BLOCKED"))
+    github.pushSnapshot(snapshotWithMergeState("BLOCKED"))
+
+    await prWatcher.tick(0)
+    await prWatcher.tick(1)
+    assert.equal(github.fetchCount, 2)
+    assert.equal(store.getSnapshot("acme/repo", 42)?.core.mergeStateStatus, "BLOCKED")
+
+    // Once settled, the PR returns to its normal interval.
+    await prWatcher.tick(2)
+    assert.equal(github.fetchCount, 2)
+    await prWatcher.tick(10_001)
+    assert.equal(github.fetchCount, 3)
+
+    store.close()
+  })
+
+  test("PR watcher stops fast re-polls when GitHub keeps reporting UNKNOWN", async () => {
+    const store = createStore()
+    const github = new FixtureGitHubClient()
+    const schedule = new AdaptiveSchedule({ tiers: [], idleIntervalMs: 10_000 })
+    const prWatcher = new PullRequestWatcher(store, github, { schedule })
+
+    store.registerClient("client-stuck", { pid: 5, projectRoot: "/tmp" })
+    store.registerSession({
+      clientId: "client-stuck",
+      sessionId: "session-stuck",
+      repo: "acme/repo",
+      branch: "feature/stuck",
+      isPrimary: true,
+      status: "active",
+      busyState: "idle",
+    })
+    store.recordBranchAssociation("acme/repo", "feature/stuck", 42)
+
+    const snapshot = makeSnapshot()
+    for (let i = 0; i < 5; i++) {
+      github.pushSnapshot({ ...snapshot, core: { ...snapshot.core, mergeStateStatus: "UNKNOWN" } })
+    }
+
+    for (let now = 0; now < 6; now++) await prWatcher.tick(now)
+    // The first poll plus three fast re-polls, then the normal interval.
+    assert.equal(github.fetchCount, 4)
+    await prWatcher.tick(10_003)
+    assert.equal(github.fetchCount, 5)
+
+    // A known value resets the count, so the next UNKNOWN re-polls fast again.
+    github.pushSnapshot({ ...snapshot, core: { ...snapshot.core, mergeStateStatus: "BLOCKED" } })
+    github.pushSnapshot({ ...snapshot, core: { ...snapshot.core, mergeStateStatus: "UNKNOWN" } })
+    github.pushSnapshot({ ...snapshot, core: { ...snapshot.core, mergeStateStatus: "UNKNOWN" } })
+    await prWatcher.tick(20_003)
+    await prWatcher.tick(30_003)
+    await prWatcher.tick(30_004)
+    assert.equal(github.fetchCount, 8)
 
     store.close()
   })

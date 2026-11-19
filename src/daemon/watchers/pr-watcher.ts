@@ -9,6 +9,10 @@ const PR_SNAPSHOT_ETAG_SCOPE = "pr.snapshot"
 const etagKey = (repo: string, prNumber: number) => `${repo}#${prNumber}`
 const targetKey = etagKey
 
+// Fast re-polls of an open PR whose merge state stays UNKNOWN before falling
+// back to its normal interval.
+const MAX_UNKNOWN_MERGE_STATE_REPOLLS = 3
+
 export type PullRequestWatcherOptions = PrWatcherRegistryOptions & {
   /**
    * Adaptive per-PR scheduler. If omitted, every polling actor is immediately
@@ -20,6 +24,7 @@ export type PullRequestWatcherOptions = PrWatcherRegistryOptions & {
 export class PullRequestWatcher {
   private readonly logger = createLogger("daemon.pr-watcher")
   private readonly schedule: AdaptiveSchedule | null
+  private readonly unknownMergeStateStreak = new Map<string, number>()
   readonly registry: PrWatcherRegistry
 
   constructor(
@@ -116,11 +121,12 @@ export class PullRequestWatcher {
             now,
           )
           this.registry.recordTerminalPersisted(target.repo, target.prNumber, now)
+          this.unknownMergeStateStreak.delete(key)
         } else {
           this.store.saveSnapshotAndEvents(target.repo, target.prNumber, next, events, now)
           this.store.saveEtag(PR_SNAPSHOT_ETAG_SCOPE, etagKey(target.repo, target.prNumber), result.etag, now)
           if (events.length > 0) this.schedule?.recordActivity(key, now)
-          this.registry.recordPollSucceeded(target.repo, target.prNumber, this.nextPollAt(key, now), now)
+          this.registry.recordPollSucceeded(target.repo, target.prNumber, this.nextPollAt(key, now, !stableMergeState), now)
         }
 
         for (const subscription of this.store.listActiveSubscriptionsForPr(target.repo, target.prNumber)) {
@@ -137,7 +143,17 @@ export class PullRequestWatcher {
     }
   }
 
-  private nextPollAt(key: string, now: number): number {
+  private nextPollAt(key: string, now: number, mergeStateUnknown = false): number {
+    if (!mergeStateUnknown) {
+      this.unknownMergeStateStreak.delete(key)
+    } else {
+      // GitHub computes merge state lazily after the base or head branch moves:
+      // the poll that triggers the computation sees UNKNOWN, and the next one
+      // usually sees the result.
+      const streak = (this.unknownMergeStateStreak.get(key) ?? 0) + 1
+      this.unknownMergeStateStreak.set(key, streak)
+      if (streak <= MAX_UNKNOWN_MERGE_STATE_REPOLLS) return now
+    }
     return this.schedule ? now + this.schedule.currentInterval(key, now) : now
   }
 }
