@@ -180,11 +180,31 @@ export const holdsDaemonLock = (lock: DaemonLock) =>
   readLockOwner(lock.path)?.token === lock.token;
 
 /**
+ * Marks a held daemon lock as alive by touching its mtime. Returns false, and
+ * leaves the file alone, once the lock belongs to another daemon.
+ */
+export const refreshDaemonLock = (lock: DaemonLock) => {
+  if (!holdsDaemonLock(lock)) return false;
+  const now = new Date();
+  fs.utimesSync(lock.path, now, now);
+  return true;
+};
+
+const lockMtimeMs = (lockPath: string) => {
+  try {
+    return fs.statSync(lockPath).mtimeMs;
+  } catch {
+    return 0;
+  }
+};
+
+/**
  * Acquires the daemon lock, or returns undefined when another daemon owns it.
- * A dead owner is reclaimed. A live owner past the startup grace period is
- * reclaimed only when nothing answers on the socket, because its PID may have
- * been reused or the daemon may be wedged. A wedged daemon notices the
- * takeover through `holdsDaemonLock` and exits.
+ * A dead owner is reclaimed. A live owner that has neither started nor
+ * refreshed the lock within the startup grace period is reclaimed only when
+ * nothing answers on the socket, because its PID may have been reused or the
+ * daemon may be wedged. A wedged daemon notices the takeover through
+ * `holdsDaemonLock` and exits.
  */
 export const acquireDaemonLock = async ({
   stateDir = PREMIND_STATE_DIR,
@@ -219,7 +239,10 @@ export const acquireDaemonLock = async ({
       // Another daemon may be between creating and writing the lock.
       if (!lockIsStale(lockPath, DEFAULT_STALE_LOCK_MS)) return undefined;
     } else if (isProcessAlive(owner.pid)) {
-      if (Date.now() - owner.createdAt < startupGraceMs) return undefined;
+      // A running daemon refreshes the lock's mtime, so a recent refresh
+      // proves it is alive even when the socket is too congested to answer.
+      const lastAlive = Math.max(owner.createdAt, lockMtimeMs(lockPath));
+      if (Date.now() - lastAlive < startupGraceMs) return undefined;
       if (await isServing()) return undefined;
     }
 
