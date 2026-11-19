@@ -201,17 +201,19 @@ async function startDaemon(lock: DaemonLock) {
 
   // Prune closed session rows and orphaned PR events at startup so any backlog
   // accumulated while the daemon was down is cleaned up immediately.
-  const [startupPrunedSessions, startupPrunedEvents] = server.store.withCoordinatorLease(
+  const [startupPrunedSessions, startupPrunedEvents, startupPrunedDaemonLeases] = server.store.withCoordinatorLease(
     coordinatorLease,
     () => [
       server.store.pruneClosedSessions(PREMIND_CLOSED_SESSION_RETENTION_MS),
       server.store.pruneOrphanedPrEvents(),
+      server.store.pruneExpiredDaemonInstanceLeases(),
     ] as const,
   )
-  if (startupPrunedSessions > 0 || startupPrunedEvents > 0) {
+  if (startupPrunedSessions > 0 || startupPrunedEvents > 0 || startupPrunedDaemonLeases > 0) {
     logger.info("startup prune", {
       prunedClosedSessions: startupPrunedSessions,
       prunedOrphanedEvents: startupPrunedEvents,
+      prunedDaemonLeases: startupPrunedDaemonLeases,
     })
   }
 
@@ -331,10 +333,12 @@ async function startDaemon(lock: DaemonLock) {
     }
     const prunedSessions = server.store.pruneClosedSessions(PREMIND_CLOSED_SESSION_RETENTION_MS)
     const prunedEvents = server.store.pruneOrphanedPrEvents()
-    if (prunedSessions > 0 || prunedEvents > 0) {
+    const prunedDaemonLeases = server.store.pruneExpiredDaemonInstanceLeases()
+    if (prunedSessions > 0 || prunedEvents > 0 || prunedDaemonLeases > 0) {
       logger.info("pruned closed sessions and orphaned events", {
         prunedClosedSessions: prunedSessions,
         prunedOrphanedEvents: prunedEvents,
+        prunedDaemonLeases,
       })
     }
     })

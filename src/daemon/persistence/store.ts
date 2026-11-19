@@ -626,6 +626,11 @@ export class StateStore {
 			.run(sessionId).changes as number) === 1;
 	}
 
+	pruneExpiredDaemonInstanceLeases(now = Date.now()): number {
+		return this.db.prepare(`DELETE FROM daemon_instance_leases WHERE expires_at <= ?`)
+			.run(now).changes as number;
+	}
+
 	pruneExpiredLegacyProxyLeases(now = Date.now()): number {
 		return this.db.prepare(`DELETE FROM legacy_proxy_session_leases WHERE expires_at <= ?`)
 			.run(now).changes as number;
