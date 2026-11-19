@@ -9,7 +9,7 @@ import {
   PREMIND_STATE_DIR,
 } from "./constants.ts";
 
-const DEFAULT_PROBE_TIMEOUT_MS = 250;
+export const DEFAULT_PROBE_TIMEOUT_MS = 250;
 const DEFAULT_STALE_LOCK_MS = 10_000;
 
 export const CLAUDE_REQUIRED_DAEMON_OPERATIONS = [
@@ -357,6 +357,7 @@ export const inspectDaemon = (
           type: "debugStatus",
           protocolVersion: PREMIND_PROTOCOL_VERSION,
           payload: {},
+          probe: true,
         })}\n`,
       );
     });
@@ -432,7 +433,10 @@ export const waitForDaemon = async (
 ) => {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (await probeDaemon(socketPath, requiredOperations)) return true;
+    // Give each probe the remaining budget: a busy daemon still answers, and
+    // abandoning probes to resend them only queues more work until it starves.
+    const remaining = Math.max(DEFAULT_PROBE_TIMEOUT_MS, deadline - Date.now());
+    if (await probeDaemon(socketPath, requiredOperations, remaining)) return true;
     await new Promise((resolve) => setTimeout(resolve, retryMs));
   }
   return false;

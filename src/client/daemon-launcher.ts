@@ -5,6 +5,7 @@ import { PREMIND_SOCKET_PATH, PREMIND_STATE_DIR } from "../shared/constants.ts";
 import {
   acquireDaemonStartLock,
   DAEMON_START_LOCK_TOKEN_ENV,
+  DEFAULT_PROBE_TIMEOUT_MS,
   handOverOlderDaemon,
   inspectDaemon,
   isRunningDaemonOlder,
@@ -66,7 +67,12 @@ const waitForProbe = async (
     { status: "unreachable" | "unresponsive" }
   > = { status: "unreachable" };
   while (Date.now() < deadline) {
-    const result = await inspectDaemon(socketPath, requiredOperations);
+    // One patient probe at a time; see waitForDaemon.
+    const result = await inspectDaemon(
+      socketPath,
+      requiredOperations,
+      Math.max(DEFAULT_PROBE_TIMEOUT_MS, deadline - Date.now()),
+    );
     if (result.status === "compatible" || result.status === "incompatible") {
       return result;
     }
