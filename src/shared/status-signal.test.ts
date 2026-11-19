@@ -66,3 +66,12 @@ test("ready requires recent clean mergeability and complete passing checks", () 
   assert.equal(getPrSignal(clean, now, true).text, "? status unknown");
   assert.equal(getPrSignal({ ...clean, state: "MERGED", fetchedAt: 0 }, now, true).text, "◆ merged");
 });
+
+test("an UNKNOWN merge state still reports signals that do not depend on it", () => {
+  const recomputing = { ...clean, mergeStateStatus: "UNKNOWN" };
+  assert.equal(getPrSignal({ ...recomputing, reviewDecision: "REVIEW_REQUIRED" }, now).text, "! review needed");
+  assert.equal(getPrSignal({ ...recomputing, checks: [{ state: "fail" }] }, now).text, "✗ CI failing");
+  assert.equal(getPrSignal({ ...recomputing, checks: [{ state: "pending" }] }, now).text, "… checks pending");
+  assert.equal(getPrSignal({ ...recomputing, isDraft: true }, now).text, "○ draft");
+  assert.equal(getPrSignal({ ...clean, mergeStateStatus: undefined, reviewDecision: "CHANGES_REQUESTED" }, now).text, "! changes requested");
+});
