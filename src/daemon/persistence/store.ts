@@ -7,6 +7,7 @@ import {
 	PREMIND_COORDINATOR_LEASE_TTL_MS,
 	PREMIND_DAEMON_LEASE_TTL_MS,
 	PREMIND_CLOSED_SESSION_RETENTION_MS,
+	PREMIND_IDLE_SESSION_RETENTION_MS,
 	PREMIND_DB_PATH,
 	PREMIND_DATABASE_BUSY_TIMEOUT_MS,
 	PREMIND_PR_STREAM_RETENTION_MS,
@@ -1782,6 +1783,26 @@ export class StateStore {
 		this.lastReapCount = reaped;
 
 		return { reaped, oldestAgeMs };
+	}
+
+	/**
+	 * Closes detached and dormant sessions idle longer than retentionMs, so the
+	 * closed-session prune deletes them and releases their subscriptions.
+	 */
+	closeIdleSessions(now = Date.now(), retentionMs = PREMIND_IDLE_SESSION_RETENTION_MS): number {
+		const result = this.db
+			.prepare(
+				`UPDATE sessions SET status = 'closed', busy_state = 'idle', updated_at = :now
+				 WHERE status IN ('detached', 'dormant') AND last_activity_at < :cutoff
+				   AND NOT EXISTS (
+				     SELECT 1 FROM session_daemon_leases
+				     WHERE session_id = sessions.session_id AND expires_at > :now
+				   )`,
+			)
+			.run({ now, cutoff: now - retentionMs });
+		const closed = result.changes as number;
+		if (closed > 0) this.refreshWatcherCounts(now);
+		return closed;
 	}
 
 	getLastReapAt(): number | null {

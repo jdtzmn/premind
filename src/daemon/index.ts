@@ -201,17 +201,19 @@ async function startDaemon(lock: DaemonLock) {
 
   // Prune closed session rows and orphaned PR events at startup so any backlog
   // accumulated while the daemon was down is cleaned up immediately.
-  const [startupPrunedSessions, startupPrunedEvents, startupPrunedDaemonLeases, startupPrunedHandoffs] = server.store.withCoordinatorLease(
+  const [startupClosedIdleSessions, startupPrunedSessions, startupPrunedEvents, startupPrunedDaemonLeases, startupPrunedHandoffs] = server.store.withCoordinatorLease(
     coordinatorLease,
     () => [
+      server.store.closeIdleSessions(),
       server.store.pruneClosedSessions(PREMIND_CLOSED_SESSION_RETENTION_MS),
       server.store.pruneOrphanedPrEvents(),
       server.store.pruneExpiredDaemonInstanceLeases(),
       server.store.pruneSettledHandoffs(),
     ] as const,
   )
-  if (startupPrunedSessions > 0 || startupPrunedEvents > 0 || startupPrunedDaemonLeases > 0 || startupPrunedHandoffs > 0) {
+  if (startupClosedIdleSessions > 0 || startupPrunedSessions > 0 || startupPrunedEvents > 0 || startupPrunedDaemonLeases > 0 || startupPrunedHandoffs > 0) {
     logger.info("startup prune", {
+      closedIdleSessions: startupClosedIdleSessions,
       prunedClosedSessions: startupPrunedSessions,
       prunedOrphanedEvents: startupPrunedEvents,
       prunedDaemonLeases: startupPrunedDaemonLeases,
@@ -333,12 +335,14 @@ async function startDaemon(lock: DaemonLock) {
         thresholdMs: PREMIND_SESSION_STALE_MS,
       })
     }
+    const closedIdleSessions = server.store.closeIdleSessions()
     const prunedSessions = server.store.pruneClosedSessions(PREMIND_CLOSED_SESSION_RETENTION_MS)
     const prunedEvents = server.store.pruneOrphanedPrEvents()
     const prunedDaemonLeases = server.store.pruneExpiredDaemonInstanceLeases()
     const prunedHandoffRecords = server.store.pruneSettledHandoffs()
-    if (prunedSessions > 0 || prunedEvents > 0 || prunedDaemonLeases > 0 || prunedHandoffRecords > 0) {
+    if (closedIdleSessions > 0 || prunedSessions > 0 || prunedEvents > 0 || prunedDaemonLeases > 0 || prunedHandoffRecords > 0) {
       logger.info("pruned closed sessions and orphaned events", {
+        closedIdleSessions,
         prunedClosedSessions: prunedSessions,
         prunedOrphanedEvents: prunedEvents,
         prunedDaemonLeases,

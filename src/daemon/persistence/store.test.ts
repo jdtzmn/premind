@@ -9,6 +9,7 @@ import { afterEach, describe, test } from "node:test"
 import {
   PREMIND_CLIENT_LEASE_TTL_MS,
   PREMIND_CLOSED_SESSION_RETENTION_MS,
+  PREMIND_IDLE_SESSION_RETENTION_MS,
   PREMIND_PR_STREAM_RETENTION_MS,
   PREMIND_SETTLED_HANDOFF_RETENTION_MS,
 } from "../../shared/constants.ts"
@@ -3221,6 +3222,65 @@ describe("session detach and deletion", () => {
         now + 2 + PREMIND_CLOSED_SESSION_RETENTION_MS + 1,
       )
       assert.equal(store.getSession("session-1"), undefined)
+    } finally {
+      store.close()
+    }
+  })
+})
+
+describe("idle session retention", () => {
+  test("closes long-idle detached and dormant sessions for retention", () => {
+    const store = createStore()
+    const start = 1_000
+    const now = start + PREMIND_IDLE_SESSION_RETENTION_MS + 1
+    try {
+      store.registerClient("client-1", { pid: 1, projectRoot: "/tmp/project" }, start)
+      const register = (sessionId: string, at: number) =>
+        store.registerSession({
+          clientId: "client-1",
+          sessionId,
+          repo: "acme/repo",
+          branch: "feature/x",
+          isPrimary: true,
+          status: "active",
+          busyState: "idle",
+        }, at)
+      register("dormant-old", start)
+      register("detached-old", start)
+      register("detached-recent", now - 1)
+      register("active-old", start)
+      store.releaseSessionOwner("dormant-old", start)
+      store.unregisterSession("detached-old", start)
+      store.unregisterSession("detached-recent", now - 1)
+      store.upsertSubscription({ sessionId: "dormant-old", repo: "acme/repo", prNumber: 7, source: "manual" })
+
+      assert.equal(store.closeIdleSessions(now), 2)
+      assert.deepEqual(
+        ["dormant-old", "detached-old", "detached-recent", "active-old"]
+          .map((sessionId) => store.getSession(sessionId)?.status),
+        ["closed", "closed", "detached", "active"],
+      )
+
+      // The closed-session prune then deletes the row and its subscriptions.
+      store.pruneClosedSessions(
+        PREMIND_CLOSED_SESSION_RETENTION_MS,
+        now + PREMIND_CLOSED_SESSION_RETENTION_MS + 1,
+      )
+      assert.equal(store.getSession("dormant-old"), undefined)
+      assert.deepEqual(store.listSessionSubscriptions("dormant-old"), [])
+
+      // A host that resumes the session later attaches it again as a new session.
+      const resumed = store.ensureSessionControl({
+        clientId: "client-1",
+        sessionId: "dormant-old",
+        repo: "acme/repo",
+        branch: "feature/x",
+        isPrimary: true,
+        busyState: "idle",
+        paused: false,
+      })
+      assert.deepEqual(resumed, { created: true, superseded: 0 })
+      assert.equal(store.getSession("dormant-old")?.status, "active")
     } finally {
       store.close()
     }
