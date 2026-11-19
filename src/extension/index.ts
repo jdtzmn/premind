@@ -627,14 +627,20 @@ export const createPremindPiExtension = (
 			});
 		};
 
-		const pollStatus = async (
-			ctx: {
-				hasUI?: boolean;
-				isIdle?: () => boolean;
-				ui?: { setStatus?: (key: string, value?: string) => void };
-			},
-			generation: number,
-		) => {
+		type PollContext = {
+			cwd: string;
+			sessionManager?: { getSessionFile?: () => string | undefined };
+			hasUI?: boolean;
+			isIdle?: () => boolean;
+			ui?: { setStatus?: (key: string, value?: string) => void };
+		};
+
+		const attachAndActivate = async (ctx: PollContext) => {
+			const { client, sessionId } = await attachPiSession(ctx);
+			await client.activateWorktree({ sessionId, path: ctx.cwd });
+		};
+
+		const pollStatus = async (ctx: PollContext, generation: number) => {
 			if (generation !== sessionGeneration) return;
 			const startedAt = Date.now();
 			if (
@@ -648,6 +654,9 @@ export const createPremindPiExtension = (
 			statusPollStartedAt = startedAt;
 			let pollError: string | undefined;
 			try {
+				// A failed session_start attach (for example SESSION_BUSY while a
+				// reloaded instance's lease expires) is retried here.
+				if (!currentSessionId) await attachAndActivate(ctx);
 				await refreshStatusbar(ctx, generation);
 				if (
 					generation !== sessionGeneration ||
@@ -677,13 +686,7 @@ export const createPremindPiExtension = (
 			}
 		};
 
-		const startStatusPoll = (
-			ctx: {
-				hasUI?: boolean;
-				ui?: { setStatus?: (key: string, value?: string) => void };
-			},
-			generation: number,
-		) => {
+		const startStatusPoll = (ctx: PollContext, generation: number) => {
 			clearStatusPoll();
 			if (!config.enabled || config.statusPollIntervalMs <= 0) return;
 			statusPollTimer = setInterval(() => {
@@ -711,16 +714,13 @@ export const createPremindPiExtension = (
 				return;
 			}
 			try {
-				const { client, sessionId } = await attachPiSession(ctx);
-				await client.activateWorktree({
-					sessionId,
-					path: ctx.cwd,
-				});
+				await attachAndActivate(ctx);
 				await refreshStatusbar(ctx, generation);
 				if (generation !== sessionGeneration) return;
 				startStatusPoll(ctx, generation);
 			} catch (error) {
 				if (generation !== sessionGeneration) return;
+				startStatusPoll(ctx, generation);
 				setStatus(ctx, `${PR_ICON} error`);
 				notify(
 					ctx,

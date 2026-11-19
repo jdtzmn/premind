@@ -714,6 +714,43 @@ describe("premind Pi extension", () => {
 		await shutdown({}, ctx);
 	});
 
+	test("status polling retries a session attach that failed at session_start", async (t) => {
+		t.mock.timers.enable({ apis: ["setInterval"] });
+		const mock = createMockPi();
+		const client = createClient({ pendingBatch: reminderBatch });
+		const { ctx, notifications } = createEventContext();
+		const registerSession = client.client.registerSession;
+		let registrations = 0;
+		client.client.registerSession = async (payload) => {
+			// A reloaded instance races the previous instance's unexpired lease.
+			if (++registrations === 1) throw new Error("SESSION_BUSY: /tmp/session.jsonl");
+			await registerSession(payload);
+		};
+		createPremindPiExtension({
+			createDaemonClient: () => client.client,
+			config: { statusPollIntervalMs: 5_000 },
+			detectGit: async () => ({ repo: "owner/repo", branch: "feature/pi" }),
+		})(mock.pi as never);
+
+		const start = mock.events.get("session_start");
+		const shutdown = mock.events.get("session_shutdown");
+		assert.ok(start);
+		assert.ok(shutdown);
+		await start({}, ctx);
+		assert.match(notifications[0]?.message ?? "", /SESSION_BUSY/);
+
+		t.mock.timers.tick(5_000);
+		await new Promise<void>((resolve) => setImmediate(resolve));
+
+		assert.ok(
+			client.operations.includes(
+				"registerSession:/tmp/session.jsonl:owner/repo:feature/pi",
+			),
+		);
+		assert.equal(mock.sentMessages.length, 1);
+		await shutdown({}, ctx);
+	});
+
 	test("status polling recovers after a daemon request that never settles", async (t) => {
 		t.mock.timers.enable({ apis: ["setInterval", "Date"] });
 		const mock = createMockPi();

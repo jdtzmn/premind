@@ -49,6 +49,20 @@ import { PREMIND_COMMIT, PREMIND_VERSION } from "../shared/version.ts";
 
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 500;
+const isStaleSessionLease = (error: unknown) =>
+  error instanceof DaemonResponseError && error.code === "SESSION_MOVED";
+
+// The session a request is fenced by, if it carries one.
+const leasedSessionId = (message: unknown): string | undefined => {
+  const request = message as { type?: unknown; payload?: { sessionId?: unknown } };
+  const sessionId = request?.payload?.sessionId;
+  return typeof request?.type === "string" &&
+    !SESSION_LEASE_EXEMPT_OPERATIONS.has(request.type) &&
+    typeof sessionId === "string"
+    ? sessionId
+    : undefined;
+};
+
 const SESSION_LEASE_EXEMPT_OPERATIONS = new Set([
   "claimSessionLease",
   "renewSessionLease",
@@ -540,11 +554,18 @@ export class PremindDaemonClient {
     const current = this.sessionLeases.get(sessionId);
     if (!current || !this.supportsSessionLeaseOperation("renewSessionLease"))
       return;
-    const response = await this.requestWithRetry({
-      type: "renewSessionLease",
-      protocolVersion: PREMIND_PROTOCOL_VERSION,
-      payload: { lease: current },
-    });
+    let response: unknown;
+    try {
+      response = await this.requestWithRetry({
+        type: "renewSessionLease",
+        protocolVersion: PREMIND_PROTOCOL_VERSION,
+        payload: { lease: current },
+      });
+    } catch (error) {
+      if (!isStaleSessionLease(error)) throw error;
+      await this.reattachSession(sessionId);
+      return;
+    }
     const renewed = sessionLeaseTokenSchema.parse(
       (response as { lease?: unknown }).lease,
     );
@@ -685,6 +706,7 @@ export class PremindDaemonClient {
   private async requestWithRetry(
     message: unknown,
     attempt = 0,
+    leaseReclaimed = false,
   ): Promise<unknown> {
     try {
       // Negotiate inside the retry so a missing daemon is started rather than
@@ -693,6 +715,18 @@ export class PremindDaemonClient {
       await this.ensureRequestSessionLease(message);
       return await this.request(this.withNegotiatedProtocol(message));
     } catch (error) {
+      // A lease that expired while renewal was starved (sleep, load) is
+      // reclaimed once; a live owner elsewhere makes the claim fail SESSION_BUSY.
+      const sessionId = leasedSessionId(message);
+      if (
+        !leaseReclaimed &&
+        sessionId &&
+        isStaleSessionLease(error) &&
+        this.supportsSessionLeaseOperation("claimSessionLease")
+      ) {
+        await this.reattachSession(sessionId);
+        return this.requestWithRetry(message, attempt, true);
+      }
       if (attempt >= this.maxRetries) throw error;
 
       // Only failures emitted by the socket seam may reconnect and replay.
@@ -744,21 +778,29 @@ export class PremindDaemonClient {
   }
 
   private async replayAttachedSessions() {
-    for (const { type, payload } of this.attachedSessions.values()) {
-      const sessionId = payload.sessionId as string;
+    for (const sessionId of this.attachedSessions.keys()) {
       try {
-        await this.claimSessionLease(sessionId);
-        await this.request(
-          this.withNegotiatedProtocol({
-            type,
-            protocolVersion: PREMIND_PROTOCOL_VERSION,
-            payload: { ...payload, clientId: this.clientId },
-          }),
-        );
+        await this.reattachSession(sessionId);
       } catch {
         // The original request still retries; the next reconnect replays again.
       }
     }
+  }
+
+  // Claims a fresh lease and repeats the session's attachment, which the
+  // daemon may have dropped along with the old lease.
+  private async reattachSession(sessionId: string) {
+    this.sessionLeases.delete(sessionId);
+    await this.claimSessionLease(sessionId);
+    const attached = this.attachedSessions.get(sessionId);
+    if (!attached) return;
+    await this.request(
+      this.withNegotiatedProtocol({
+        type: attached.type,
+        protocolVersion: PREMIND_PROTOCOL_VERSION,
+        payload: { ...attached.payload, clientId: this.clientId },
+      }),
+    );
   }
 
   private async request(message: unknown) {
