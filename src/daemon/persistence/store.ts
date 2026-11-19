@@ -11,6 +11,7 @@ import {
 	PREMIND_DATABASE_BUSY_TIMEOUT_MS,
 	PREMIND_PR_STREAM_RETENTION_MS,
 	PREMIND_REMINDER_HANDOFF_STALE_MS,
+	PREMIND_SETTLED_HANDOFF_RETENTION_MS,
 	PREMIND_REMINDER_CLAIM_LEASE_MS,
 	PREMIND_STATE_DIR,
 	PREMIND_SUBSCRIPTION_RETENTION_MS,
@@ -2865,6 +2866,17 @@ export class StateStore {
 				batches,
 			};
 		});
+	}
+
+	/** Deletes settlements and execution claims settled before the retention window. */
+	pruneSettledHandoffs(now = Date.now(), retentionMs = PREMIND_SETTLED_HANDOFF_RETENTION_MS): number {
+		const cutoff = now - retentionMs;
+		return this.transaction(() =>
+			(this.db.prepare(`DELETE FROM reminder_handoff_settlements WHERE settled_at <= ?`)
+				.run(cutoff).changes as number) +
+			(this.db.prepare(`DELETE FROM reminder_handoff_execution_claims WHERE settled_at <= ?`)
+				.run(cutoff).changes as number),
+		);
 	}
 
 	/** Resolves exactly one claimed reminder bundle atomically. */

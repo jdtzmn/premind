@@ -201,19 +201,21 @@ async function startDaemon(lock: DaemonLock) {
 
   // Prune closed session rows and orphaned PR events at startup so any backlog
   // accumulated while the daemon was down is cleaned up immediately.
-  const [startupPrunedSessions, startupPrunedEvents, startupPrunedDaemonLeases] = server.store.withCoordinatorLease(
+  const [startupPrunedSessions, startupPrunedEvents, startupPrunedDaemonLeases, startupPrunedHandoffs] = server.store.withCoordinatorLease(
     coordinatorLease,
     () => [
       server.store.pruneClosedSessions(PREMIND_CLOSED_SESSION_RETENTION_MS),
       server.store.pruneOrphanedPrEvents(),
       server.store.pruneExpiredDaemonInstanceLeases(),
+      server.store.pruneSettledHandoffs(),
     ] as const,
   )
-  if (startupPrunedSessions > 0 || startupPrunedEvents > 0 || startupPrunedDaemonLeases > 0) {
+  if (startupPrunedSessions > 0 || startupPrunedEvents > 0 || startupPrunedDaemonLeases > 0 || startupPrunedHandoffs > 0) {
     logger.info("startup prune", {
       prunedClosedSessions: startupPrunedSessions,
       prunedOrphanedEvents: startupPrunedEvents,
       prunedDaemonLeases: startupPrunedDaemonLeases,
+      prunedHandoffRecords: startupPrunedHandoffs,
     })
   }
 
@@ -334,11 +336,13 @@ async function startDaemon(lock: DaemonLock) {
     const prunedSessions = server.store.pruneClosedSessions(PREMIND_CLOSED_SESSION_RETENTION_MS)
     const prunedEvents = server.store.pruneOrphanedPrEvents()
     const prunedDaemonLeases = server.store.pruneExpiredDaemonInstanceLeases()
-    if (prunedSessions > 0 || prunedEvents > 0 || prunedDaemonLeases > 0) {
+    const prunedHandoffRecords = server.store.pruneSettledHandoffs()
+    if (prunedSessions > 0 || prunedEvents > 0 || prunedDaemonLeases > 0 || prunedHandoffRecords > 0) {
       logger.info("pruned closed sessions and orphaned events", {
         prunedClosedSessions: prunedSessions,
         prunedOrphanedEvents: prunedEvents,
         prunedDaemonLeases,
+        prunedHandoffRecords,
       })
     }
     })

@@ -10,6 +10,7 @@ import {
   PREMIND_CLIENT_LEASE_TTL_MS,
   PREMIND_CLOSED_SESSION_RETENTION_MS,
   PREMIND_PR_STREAM_RETENTION_MS,
+  PREMIND_SETTLED_HANDOFF_RETENTION_MS,
 } from "../../shared/constants.ts"
 import { StateStore } from "./store.ts"
 import type { PullRequestSnapshot } from "../github/types.ts"
@@ -481,6 +482,54 @@ describe("StateStore", () => {
     assert.deepEqual(
       batchIds.map((batchId) => store.getReminderBatchRecord(batchId)),
       [null, null, null],
+    )
+    store.close()
+  })
+
+  test("prunes settled handoff records after retention but keeps unsettled claims", () => {
+    const store = createStore()
+    store.registerClient("bundle-client", { pid: 1, projectRoot: "/tmp/project" })
+    store.registerSession({
+      clientId: "bundle-client",
+      sessionId: "bundle-session",
+      repo: "acme/repo",
+      branch: "feature/bundle",
+      isPrimary: true,
+      status: "active",
+      busyState: "idle",
+    })
+    const subscription = store.upsertSubscription({
+      sessionId: "bundle-session",
+      repo: "acme/repo",
+      prNumber: 7,
+      source: "manual",
+    })
+    store.createOrReplaceReminder("bundle-session", subscription.subscriptionId, "First", [], 0)
+    const settled = store.claimReminderBundle("bundle-session")
+    assert.ok(settled)
+    const settledAt = Date.now()
+    const ack = { sessionId: "bundle-session", handoffId: settled.handoffId, state: "confirmed" as const }
+    assert.equal(store.ackReminderBundle(ack, settledAt), 1)
+    store.createOrReplaceReminder("bundle-session", subscription.subscriptionId, "Second", [], 0)
+    const unsettled = store.claimReminderBundle("bundle-session", settledAt)
+    assert.ok(unsettled)
+
+    const cutoff = settledAt + PREMIND_SETTLED_HANDOFF_RETENTION_MS
+    assert.equal(store.pruneSettledHandoffs(cutoff - 1), 0)
+    assert.equal(store.ackReminderBundle(ack), 1, "a retried ack stays idempotent within retention")
+    // The settlement and its execution claim.
+    assert.equal(store.pruneSettledHandoffs(cutoff), 2)
+    assert.equal(store.ackReminderBundle(ack), 0)
+    assert.equal(
+      store.validateHandoffExecution({
+        handoffId: unsettled.handoffId,
+        sessionId: "bundle-session",
+        ownerInstanceId: "legacy-singleton",
+        sessionGeneration: 0,
+        executionGeneration: unsettled.executionGeneration,
+        expiresAt: settledAt,
+      }, settledAt),
+      true,
     )
     store.close()
   })
