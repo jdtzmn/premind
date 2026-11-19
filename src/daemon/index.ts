@@ -19,6 +19,7 @@ import {
   DAEMON_START_LOCK_TOKEN_ENV,
   holdsDaemonLock,
   isSocketReachable,
+  refreshDaemonLock,
   releaseDaemonLock,
   type DaemonLock,
 } from "../shared/daemon-startup.ts"
@@ -55,7 +56,8 @@ const logger = createLogger("daemon")
 let abortStartup: (() => Promise<void>) | undefined
 
 const STALENESS_SWEEP_INTERVAL_MS = 5 * 60 * 1000
-// How often a running daemon confirms it still owns the daemon lock.
+// How often a running daemon confirms it still owns the daemon lock and
+// refreshes it, which keeps a congested daemon's lock from being reclaimed.
 const DAEMON_LOCK_CHECK_INTERVAL_MS = 15 * 1000
 
 async function main() {
@@ -374,7 +376,7 @@ async function startDaemon(lock: DaemonLock) {
   // A daemon whose lock was reclaimed (for example after it stopped answering)
   // must stop polling and writing so two daemons never run side by side.
   const lockCheckInterval = setInterval(() => {
-    if (holdsDaemonLock(lock)) return
+    if (refreshDaemonLock(lock)) return
     logger.warn("daemon lock taken over by another daemon; shutting down")
     lifecycle.requestStop("lock-lost")
   }, DAEMON_LOCK_CHECK_INTERVAL_MS)
