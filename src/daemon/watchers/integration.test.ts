@@ -649,7 +649,7 @@ describe("watcher integration", () => {
     store.recordBranchAssociation("acme/repo", "feature/stuck", 42)
 
     const snapshot = makeSnapshot()
-    for (let i = 0; i < 6; i++) {
+    for (let i = 0; i < 5; i++) {
       github.pushSnapshot({ ...snapshot, core: { ...snapshot.core, mergeStateStatus: "UNKNOWN" } })
     }
 
@@ -658,6 +658,15 @@ describe("watcher integration", () => {
     assert.equal(github.fetchCount, 4)
     await prWatcher.tick(10_003)
     assert.equal(github.fetchCount, 5)
+
+    // A known value resets the count, so the next UNKNOWN re-polls fast again.
+    github.pushSnapshot({ ...snapshot, core: { ...snapshot.core, mergeStateStatus: "BLOCKED" } })
+    github.pushSnapshot({ ...snapshot, core: { ...snapshot.core, mergeStateStatus: "UNKNOWN" } })
+    github.pushSnapshot({ ...snapshot, core: { ...snapshot.core, mergeStateStatus: "UNKNOWN" } })
+    await prWatcher.tick(20_003)
+    await prWatcher.tick(30_003)
+    await prWatcher.tick(30_004)
+    assert.equal(github.fetchCount, 8)
 
     store.close()
   })
