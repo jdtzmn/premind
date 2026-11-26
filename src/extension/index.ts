@@ -29,6 +29,10 @@ import {
 	formatDaemonLockStatus,
 	readPackagedBuild,
 } from "../shared/daemon-startup.ts";
+import {
+	createReminderDeliveryController,
+	createStalePollGuard,
+} from "../shared/reminder-delivery.ts";
 import type {
 	AckReminderPayload,
 	AckReminderBundlePayload,
@@ -326,23 +330,7 @@ export const createPremindPiExtension = (
 		let sessionClient: DaemonClientLike | undefined;
 		let heartbeatTimer: NodeJS.Timeout | undefined;
 		let statusPollTimer: NodeJS.Timeout | undefined;
-		// Start time of the running status poll, or undefined when none is running.
-		let statusPollStartedAt: number | undefined;
-		let statusPollToken = 0;
-		let lastStatusPollCompletedAt: number | undefined;
-		let lastStatusPollError: string | undefined;
-
-		const describeStatusPoll = (now: number) => {
-			if (
-				statusPollStartedAt !== undefined &&
-				now - statusPollStartedAt >= STATUS_POLL_STALE_MS
-			)
-				return `stuck for ${Math.round((now - statusPollStartedAt) / 1000)}s; the next poll replaces it`;
-			if (lastStatusPollCompletedAt === undefined) return "no poll has completed yet";
-			const age = `last completed ${Math.round((now - lastStatusPollCompletedAt) / 1000)}s ago`;
-			return lastStatusPollError ? `${age} with an error: ${lastStatusPollError}` : age;
-		};
-		let deliveryInFlight = false;
+		const statusPoll = createStalePollGuard(STATUS_POLL_STALE_MS);
 		let sessionGeneration = 0;
 		let config = normalizePremindPiConfig(dependencies.config);
 		let currentSessionId: string | undefined;
@@ -413,7 +401,7 @@ export const createPremindPiExtension = (
 				`- session: ${currentSessionId ? `attached (${formatSessionId(currentSessionId)})` : "not attached"}`,
 				"- delivery: follow-up messages can wake an idle Pi session",
 				...(config.statusPollIntervalMs > 0
-					? [`- idle delivery poll: ${describeStatusPoll(Date.now())}`]
+					? [`- idle delivery poll: ${statusPoll.describe()}`]
 					: []),
 				`- daemon lock: ${formatDaemonLockStatus(daemonLockStatus())}`,
 				`- ${await describeDaemonBuild({ host: "pi", build: readPackagedBuild() })}`,
@@ -537,49 +525,10 @@ export const createPremindPiExtension = (
 			);
 		};
 
-		const deliverPendingReminders = async (
-			sessionId: string,
-			generation: number,
-			options: { force?: boolean } = {},
-		) => {
-			if (
-				!config.enabled ||
-				(!options.force && !config.autoDeliver) ||
-				deliveryInFlight ||
-				generation !== sessionGeneration
-			)
-				return { delivered: false as const };
-			deliveryInFlight = true;
-			const client = getClient();
-			let batches: ReminderBatch[] = [];
-			let handoffId: string | null = null;
-			let handedOff = false;
-			try {
-				const bundle = (await client.claimReminderBundle(sessionId)).bundle;
-				if (!bundle) return { delivered: false as const };
-				batches = bundle.batches;
-				handoffId = bundle.handoffId;
-				handedOff = true;
-
-				if (generation !== sessionGeneration) {
-					await client.ackReminderBundle({
-						sessionId,
-						handoffId,
-						state: "failed",
-						error: "Pi session ended before reminder delivery",
-					});
-					handedOff = false;
-					return { delivered: false as const };
-				}
-
-				const reminderText = batches
-					.map((batch) => batch.reminderText)
-					.join("\n\n");
-				const details: ReminderBatch = {
-					...batches[0],
-					reminderText,
-					events: batches.flatMap((batch) => batch.events),
-				};
+		const reminderDelivery = createReminderDeliveryController({
+			getClient: () => getClient(),
+			sessionEndedError: "Pi session ended before reminder delivery",
+			send: ({ reminderText, details }) => {
 				pi.sendMessage(
 					{
 						customType: "premind-reminder",
@@ -589,34 +538,20 @@ export const createPremindPiExtension = (
 					},
 					{ deliverAs: "followUp", triggerTurn: true },
 				);
-				const result = await client.ackReminderBundle({
-					sessionId,
-					handoffId,
-					state: "confirmed",
-				});
-				if (result.acknowledged !== batches.length)
-					throw new Error(
-						`Confirmed ${result.acknowledged} of ${batches.length} reminder batches`,
-					);
-				handedOff = false;
-				return { delivered: true as const, batches };
-			} catch (error) {
-				if (handedOff) {
-					try {
-						await client.ackReminderBundle({
-							sessionId,
-							handoffId: handoffId!,
-							state: "failed",
-							error: error instanceof Error ? error.message : String(error),
-						});
-					} catch {
-						// Preserve the original delivery failure.
-					}
-				}
-				throw error;
-			} finally {
-				deliveryInFlight = false;
-			}
+			},
+		});
+
+		const deliverPendingReminders = async (
+			sessionId: string,
+			generation: number,
+			options: { force?: boolean } = {},
+		) => {
+			if (!config.enabled || (!options.force && !config.autoDeliver))
+				return { delivered: false as const };
+			return reminderDelivery.deliver(
+				sessionId,
+				() => generation === sessionGeneration,
+			);
 		};
 
 		const markBusyState = async (busyState: "busy" | "idle") => {
@@ -642,17 +577,11 @@ export const createPremindPiExtension = (
 
 		const pollStatus = async (ctx: PollContext, generation: number) => {
 			if (generation !== sessionGeneration) return;
-			const startedAt = Date.now();
-			if (
-				statusPollStartedAt !== undefined &&
-				startedAt - statusPollStartedAt < STATUS_POLL_STALE_MS
-			)
-				return;
 			// Owning the poll by token lets an abandoned poll finish late without
-			// clearing the marker of the poll that replaced it.
-			const token = ++statusPollToken;
-			statusPollStartedAt = startedAt;
-			let pollError: string | undefined;
+			// clearing the record of the poll that replaced it.
+			const token = statusPoll.begin();
+			if (token === undefined) return;
+			let pollError: unknown;
 			try {
 				// A failed session_start attach (for example SESSION_BUSY while a
 				// reloaded instance's lease expires) is retried here.
@@ -671,18 +600,14 @@ export const createPremindPiExtension = (
 				if (generation === sessionGeneration && result.delivered)
 					setStatus(ctx, undefined);
 			} catch (error) {
-				pollError = error instanceof Error ? error.message : String(error);
+				pollError = error;
 				if (
 					generation === sessionGeneration &&
 					!isStaleExtensionContextError(error)
 				)
 					setStatus(ctx, `${PR_ICON} error`);
 			} finally {
-				if (token === statusPollToken) {
-					statusPollStartedAt = undefined;
-					lastStatusPollCompletedAt = Date.now();
-					lastStatusPollError = pollError;
-				}
+				statusPoll.end(token, pollError);
 			}
 		};
 
