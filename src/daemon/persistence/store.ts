@@ -859,13 +859,22 @@ export class StateStore {
 
 		// A crash leaves handed-off delivery uncertain. Preserve the durable batch
 		// and its cursor, but move it through the valid failure transition so the
-		// handoff registry can explicitly retry it after reconstruction.
+		// handoff registry can explicitly retry it after reconstruction. Bundle
+		// members keep their handoff id so the retry reuses it (hosts dedupe on it);
+		// the dead process's execution claims expire so a new owner can take them.
 		const resetBatches = this.db
 			.prepare(
 				`UPDATE reminder_batches
-				 SET state = 'failed', handoff_id = NULL, handoff_size = NULL,
-				     lease_expires_at = NULL, updated_at = :now
+				 SET state = 'failed', lease_expires_at = NULL, updated_at = :now,
+				     handoff_id = CASE WHEN lease_expires_at IS NULL THEN handoff_id END,
+				     handoff_size = CASE WHEN lease_expires_at IS NULL THEN handoff_size END
 				 WHERE state = 'handed_off'`,
+			)
+			.run({ now });
+		this.db
+			.prepare(
+				`UPDATE reminder_handoff_execution_claims SET expires_at = :now
+				 WHERE settled_at IS NULL AND expires_at > :now`,
 			)
 			.run({ now });
 
@@ -2840,21 +2849,26 @@ export class StateStore {
 			}
 			if (batches.length === 0) return null;
 
-			const reusableHandoffIds = new Set(
-				batches.flatMap((batch) => {
-					const record = this.getReminderBatchRecord(batch.batchId, sessionId);
-					if (!record?.handoffId) return [];
-					const settled = this.db.prepare(
-						`SELECT 1 FROM reminder_handoff_settlements WHERE handoff_id = ?`,
-					).get(record.handoffId);
-					return settled ? [] : [record.handoffId];
-				}),
-			);
-			const handoffId = reusableHandoffIds.size === 1
-				? [...reusableHandoffIds][0]!
-				: randomUUID();
-			const handoffSize = batches.length;
-			for (const batch of batches) {
+			// An unsettled handoff is retried alone under its original id: idempotent
+			// hosts may already hold that id, so folding newer batches into it would
+			// drop them silently. They are claimed under a new id once it settles.
+			const unsettledHandoffId = (batchId: string) => {
+				const handoffId = this.getReminderBatchRecord(batchId, sessionId)?.handoffId;
+				if (!handoffId) return undefined;
+				const settled = this.db.prepare(
+					`SELECT 1 FROM reminder_handoff_settlements WHERE handoff_id = ?`,
+				).get(handoffId);
+				return settled ? undefined : handoffId;
+			};
+			const retried = batches
+				.map((batch) => unsettledHandoffId(batch.batchId))
+				.find((id) => id !== undefined);
+			const handoffId = retried ?? randomUUID();
+			const claimed = retried
+				? batches.filter((batch) => unsettledHandoffId(batch.batchId) === retried)
+				: batches;
+			const handoffSize = claimed.length;
+			for (const batch of claimed) {
 				const record = this.getReminderBatchRecord(batch.batchId, sessionId);
 				if (!record) throw new Error(`Missing reminder batch ${batch.batchId}`);
 				if (
@@ -2884,7 +2898,7 @@ export class StateStore {
 			return {
 				handoffId,
 				executionGeneration: execution.executionGeneration,
-				batches,
+				batches: claimed,
 			};
 		});
 	}
