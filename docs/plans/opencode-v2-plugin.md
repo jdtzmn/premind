@@ -54,11 +54,12 @@ tests can load it by path. The cutover PR points the package exports at it.
 
 ### Delivery
 
-1. Trigger on a session's execution ending, or on the status poll finding
-   pending reminders while the session is idle.
+1. Trigger from the `experimental.idle` session hook, so the reminder runs in
+   the same execution, or from the status poll finding pending reminders while
+   the session is idle.
 2. Claim the whole bundle (`claimReminderBundle`).
 3. Send one synthetic message:
-   - `id`: derived from the handoff ID, so retries are idempotent
+   - `id`: `msg_premind_<handoffId>`, so retries are idempotent
    - `description`: short label, for example `premind · 3 PR updates — CI failed: npm run check`
    - `text`: the full `<system-reminder>`
    - `metadata.premind`: `{ handoffId, events }`
@@ -169,8 +170,50 @@ the harness covers them.
 - Plugin runtime (Bun or Node), which matters for `node:sqlite` in any code the
   plugin imports.
 
-Findings are recorded here when the spike lands, and PRs 5–8 are adjusted
-before they are written.
+### Spike findings (OpenCode 2.4.2)
+
+The spike ran a real `opencode serve` with a throwaway plugin in
+`.opencode/plugins/<name>/server.ts` against a fake OpenAI-compatible model.
+
+- **Best delivery hook:** `ctx.session.hook("experimental.idle")` runs when a
+  session finishes model work and has nothing pending, just before it goes
+  idle. A synthetic message sent from inside the hook continues the same
+  execution: the model sees it as the next user message, and no separate idle
+  or start event fires. This matches Pi's `turn_end` follow-up, so it becomes
+  the main delivery trigger. The status poll covers sessions that are already
+  idle, using `resume: true`.
+- **Synthetic ids:** must start with `msg_`. Ids are unique across sessions,
+  and the server persists them. Reusing an id in the same session returns the
+  original message, while reusing it in another session throws
+  `Session.SyntheticConflictError`. The id is therefore
+  `msg_premind_<handoffId>`, since handoff ids are never reused.
+- **What the model sees:** the synthetic message's `text` arrives as a plain
+  user message. `description` and `metadata` are not sent to the model.
+- **`resume: false`** enqueues the message without starting a turn.
+  `session.inbox.enqueued` and `session.inbox.delivered` carry the message id.
+- **Event stream:** carries every session the server runs, and some events
+  (`session.execution.*`, `session.usage.updated`) have `location: null`. The
+  plugin filters by sessions it attached, not by the event's location.
+- **Tools:** a tool added with `options: { namespace: "premind", codemode: false }`
+  and `name: "status"` is exposed to the model as `premind_status`, so the
+  current names are kept. Without `codemode: false`, namespaced tools appear
+  only in the Code Mode catalog (`tools.premind.status(...)`).
+- **Commands:** `ctx.command.transform` commands appear in `command.list` and
+  run through `session.command({ name, text })`. The handler receives
+  `{ sessionID, prompt: { text }, delivery }`, and nothing is shown unless the
+  handler sends a message.
+- **RPC:** JSON-Schema contracts work with `client.rpc(def).method(input)`. The
+  plugin loads on the location's first request, so the first call can race the
+  load. Clients retry once when they get an RPC unavailable error.
+- **Lifecycle:** `location.reload()` runs the plugin's cleanup and then
+  `setup` again. On SIGTERM the server emits `location.shutdown` and then runs
+  cleanup.
+- **Runtime:** plugins run in OpenCode's bundled Bun (`/$bunfs`), so the plugin
+  must not import `node:sqlite`. Only the daemon, which runs under Node, uses it.
+- **Still open, to settle in PR 8 with the TUI:** how `description` renders in
+  the transcript, and whether TUI and server commands with the same name
+  collide. **To settle in PR 6:** whether skills added with `skill.transform`
+  are listed.
 
 ## PR stack
 
