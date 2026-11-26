@@ -7,8 +7,8 @@ name: OpenCode V2 end-to-end
 on:
   push:
     branches: [main]
+  # No branch filter, so PRs stacked on other PRs run it too.
   pull_request:
-    branches: [main]
     paths:
       - "src/plugin-opencode*/**"
       - "src/daemon/**"
