@@ -64,3 +64,14 @@ test("rejects requests without the fake token", async () => {
   const response = await fetch(`${github.url}/user`)
   assert.equal(response.status, 401)
 })
+
+test("requires both a loopback endpoint and explicit fixture credentials", (context) => {
+  context.after(() => Object.assign(process.env, github.env()))
+
+  process.env[GITHUB_API_URL_ENV] = "https://fixture.example"
+  assert.throws(() => new GitHubClient(), /Fake GitHub requires a loopback API URL and a fixture token/)
+
+  process.env[GITHUB_API_URL_ENV] = github.url
+  delete process.env[GITHUB_TOKEN_ENV]
+  assert.throws(() => new GitHubClient(), /Fake GitHub requires a loopback API URL and a fixture token/)
+})
