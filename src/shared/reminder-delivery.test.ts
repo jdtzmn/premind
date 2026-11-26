@@ -149,6 +149,23 @@ test("fails the handoff when the daemon confirms fewer batches than were sent", 
 	);
 });
 
+test("keeps an idempotent host's admitted handoff when confirmation fails", async () => {
+	const { client, acks } = fakeClient([batch("a", "first")]);
+	client.ackReminderBundle = async (payload) => {
+		acks.push(payload);
+		throw new Error("lost the acknowledgement");
+	};
+	const controller = createReminderDeliveryController({
+		getClient: () => client,
+		send: () => {},
+		sessionEndedError: "ended",
+		retainHandoffOnConfirmationFailure: true,
+	});
+
+	await assert.rejects(controller.deliver("s1"), /lost the acknowledgement/);
+	assert.deepEqual(acks, [{ sessionId: "s1", handoffId: "handoff-1", state: "confirmed" }]);
+});
+
 test("runs one delivery per session at a time but lets other sessions proceed", async () => {
 	const { client, claims } = fakeClient([batch("a", "first")]);
 	let release!: () => void;

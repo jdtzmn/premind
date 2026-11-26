@@ -31,6 +31,8 @@ export type ReminderDeliveryControllerOptions = {
 	send: (bundle: ClaimedReminderBundle) => void | Promise<void>;
 	/** Failure reason recorded when the session ends between claim and send. */
 	sessionEndedError: string;
+	/** Leave the handoff retryable under the same ID after admission to an idempotent host. */
+	retainHandoffOnConfirmationFailure?: boolean;
 };
 
 export function mergeReminderBatches(
@@ -89,9 +91,10 @@ export function createReminderDeliveryController(
 			}
 
 			await options.send(mergeReminderBatches(sessionId, handoffId, batches));
+			if (options.retainHandoffOnConfirmationFailure) handoffId = undefined;
 			const result = await client.ackReminderBundle({
 				sessionId,
-				handoffId,
+				handoffId: bundle.handoffId,
 				state: "confirmed",
 			});
 			if (result.acknowledged !== batches.length)
