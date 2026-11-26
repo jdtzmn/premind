@@ -51,7 +51,16 @@ export class GitHubHttpError extends Error {
   }
 }
 
+/**
+ * Test-only overrides read when the daemon starts, so end-to-end tests can
+ * point a real daemon at a fake GitHub. Unset in normal use.
+ */
+export const GITHUB_API_URL_ENV = "PREMIND_GITHUB_API_URL"
+export const GITHUB_TOKEN_ENV = "PREMIND_GITHUB_TOKEN"
+
 const defaultTokenProvider = async () => {
+  const override = process.env[GITHUB_TOKEN_ENV]
+  if (override) return override
   const { stdout } = await execFileAsync("gh", ["auth", "token"], {
     timeout: TOKEN_LOOKUP_TIMEOUT_MS,
   })
@@ -79,7 +88,7 @@ export class GitHubHttpClient {
   constructor(options: GitHubHttpOptions = {}) {
     this.fetchImpl = options.fetchImpl ?? fetch
     this.tokenProvider = options.tokenProvider ?? defaultTokenProvider
-    this.baseUrl = options.baseUrl ?? GITHUB_API_BASE
+    this.baseUrl = (options.baseUrl ?? process.env[GITHUB_API_URL_ENV] ?? GITHUB_API_BASE).replace(/\/+$/, "")
     this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_GITHUB_REQUEST_TIMEOUT_MS
     this.rateLimit = options.rateLimit ?? new RateLimitTracker()
   }
