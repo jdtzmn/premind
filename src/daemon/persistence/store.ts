@@ -3667,6 +3667,18 @@ export class StateStore {
 							now,
 							subscriptionId: row.subscription_id,
 						});
+				} else {
+					// A legacy batch carries the session's PR stream. Any subscription this
+					// session holds for that PR, including a deactivated automatic one that
+					// discovery re-attaches later, has now seen these events too.
+					this.db
+						.prepare(
+							`UPDATE session_subscriptions
+							 SET last_delivered_event_seq = MAX(last_delivered_event_seq, :seq), updated_at = :now
+							 WHERE session_id = :sessionId
+							   AND (repo, pr_number) = (SELECT repo, pr_number FROM sessions WHERE session_id = :sessionId)`,
+						)
+						.run({ seq: row.max_event_seq, now, sessionId });
 				}
 				// Keep the legacy session cursor synchronized until all adapters and
 				// migrations exclusively consume subscription-owned cursors.
