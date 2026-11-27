@@ -3,7 +3,7 @@ import { renderPremindStatus } from "../plugin-opencode/commands.ts"
 import { daemonLockStatus, describeDaemonBuild, formatDaemonLockStatus, readPackagedBuild } from "../shared/daemon-startup.ts"
 import type { SubscribePayload, UnsubscribePayload } from "../shared/schema.ts"
 import { SESSION_PAUSED_DELIVERY_MESSAGE, SESSION_PAUSED_MESSAGE, SESSION_RESUMED_MESSAGE } from "../shared/session-pause.ts"
-import { renderCurrentStatus } from "../shared/status-view.ts"
+import { getCurrentStatusLines, renderCurrentStatus } from "../shared/status-view.ts"
 import { PREMIND_VERSION_LABEL } from "../shared/version.ts"
 import type { trackSessions } from "./sessions.ts"
 
@@ -53,6 +53,13 @@ export function premindActions(sessions: ReturnType<typeof trackSessions>, direc
 				? SESSION_PAUSED_DELIVERY_MESSAGE
 				: "premind: no pending PR updates to deliver"
 		}),
+		async prune() {
+			await connect()
+			const result = await daemon.pruneClosedSessions() as { sessions: number; reminderBatches: number }
+			return `premind pruned ${result.sessions} closed session${result.sessions === 1 ? "" : "s"} and ${result.reminderBatches} reminder batch${result.reminderBatches === 1 ? "" : "es"}.`
+		},
+		statusLines: (sessionID: string) => withSession(sessionID, async () =>
+			getCurrentStatusLines(await daemon.debugStatus({ includeSnapshots: true }), sessionID)),
 		async setDisabled(disabled: boolean) {
 			await connect()
 			await daemon.setGlobalDisabled(disabled)

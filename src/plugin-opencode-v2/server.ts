@@ -1,7 +1,8 @@
 import { Plugin } from "@opencode/plugin"
 import { PREMIND_VERSION_LABEL } from "../shared/version.ts"
 import { premindActions } from "./actions.ts"
-import { PremindRpc, type PingOutput } from "./rpc.ts"
+import { registerCommands, runPremindCommand } from "./commands.ts"
+import { PremindRpc, type CommandInput, type CommandOutput, type PingOutput, type StatusLinesOutput } from "./rpc.ts"
 import { trackSessions } from "./sessions.ts"
 import { registerSkill } from "./skill.ts"
 import { registerTools } from "./tools.ts"
@@ -9,20 +10,30 @@ import { registerTools } from "./tools.ts"
 export default Plugin.define({
 	id: "premind",
 	async setup(ctx) {
-		const rpc = await ctx.rpc.register(PremindRpc, {
-			ping: async (): Promise<PingOutput> => ({ version: PREMIND_VERSION_LABEL }),
-		})
 		const sessions = trackSessions(ctx)
+		const actions = premindActions(sessions, ctx.location.directory)
+		let rpc: { dispose(): Promise<void> | void } | undefined
 		try {
-			await registerTools(ctx, premindActions(sessions, ctx.location.directory))
+			rpc = await ctx.rpc.register(PremindRpc, {
+				ping: async (): Promise<PingOutput> => ({ version: PREMIND_VERSION_LABEL }),
+				command: async (input): Promise<CommandOutput> => {
+					const { name, sessionID, args } = input as CommandInput
+					return runPremindCommand(actions, name, sessionID, args)
+				},
+				statusLines: async (input): Promise<StatusLinesOutput> =>
+					({ lines: await actions.statusLines((input as { sessionID: string }).sessionID) }),
+			})
+			await registerTools(ctx, actions)
+			await registerCommands(ctx, actions)
 			await registerSkill(ctx)
 		} catch (error) {
+			await rpc?.dispose()
 			await sessions.dispose()
 			throw error
 		}
 		return async () => {
 			await sessions.dispose()
-			await rpc.dispose()
+			await rpc?.dispose()
 		}
 	},
 })
