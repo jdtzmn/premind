@@ -30,6 +30,25 @@ function getLogStream(): fs.WriteStream {
   return logStream
 }
 
+// The daemon outlives the host that spawned it, and some hosts pipe its stdio.
+// Once that host exits, writes fail with EPIPE; unhandled, that error crashed
+// the daemon under every other host. Console output is best-effort; the log
+// file is the durable record.
+const guardedStreams = new WeakSet<NodeJS.WriteStream>()
+
+function writeConsole(stream: NodeJS.WriteStream, text: string) {
+  if (!guardedStreams.has(stream)) {
+    guardedStreams.add(stream)
+    stream.on("error", () => {})
+  }
+  if (stream.destroyed || !stream.writable) return
+  try {
+    stream.write(text)
+  } catch {
+    // A synchronous write error means the same closed stream.
+  }
+}
+
 export class Logger {
   constructor(private readonly service: string) {}
 
@@ -60,11 +79,7 @@ export class Logger {
       ...(extra ? { extra } : {}),
     }
     const line = JSON.stringify(entry)
-    if (level === "error") {
-      process.stderr.write(`${line}\n`)
-    } else {
-      process.stdout.write(`${line}\n`)
-    }
+    writeConsole(level === "error" ? process.stderr : process.stdout, `${line}\n`)
     try {
       getLogStream().write(`${line}\n`)
     } catch {
