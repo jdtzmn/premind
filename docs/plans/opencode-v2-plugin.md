@@ -217,9 +217,15 @@ The spike ran a real `opencode serve` with a throwaway plugin in
 - **Skills (PR 6):** skills added with `skill.transform` appear in
   `skill.list`. The plugin registers the generated `SKILL.md` body with the
   packaged file as its path, so the model can read the references beside it.
-- **Still open, to settle in PR 8 with the TUI:** how `description` renders in
-  the transcript, and whether TUI and server commands with the same name
-  collide.
+- **Server command results (PR 7):** `session.synthetic` has no display-only
+  mode. The server commands queue their result with `resume: false`, so it
+  waits in the inbox and joins the transcript (and the model's input) with the
+  next turn. The TUI shows results immediately over RPC instead, which is why
+  it is the main surface.
+- **Still open, to settle with the cutover:** how `description` renders in
+  the transcript, whether TUI and server commands with the same name collide,
+  and how OpenCode loads the package's `./tui` export. The TUI is covered by
+  unit tests against a fake TUI context until then.
 
 ## PR stack
 
