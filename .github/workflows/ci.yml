@@ -121,6 +121,12 @@ jobs:
             binary_env: PREMIND_E2E_PI_BIN
             # Pi 1.x declares engines.node >=22.19.
             node: "22.19"
+          - harness: opencode
+            # Keep in step with @opencode/plugin and @opencode/client in package.json.
+            package: "@opencode/cli@2.4.2"
+            binary: opencode
+            binary_env: PREMIND_E2E_OPENCODE_BIN
+            node: "22.13"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
