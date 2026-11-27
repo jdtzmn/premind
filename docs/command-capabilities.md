@@ -62,7 +62,6 @@ This matrix is generated from `src/shared/command-capabilities.ts`. Every harnes
 - `resume` / Claude Code / tools (host-naming): Claude MCP tools omit the premind_ prefix.
 - `resume` / Codex / commands (unsupported): Codex plugins expose MCP tools and skills, not slash commands.
 - `prune` / Codex / commands (unsupported): Codex plugins expose MCP tools and skills, not slash commands.
-- skills / OpenCode (unsupported): OpenCode's npm plugin cannot install into OpenCode's skill discovery directories.
 
 ## Notes
 

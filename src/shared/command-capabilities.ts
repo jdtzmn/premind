@@ -43,12 +43,6 @@ export const hostLimitations = {
 		capabilities: ["deliver"],
 		reason: "Claude delivery remains owned by the Stop hook.",
 	},
-	"opencode-no-skill-install": {
-		harness: "opencode",
-		surface: "skills",
-		reason:
-			"OpenCode's npm plugin cannot install into OpenCode's skill discovery directories.",
-	},
 } as const satisfies Record<
 	string,
 	{
@@ -565,9 +559,7 @@ export type CommandCapabilityId = keyof typeof commandCapabilities;
 /** Harness-level surfaces outside the command/tool matrix. */
 export const harnessSkillExceptions: Partial<
 	Record<PremindHarness, CapabilityException>
-> = {
-	opencode: unsupported("opencode-no-skill-install"),
-};
+> = {};
 
 export const harnessSurface = (
 	capability: CommandCapability,
