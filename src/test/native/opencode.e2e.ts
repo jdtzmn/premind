@@ -29,7 +29,10 @@ describe("opencode: V2 plugin", { skip: "missing" in located ? located.missing :
 	const daemonSession = (id = session.id) => e2e.daemon.session(id)
 	/** Premind's synthetic messages in the session transcript. */
 	const reminders = async () => (await opencode.client().session.context({ sessionID: session.id }))
-		.flatMap((message) => message.type === "synthetic" && message.id.startsWith("msg_premind_") ? [message] : [])
+		.flatMap((message) => message.type === "synthetic" && message.id.startsWith("msg_premind_") && !message.id.startsWith("msg_premind_command_") ? [message] : [])
+	/** Command results Premind queued into the transcript. */
+	const commandResults = async () => (await opencode.client().session.context({ sessionID: session.id }))
+		.flatMap((message) => message.type === "synthetic" && message.id.startsWith("msg_premind_command_") ? [message] : [])
 	const expectReminder = async (...updates: string[]) => {
 		const includesUpdates = (text: string) => updates.every((update) => text.includes(update))
 		await e2e.waitFor(`${updates.join(" and ")} in the model input`, () => e2e.model.userMessages().some(includesUpdates), 60_000)
@@ -95,6 +98,41 @@ describe("opencode: V2 plugin", { skip: "missing" in located ? located.missing :
 		const row = e2e.daemon.get<{ write_policy: string }>(
 			"SELECT write_policy FROM session_subscriptions WHERE session_id = ? AND repo = ? AND pr_number = 43", session.id, REPO)
 		assert.equal(row?.write_policy, "observe-only")
+	})
+
+	test("lists the Premind commands and runs them without a model turn", async () => {
+		const commands = new Set((await opencode.client().command.list()).data.map((command) => command.name))
+		for (const name of ["status", "debug-status", "doctor", "subscribe", "unsubscribe", "set-active-checkout", "pause", "resume", "deliver", "enable", "disable", "prune"]) {
+			assert.ok(commands.has(`premind:${name}`), `premind:${name} is a command`)
+		}
+		for (const alias of ["premind-status", "premind-send-now", "premind-enable", "premind-disable"]) {
+			assert.ok(commands.has(alias), `${alias} stays as an alias`)
+		}
+		const requests = e2e.model.requests.length
+		await opencode.client().session.command({ sessionID: session.id, name: "premind:pause", text: "" })
+		const paused = () => e2e.daemon.get("SELECT session_id FROM session_pauses WHERE session_id = ?", session.id) !== undefined
+		await e2e.waitFor("the session to pause", paused)
+		await opencode.client().session.command({ sessionID: session.id, name: "premind:resume", text: "" })
+		await e2e.waitFor("the session to resume", () => !paused())
+		assert.equal(e2e.model.requests.length, requests, "commands do not start a model turn")
+		// Results wait in the inbox and join the transcript with the next turn.
+		e2e.model.reply({ text: "noted" })
+		await session.prompt("continue")
+		await e2e.waitFor("the command results in the transcript", async () => {
+			const descriptions = (await commandResults()).map((message) => message.description)
+			return descriptions.includes("/premind:pause") && descriptions.includes("/premind:resume")
+		})
+	})
+
+	test("runs commands over RPC for the TUI", async () => {
+		const rpc = opencode.client().rpc(PremindRpc)
+		const status = await rpc.command({ name: "premind:status", sessionID: session.id }) as { ok: boolean; text: string }
+		assert.equal(status.ok, true)
+		assert.match(status.text, /#42 Add widgets/)
+		const usage = await rpc.command({ name: "premind:subscribe", sessionID: session.id, args: "not-a-number" }) as { ok: boolean; text: string }
+		assert.deepEqual(usage, { ok: false, text: "premind:subscribe failed: usage: /premind:subscribe <pr> [owner/repo]" })
+		const lines = await rpc.statusLines({ sessionID: session.id }) as { lines: unknown[] }
+		assert.ok(lines.lines.some((line) => typeof line === "object"), "PR lines carry a signal for coloring")
 	})
 
 	test("delivers one merged reminder at the end of the running execution", async () => {
