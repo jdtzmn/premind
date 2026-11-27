@@ -43,8 +43,8 @@ export class BranchDiscoveryWatcher {
       this.logger.warn("authenticated GitHub user has no login; skipping automatic PR discovery")
       return
     }
-    for (const targets of targetsByBranch.values()) {
-      const target = targets[0]!
+    for (const initialTargets of targetsByBranch.values()) {
+      const target = initialTargets[0]!
       try {
         const cachedEtag = this.store.getEtag(BRANCH_PULLS_ETAG_SCOPE, etagKey(target.repo, target.branch))
         const result = await this.github.findOpenPullRequestForBranch(target.repo, target.branch, {
@@ -62,6 +62,12 @@ export class BranchDiscoveryWatcher {
         if (result.etag !== null) {
           this.store.saveEtag(BRANCH_PULLS_ETAG_SCOPE, etagKey(target.repo, target.branch), result.etag, now)
         }
+
+        // Sessions can bind or release worktrees while GitHub answers. Act on the
+        // branch's current targets so a session bound mid-lookup is subscribed before
+        // the discovery event is appended.
+        const targets = this.currentTargets(target.repo, target.branch, now)
+        if (targets.length === 0) continue
 
         const pr = result.pr
         if (pr && pr.authorLogin?.toLowerCase() !== viewerLogin.toLowerCase()) {
@@ -158,5 +164,11 @@ export class BranchDiscoveryWatcher {
         })
       }
     }
+  }
+
+  private currentTargets(repo: string, branch: string, now: number) {
+    return this.store
+      .listActiveWorktreeBranchTargets(now)
+      .filter((candidate) => candidate.repo === repo && candidate.branch === branch)
   }
 }
