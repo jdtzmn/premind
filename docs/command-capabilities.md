@@ -4,18 +4,18 @@ This matrix is generated from `src/shared/command-capabilities.ts`. Every harnes
 
 | Capability | Classification | Scope | Canonical | Pi | Claude Code | OpenCode | Codex |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `status` | common | session | commands `/premind:status`<br>tools `premind_status` | commands `/premind:status`<br>tools `premind_status` | commands `/premind:status`<br>tools `status` | commands `/premind-status`<br>tools `premind_status` | tools `premind_status` |
+| `status` | common | session | commands `/premind:status`<br>tools `premind_status` | commands `/premind:status`<br>tools `premind_status` | commands `/premind:status`<br>tools `status` | commands `/premind:status`<br>tools `premind_status`<br>deprecated command aliases `/premind-status` | tools `premind_status` |
 | `debug-status` | adapter-specific | daemon | commands `/premind:debug-status`<br>tools `premind_debug_status` | commands `/premind:debug-status`<br>tools `premind_debug_status` | — | commands `/premind:debug-status`<br>tools `premind_debug_status` | tools `premind_debug_status` |
-| `doctor` | common | daemon | commands `/premind:doctor`<br>tools `premind_doctor` | commands `/premind:doctor`<br>tools `premind_doctor` | commands `/premind:doctor`<br>tools `probe` | commands `/premind:doctor`<br>tools `premind_probe` | — |
+| `doctor` | common | daemon | commands `/premind:doctor`<br>tools `premind_doctor` | commands `/premind:doctor`<br>tools `premind_doctor` | commands `/premind:doctor`<br>tools `probe` | commands `/premind:doctor`<br>tools `premind_doctor`<br>deprecated tool aliases `premind_probe` | — |
 | `deliver` | common | session | commands `/premind:deliver`<br>tools `premind_deliver` | commands `/premind:deliver`<br>tools `premind_deliver`<br>deprecated command aliases `/premind:flush` | commands `/premind:deliver` | commands `/premind:deliver`<br>tools `premind_deliver`<br>deprecated command aliases `/premind-send-now`<br>deprecated tool aliases `premind_send_now` | — |
-| `enable` | common | daemon | commands `/premind:enable`<br>tools `premind_enable` | commands `/premind:enable`<br>tools `premind_enable` | commands `/premind:enable`<br>tools `enable` | commands `/premind-enable`<br>tools `premind_enable` | — |
-| `disable` | common | daemon | commands `/premind:disable`<br>tools `premind_disable` | commands `/premind:disable`<br>tools `premind_disable` | commands `/premind:disable`<br>tools `disable` | commands `/premind-disable`<br>tools `premind_disable` | — |
-| `set-active-checkout` | common | session | commands `/premind:set-active-checkout`<br>tools `premind_set_active_checkout` | commands `/premind:set-active-checkout`<br>tools `premind_set_active_checkout` | tools `set_active_checkout` | tools `premind_set_active_checkout` | tools `premind_set_active_checkout` |
-| `subscribe` | common | session | commands `/premind:subscribe`<br>tools `premind_subscribe` | commands `/premind:subscribe`<br>tools `premind_subscribe` | commands `/premind:subscribe`<br>tools `subscribe` | tools `premind_subscribe` | tools `premind_subscribe` |
-| `unsubscribe` | common | session | commands `/premind:unsubscribe`<br>tools `premind_unsubscribe` | commands `/premind:unsubscribe`<br>tools `premind_unsubscribe` | commands `/premind:unsubscribe`<br>tools `unsubscribe` | tools `premind_unsubscribe` | tools `premind_unsubscribe` |
+| `enable` | common | daemon | commands `/premind:enable`<br>tools `premind_enable` | commands `/premind:enable`<br>tools `premind_enable` | commands `/premind:enable`<br>tools `enable` | commands `/premind:enable`<br>tools `premind_enable`<br>deprecated command aliases `/premind-enable` | — |
+| `disable` | common | daemon | commands `/premind:disable`<br>tools `premind_disable` | commands `/premind:disable`<br>tools `premind_disable` | commands `/premind:disable`<br>tools `disable` | commands `/premind:disable`<br>tools `premind_disable`<br>deprecated command aliases `/premind-disable` | — |
+| `set-active-checkout` | common | session | commands `/premind:set-active-checkout`<br>tools `premind_set_active_checkout` | commands `/premind:set-active-checkout`<br>tools `premind_set_active_checkout` | tools `set_active_checkout` | commands `/premind:set-active-checkout`<br>tools `premind_set_active_checkout` | tools `premind_set_active_checkout` |
+| `subscribe` | common | session | commands `/premind:subscribe`<br>tools `premind_subscribe` | commands `/premind:subscribe`<br>tools `premind_subscribe` | commands `/premind:subscribe`<br>tools `subscribe` | commands `/premind:subscribe`<br>tools `premind_subscribe` | tools `premind_subscribe` |
+| `unsubscribe` | common | session | commands `/premind:unsubscribe`<br>tools `premind_unsubscribe` | commands `/premind:unsubscribe`<br>tools `premind_unsubscribe` | commands `/premind:unsubscribe`<br>tools `unsubscribe` | commands `/premind:unsubscribe`<br>tools `premind_unsubscribe` | tools `premind_unsubscribe` |
 | `pause` | common | session | commands `/premind:pause`<br>tools `premind_pause` | commands `/premind:pause`<br>tools `premind_pause` | commands `/premind:pause`<br>tools `pause` | commands `/premind:pause`<br>tools `premind_pause` | tools `premind_pause` |
 | `resume` | common | session | commands `/premind:resume`<br>tools `premind_resume` | commands `/premind:resume`<br>tools `premind_resume` | commands `/premind:resume`<br>tools `resume` | commands `/premind:resume`<br>tools `premind_resume` | tools `premind_resume` |
-| `prune` | adapter-specific | daemon | commands `/premind:prune` | commands `/premind:prune` | — | — | — |
+| `prune` | adapter-specific | daemon | commands `/premind:prune` | commands `/premind:prune` | — | commands `/premind:prune` | — |
 
 ## Deferred gaps
 
@@ -26,30 +26,21 @@ This matrix is generated from `src/shared/command-capabilities.ts`. Every harnes
 - `enable` / Codex / tools: Codex does not yet expose an enable MCP tool. (tracked in #77)
 - `disable` / Codex / tools: Codex does not yet expose a disable MCP tool. (tracked in #77)
 - `set-active-checkout` / Claude Code / commands: Claude currently exposes this only as a model tool. (tracked in #77)
-- `set-active-checkout` / OpenCode / commands: OpenCode currently exposes this only as a model tool. (tracked in #77)
-- `subscribe` / OpenCode / commands: OpenCode currently exposes this only as a model tool. (tracked in #77)
-- `unsubscribe` / OpenCode / commands: OpenCode currently exposes this only as a model tool. (tracked in #77)
-- `prune` / Claude Code / commands: Only Pi exposes prune today. (tracked in #77)
-- `prune` / OpenCode / commands: Only Pi exposes prune today. (tracked in #77)
-- `subscribe` / OpenCode / parameter `writePolicy`: OpenCode subscriptions do not accept an explicit write policy yet. (tracked in #77)
+- `prune` / Claude Code / commands: Pi and OpenCode expose prune today. (tracked in #77)
 - `subscribe` / Codex / parameter `writePolicy`: Codex subscriptions do not accept an explicit write policy yet. (tracked in #77)
 
 ## Other exceptions
 
 - `status` / Claude Code / tools (host-naming): Claude MCP tools omit the premind_ prefix.
-- `status` / OpenCode / commands (host-naming): The server plugin retains /premind-status as a plain fallback; OpenCode's separately installed TUI companion supplies the colored /premind:status command.
 - `status` / Codex / commands (unsupported): Codex plugins expose MCP tools and skills, not slash commands.
 - `debug-status` / Codex / commands (unsupported): Codex plugins expose MCP tools and skills, not slash commands.
 - `doctor` / Claude Code / tools (host-naming): Claude retains the existing probe MCP tool name.
-- `doctor` / OpenCode / tools (host-naming): OpenCode retains the existing premind_probe tool name.
 - `doctor` / Codex / commands (unsupported): Codex plugins expose MCP tools and skills, not slash commands.
 - `deliver` / Claude Code / tools (unsupported): Claude delivery remains owned by the Stop hook.
 - `deliver` / Codex / commands (unsupported): Codex plugins expose MCP tools and skills, not slash commands.
 - `enable` / Claude Code / tools (host-naming): Claude MCP tools omit the premind_ prefix.
-- `enable` / OpenCode / commands (host-naming): OpenCode retains its established hyphenated enable command.
 - `enable` / Codex / commands (unsupported): Codex plugins expose MCP tools and skills, not slash commands.
 - `disable` / Claude Code / tools (host-naming): Claude MCP tools omit the premind_ prefix.
-- `disable` / OpenCode / commands (host-naming): OpenCode retains its established hyphenated disable command.
 - `disable` / Codex / commands (unsupported): Codex plugins expose MCP tools and skills, not slash commands.
 - `set-active-checkout` / Claude Code / tools (host-naming): Claude MCP tools omit the premind_ prefix.
 - `set-active-checkout` / Codex / commands (unsupported): Codex plugins expose MCP tools and skills, not slash commands.
@@ -66,7 +57,7 @@ This matrix is generated from `src/shared/command-capabilities.ts`. Every harnes
 ## Notes
 
 - Claude status remains aggregate and redacted; it cannot show watched PR details or colored PR signals until session identity is safely available.
-- OpenCode's separate TUI companion renders colored `/premind:status`; server `/premind-status` and tool output remain unstyled.
+- OpenCode's TUI part renders `/premind:*` commands as dialogs and toasts without a model turn; Desktop, web and `opencode run` use the server commands, which queue their result for the next turn.
 - Codex MCP exposes session-scoped `premind_status` and separate `premind_debug_status`.
 - `pause` / `resume` act on one session and never change subscriptions; `enable` / `disable` act on every session, and their model tools refuse calls without `confirmGlobal: true`.
 - Delivery mechanics remain harness-specific even though `/premind:deliver` is canonical.

@@ -157,14 +157,9 @@ export const commandCapabilities = {
 				exceptions: { tools: claudeToolNaming },
 			},
 			opencode: {
-				commands: ["premind-status"],
+				commands: ["premind:status"],
 				tools: ["premind_status"],
-				exceptions: {
-					commands: {
-						kind: "host-naming",
-						reason: "The server plugin retains /premind-status as a plain fallback; OpenCode's separately installed TUI companion supplies the colored /premind:status command.",
-					},
-				},
+				aliases: { commands: ["premind-status"] },
 			},
 			codex: {
 				commands: [],
@@ -227,13 +222,8 @@ export const commandCapabilities = {
 			},
 			opencode: {
 				commands: ["premind:doctor"],
-				tools: ["premind_probe"],
-				exceptions: {
-					tools: {
-						kind: "host-naming",
-						reason: "OpenCode retains the existing premind_probe tool name.",
-					},
-				},
+				tools: ["premind_doctor"],
+				aliases: { tools: ["premind_probe"] },
 			},
 			codex: {
 				commands: [],
@@ -269,10 +259,7 @@ export const commandCapabilities = {
 			opencode: {
 				commands: ["premind:deliver"],
 				tools: ["premind_deliver"],
-				aliases: {
-					commands: ["premind-send-now"],
-					tools: ["premind_send_now"],
-				},
+				aliases: { commands: ["premind-send-now"], tools: ["premind_send_now"] },
 			},
 			codex: {
 				commands: [],
@@ -303,14 +290,9 @@ export const commandCapabilities = {
 				exceptions: { tools: claudeToolNaming },
 			},
 			opencode: {
-				commands: ["premind-enable"],
+				commands: ["premind:enable"],
 				tools: ["premind_enable"],
-				exceptions: {
-					commands: {
-						kind: "host-naming",
-						reason: "OpenCode retains its established hyphenated enable command.",
-					},
-				},
+				aliases: { commands: ["premind-enable"] },
 			},
 			codex: {
 				commands: [],
@@ -339,14 +321,9 @@ export const commandCapabilities = {
 				exceptions: { tools: claudeToolNaming },
 			},
 			opencode: {
-				commands: ["premind-disable"],
+				commands: ["premind:disable"],
 				tools: ["premind_disable"],
-				exceptions: {
-					commands: {
-						kind: "host-naming",
-						reason: "OpenCode retains its established hyphenated disable command.",
-					},
-				},
+				aliases: { commands: ["premind-disable"] },
 			},
 			codex: {
 				commands: [],
@@ -382,13 +359,7 @@ export const commandCapabilities = {
 					tools: claudeToolNaming,
 				},
 			},
-			opencode: {
-				commands: [],
-				tools: ["premind_set_active_checkout"],
-				exceptions: {
-					commands: deferred("OpenCode currently exposes this only as a model tool."),
-				},
-			},
+			opencode: { commands: ["premind:set-active-checkout"], tools: ["premind_set_active_checkout"] },
 			codex: {
 				commands: [],
 				tools: ["premind_set_active_checkout"],
@@ -416,16 +387,7 @@ export const commandCapabilities = {
 				tools: ["subscribe"],
 				exceptions: { tools: claudeToolNaming },
 			},
-			opencode: {
-				commands: [],
-				tools: ["premind_subscribe"],
-				exceptions: {
-					commands: deferred("OpenCode currently exposes this only as a model tool."),
-				},
-				parameterExceptions: {
-					writePolicy: deferred("OpenCode subscriptions do not accept an explicit write policy yet."),
-				},
-			},
+			opencode: { commands: ["premind:subscribe"], tools: ["premind_subscribe"] },
 			codex: {
 				commands: [],
 				tools: ["premind_subscribe"],
@@ -461,13 +423,7 @@ export const commandCapabilities = {
 				tools: ["unsubscribe"],
 				exceptions: { tools: claudeToolNaming },
 			},
-			opencode: {
-				commands: [],
-				tools: ["premind_unsubscribe"],
-				exceptions: {
-					commands: deferred("OpenCode currently exposes this only as a model tool."),
-				},
-			},
+			opencode: { commands: ["premind:unsubscribe"], tools: ["premind_unsubscribe"] },
 			codex: {
 				commands: [],
 				tools: ["premind_unsubscribe"],
@@ -538,13 +494,9 @@ export const commandCapabilities = {
 			claude: {
 				commands: [],
 				tools: [],
-				exceptions: { commands: deferred("Only Pi exposes prune today.") },
+				exceptions: { commands: deferred("Pi and OpenCode expose prune today.") },
 			},
-			opencode: {
-				commands: [],
-				tools: [],
-				exceptions: { commands: deferred("Only Pi exposes prune today.") },
-			},
+			opencode: { commands: ["premind:prune"], tools: [] },
 			codex: {
 				commands: [],
 				tools: [],
@@ -702,7 +654,7 @@ export const renderCommandCapabilityDocumentation = (): string => {
 		"## Notes",
 		"",
 		"- Claude status remains aggregate and redacted; it cannot show watched PR details or colored PR signals until session identity is safely available.",
-		"- OpenCode's separate TUI companion renders colored `/premind:status`; server `/premind-status` and tool output remain unstyled.",
+		"- OpenCode's TUI part renders `/premind:*` commands as dialogs and toasts without a model turn; Desktop, web and `opencode run` use the server commands, which queue their result for the next turn.",
 		"- Codex MCP exposes session-scoped `premind_status` and separate `premind_debug_status`.",
 		"- `pause` / `resume` act on one session and never change subscriptions; `enable` / `disable` act on every session, and their model tools refuse calls without `confirmGlobal: true`.",
 		"- Delivery mechanics remain harness-specific even though `/premind:deliver` is canonical.",

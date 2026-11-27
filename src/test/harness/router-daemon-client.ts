@@ -151,6 +151,9 @@ export const createRouterDaemonClient = (
 		unregisterSession: async (sessionId: string) => {
 			await request("unregisterSession", { sessionId })
 		},
+		deleteSession: async (sessionId: string) => {
+			await request("deleteSession", { sessionId })
+		},
 		pauseSession: async (sessionId: string) => {
 			await request("pauseSession", { sessionId })
 		},

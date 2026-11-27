@@ -23,15 +23,27 @@ const sessionEvents = [
 	"session.deleted",
 ] as const
 
-export function trackSessions(ctx: Plugin.Context) {
+/** The daemon calls session tracking makes; tests substitute an in-process client. */
+export type SessionDaemon = Pick<PremindDaemonClient,
+	| "registerClient" | "heartbeat" | "release" | "registerSession" | "unregisterSession" | "deleteSession"
+	| "activateWorktree" | "updateSessionState" | "claimReminderBundle" | "ackReminderBundle"
+	| "debugStatus" | "pauseSession" | "resumeSession" | "subscribe" | "unsubscribe" | "pruneClosedSessions" | "setGlobalDisabled">
+
+export type SessionTrackingOptions = {
+	daemon?: SessionDaemon
+	detectGit?: typeof detectGitContext
+}
+
+export function trackSessions(ctx: Plugin.Context, options: SessionTrackingOptions = {}) {
 	const directory = ctx.location.directory
 	const prefix = `sessions/${encodeURIComponent(directory)}/`
 	const logger = createLogger("opencode-v2")
 	const warn = (error: unknown) => logger.warn("session tracking failed", { error: String(error) })
-	const daemon = new PremindDaemonClient({
+	const daemon: SessionDaemon = options.daemon ?? new PremindDaemonClient({
 		host: "opencode",
 		ensureDaemon: createDaemonLauncher({ daemonEntry, host: "opencode" }),
 	})
+	const detectGit = options.detectGit ?? detectGitContext
 	const abort = new AbortController()
 	const attached = new Map<string, { busy: boolean; bound: boolean }>()
 	const tasks = new Map<string, Promise<unknown>>()
@@ -100,7 +112,7 @@ export function trackSessions(ctx: Plugin.Context) {
 		let state = attached.get(sessionID)
 		if (!state) {
 			if (!enroll) return
-			const git = await detectGitContext(directory)
+			const git = await detectGit(directory)
 			await connect()
 			await ctx.storage.set(prefix + sessionID, true)
 			await daemon.registerSession({
@@ -197,6 +209,8 @@ export function trackSessions(ctx: Plugin.Context) {
 			heartbeat = undefined
 		})
 	}, PREMIND_CLIENT_HEARTBEAT_MS)
+	// Timers must never keep the host process alive on their own.
+	for (const timer of [pollTimer, heartbeatTimer]) (timer as { unref?: () => void }).unref?.()
 
 	return {
 		daemon,
@@ -210,6 +224,11 @@ export function trackSessions(ctx: Plugin.Context) {
 			return result.value
 		},
 		deliverNow: (sessionID: string) => delivery.deliver(sessionID, () => !abort.signal.aborted),
+		/** Resolves once every queued session task has finished. */
+		async settled() {
+			await new Promise((resolve) => setImmediate(resolve))
+			while (tasks.size) await Promise.allSettled([...tasks.values()])
+		},
 		async dispose() {
 			abort.abort()
 			clearInterval(pollTimer)
