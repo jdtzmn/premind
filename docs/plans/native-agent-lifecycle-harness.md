@@ -107,6 +107,15 @@ Each layer has its own branch, targeted validation, commit, and dependent PR.
    actual Pi host baseline, leave/resume, and daemon-restart scenarios. Add an early
    second-host baseline (OpenCode unless investigation shows a stronger choice) to
    validate the seam. Keep host coverage outcomes explicit throughout the rollout.
+   The baseline lands in three reviewable layers:
+   - **4a. Shared fixtures** — fake OpenAI-compatible model (hosts classify their
+     own non-agent requests), the merged fake GitHub (`src/test/harness/fake-github.ts`),
+     packed-artifact builder, read-only daemon state, and a Git checkout on a PR branch.
+   - **4b. Host driver interface and Pi** — `HostDriver` (locate, launch, open a
+     session, run a turn, restart) and the shared PR-delivery scenario, proved by Pi.
+   - **4c. OpenCode** — the OpenCode V2 driver runs the same scenario; OpenCode-only
+     checks (idle wake, plugin reload, transcript label) stay in the OpenCode suite.
+   Claude Code and Codex drivers follow in #116.
 5. **Four-host drivers and lifecycle matrix** — Claude/Codex native baseline, then
    common scenarios plus native-specific extensions. Extend shared scenario contracts
    rather than maintaining disconnected copies of the same test.
