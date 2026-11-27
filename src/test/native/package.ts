@@ -42,6 +42,6 @@ export function buildPackage(destination: string): string {
 	if (!tarball) throw new Error("npm pack produced no tarball")
 	run("tar", ["-xzf", tarball], destination)
 	const directory = path.join(destination, "package")
-	run("npm", ["install", "--omit=dev", "--omit=peer", "--ignore-scripts", "--no-audit", "--no-fund", "--no-package-lock"], directory)
+	run("npm", ["install", "--omit=dev", "--omit=peer", "--legacy-peer-deps", "--ignore-scripts", "--no-audit", "--no-fund", "--no-package-lock"], directory)
 	return directory
 }
