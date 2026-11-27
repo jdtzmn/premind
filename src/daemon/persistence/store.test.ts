@@ -11,6 +11,7 @@ import {
   PREMIND_CLOSED_SESSION_RETENTION_MS,
   PREMIND_IDLE_SESSION_RETENTION_MS,
   PREMIND_PR_STREAM_RETENTION_MS,
+  PREMIND_REMINDER_HANDOFF_STALE_MS,
   PREMIND_SETTLED_HANDOFF_RETENTION_MS,
 } from "../../shared/constants.ts"
 import { StateStore } from "./store.ts"
@@ -534,6 +535,61 @@ describe("StateStore", () => {
     )
     store.close()
   })
+
+  for (const recovery of ["stale handoff", "daemon restart"] as const) {
+    test(`keeps new events out of the retried bundle after ${recovery}`, () => {
+      const store = createStore()
+      const now = 10_000
+      const session = {
+        sessionId: "opencode-session",
+        host: "opencode" as const,
+        repo: "acme/repo",
+        branch: "feature/bundle",
+        isPrimary: true,
+        busyState: "idle" as const,
+      }
+      const attach = (clientId: string, time: number) => {
+        store.registerClient(clientId, { pid: 1, projectRoot: "/tmp/project" }, time)
+        store.registerSession({ ...session, clientId, status: "active" }, time)
+      }
+      const addUpdate = (prNumber: number, number: number) => {
+        store.insertEvents("acme/repo", prNumber, [{
+          dedupeKey: `comment:${number}`, kind: "issue_comment.created",
+          priority: "high", summary: `Comment ${number}`, payload: {},
+        }])
+      }
+      attach("old-client", now)
+      for (const prNumber of [7, 8]) {
+        store.upsertSubscription({ sessionId: session.sessionId, repo: session.repo, prNumber, source: "manual" })
+      }
+      addUpdate(7, 1)
+      const owner = { ownerInstanceId: "old-instance", sessionGeneration: 1 }
+      const original = store.claimReminderBundle(session.sessionId, now, owner)
+      assert.ok(original)
+      let retryAt = now + PREMIND_REMINDER_HANDOFF_STALE_MS + 1
+      let retryOwner = owner
+      if (recovery === "daemon restart") {
+        retryAt = now + 1
+        store.recoverFromRestart(retryAt)
+        attach("new-client", retryAt)
+        retryOwner = { ownerInstanceId: "new-instance", sessionGeneration: 2 }
+      }
+      addUpdate(7, 2)
+      addUpdate(8, 3)
+
+      const retry = store.claimReminderBundle(session.sessionId, retryAt, retryOwner)
+      assert.equal(retry?.handoffId, original.handoffId)
+      assert.deepEqual(retry?.batches.map(({ batchId }) => batchId), original.batches.map(({ batchId }) => batchId))
+      assert.equal(store.ackReminderBundle({
+        sessionId: session.sessionId, handoffId: original.handoffId, state: "confirmed",
+      }, retryAt), 1)
+      const next = store.claimReminderBundle(session.sessionId, retryAt, retryOwner)
+      assert.ok(next)
+      assert.notEqual(next.handoffId, original.handoffId)
+      assert.deepEqual(next.batches.map(({ prNumber }) => prNumber).sort(), [7, 8])
+      store.close()
+    })
+  }
 
   test("failed bundle acknowledgement removes members canceled in flight", () => {
     const store = createStore()
