@@ -23,44 +23,27 @@ describe("plugin packaging", () => {
 			fs.existsSync(exportsEntry),
 			`exports["."] ${pkg.exports["."]} does not exist`,
 		);
-		const tuiEntry = path.resolve(ROOT, pkg.exports["./tui"]);
-		assert.ok(fs.existsSync(tuiEntry), `OpenCode TUI entry ${pkg.exports["./tui"]} does not exist`);
+		for (const part of ["./tui", "./rpc"]) {
+			const entry = path.resolve(ROOT, pkg.exports[part]);
+			assert.ok(fs.existsSync(entry), `OpenCode ${part} entry ${pkg.exports[part]} does not exist`);
+		}
 	});
 
-	test("plugin entry exports PremindPlugin and createPremindPlugin", async () => {
-		const mod = await import("../../plugin-opencode/index.ts");
-		assert.equal(
-			typeof mod.PremindPlugin,
-			"function",
-			"PremindPlugin should be a function",
-		);
-		assert.equal(
-			typeof mod.createPremindPlugin,
-			"function",
-			"createPremindPlugin should be a function",
-		);
-		assert.equal(
-			typeof mod.default,
-			"object",
-			"default export should be an object",
-		);
-		assert.equal(
-			mod.default?.id,
-			"premind",
-			"default export should declare plugin id",
-		);
-		assert.equal(
-			typeof mod.default?.server,
-			"function",
-			"default export should expose server plugin",
-		);
-	});
+	test("OpenCode parts are the V2 server, TUI and RPC contract", async () => {
+		const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8"));
+		assert.deepEqual(pkg.exports, {
+			".": "./src/plugin-opencode-v2/server.ts",
+			"./tui": "./src/plugin-opencode-v2/tui.ts",
+			"./rpc": "./src/plugin-opencode-v2/rpc.ts",
+		});
+		assert.ok("@opencode/plugin" in pkg.dependencies, "every part's SDK comes from @opencode/plugin");
 
-	test("separate TUI entry exports the native status companion", async () => {
-		const mod = await import("../../plugin-opencode/tui.ts");
-		assert.equal(mod.default.id, "premind.status-tui");
-		assert.equal(typeof mod.default.tui, "function");
-		assert.equal("server" in mod.default, false);
+		const server = await import("../../plugin-opencode-v2/server.ts");
+		assert.equal(server.default.id, "premind");
+		assert.equal(typeof server.default.setup, "function");
+		const tui = await import("../../plugin-opencode-v2/tui.ts");
+		assert.equal(tui.default.id, "premind");
+		assert.equal(typeof tui.default.setup, "function");
 	});
 
 	test("daemon entry file exists relative to plugin", () => {

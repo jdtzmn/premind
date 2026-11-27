@@ -7,9 +7,6 @@ import type { E2EEnvironment } from "./environment.ts"
 import type { HostDriver, HostInstance, HostSession } from "./host.ts"
 import { startNativeProcess, type NativeProcess } from "./process.ts"
 
-/** Where the OpenCode V2 plugin lives inside the packed package. */
-export const pluginDirectory = (packageRoot: string) => path.join(packageRoot, "src", "plugin-opencode-v2")
-
 /** A running `opencode serve` plus the evidence OpenCode-only suites use. */
 export type OpenCodeInstance = HostInstance & {
 	/** Client for the current server, authenticated and bound to the workspace. */
@@ -29,7 +26,7 @@ const freePort = () => new Promise<number>((resolve, reject) => {
 	})
 })
 
-/** The fake model as OpenCode's only provider, and the packed plugin by path. */
+/** The fake model as OpenCode's only provider, and the packed package loaded through its exports, as users install it. */
 function configureOpenCode(workspace: string, modelUrl: string, plugin: string) {
 	writeFileSync(path.join(workspace, "opencode.json"), `${JSON.stringify({
 		$schema: "https://opencode.ai/config.json",
@@ -48,7 +45,7 @@ function configureOpenCode(workspace: string, modelUrl: string, plugin: string) 
 }
 
 export async function startOpenCode(e2e: E2EEnvironment, options: { binary: string; packageRoot: string }): Promise<OpenCodeInstance> {
-	configureOpenCode(e2e.sandbox.workspace, e2e.model.url, pluginDirectory(options.packageRoot))
+	configureOpenCode(e2e.sandbox.workspace, e2e.model.url, options.packageRoot)
 	const env: NodeJS.ProcessEnv = { ...e2e.env, FAKE_API_KEY: "premind-e2e" }
 	let current: { process: NativeProcess; client: OpenCodeClient } | undefined
 	let history = ""

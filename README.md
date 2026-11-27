@@ -6,54 +6,33 @@ When a PR receives new comments, review feedback, check results, or merge confli
 
 ## Install
 
-### From GitHub (recommended)
+### OpenCode
 
-Add `premind` to your `opencode.json`:
-
-```json
-{
-  "$schema": "https://opencode.ai/config.json",
-  "plugin": ["github:jdtzmn/premind"]
-}
-```
-
-OpenCode will install it automatically on next startup.
-
-### Colored OpenCode status (TUI companion)
-
-OpenCode's server plugin cannot style chat/tool text. For the required colored `/premind:status` view, install the **separate TUI entrypoint** in OpenCode's `tui.json` on a version that supports TUI plugins, alongside the server plugin above:
-
-```json
-{ "plugin": ["/absolute/path/to/premind/src/plugin-opencode/tui.ts"] }
-```
-
-After publishing, use the installed package name (`"premind"`) instead of a local path. The package exports `./tui` for OpenCode's TUI loader; do not load the server entrypoint as a TUI plugin. `/premind-status` remains a readable, unstyled server-plugin fallback, and agent tool responses stay unstyled. The native TUI uses theme colors and clickable links; it never inserts ANSI escapes into chat, MCP responses, or redirected output.
-
-### From npm
-
-If published to npm:
+Premind targets OpenCode 2. Add it to `plugins` in `opencode.json(c)`:
 
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": ["premind"]
+  "plugins": ["github:jdtzmn/premind"]
 }
 ```
 
-### From local checkout
+Use `"premind"` instead once it is published to npm. One entry loads every part of the plugin: the server part (session tracking, delivery, tools, commands and the skill) and the TUI part (slash and palette commands that answer in a dialog or toast without starting a model turn). There is no separate TUI companion to install.
 
-Clone the repo and symlink or copy the plugin into your OpenCode plugin directory:
+From a local checkout, point the entry at the checkout instead:
 
 ```sh
 git clone https://github.com/jdtzmn/premind.git
 cd premind && bun install
-
-# Option A: symlink into global plugins
-ln -s "$(pwd)/src/plugin-opencode/index.ts" ~/.config/opencode/plugins/premind.ts
-
-# Option B: symlink into project plugins
-ln -s "$(pwd)/src/plugin-opencode/index.ts" .opencode/plugins/premind.ts
 ```
+
+```json
+{ "plugins": ["/absolute/path/to/premind"] }
+```
+
+#### Upgrading from OpenCode 1
+
+OpenCode 1 plugins do not run in OpenCode 2, and this release drops the OpenCode 1 plugin. Move the entry from the old `plugin` key to `plugins`, and remove any `tui.json` entry for `src/plugin-opencode/tui.ts` or symlinks into `~/.config/opencode/plugins/`. Reminders now arrive as soon as the session goes idle, so `~/.config/opencode/premind.jsonc` and its `idleDeliveryThresholdMs` setting are no longer read; delete the file. Daemon state, subscriptions and pauses carry over.
 
 ## Claude Code plugin (v0.2)
 
@@ -101,7 +80,7 @@ For a source checkout modified locally, run `bun run build:runtime` before refre
 
 ### Agent skills
 
-Premind ships task-scoped Agent Skills for Codex (portable and compatibility plugins), Pi (`skills/premind` in the Pi package), and the Claude Code plugin (`plugin-claude/skills/premind`). Each `SKILL.md` loads subscription and reminder guidance from its own `references/` only when relevant. OpenCode's npm plugin does not install into OpenCode's project/global skill discovery directories, so it does not claim an automatically installed skill.
+Premind ships task-scoped Agent Skills for Codex (portable and compatibility plugins), Pi (`skills/premind` in the Pi package), the Claude Code plugin (`plugin-claude/skills/premind`), and the OpenCode plugin (`src/plugin-opencode-v2/skills/premind`, registered with OpenCode when the plugin loads). Each `SKILL.md` loads subscription and reminder guidance from its own `references/` only when relevant.
 
 These files are generated, not hand-edited. After changing host control metadata in `src/shared/command-capabilities.ts` or `src/codex/mcp-server.ts`, or updating the shared guidance in `scripts/generate-premind-skills.ts`, run `bun run generate:skill` and `bun run test:skills` and commit the output. CI checks for drift.
 
@@ -109,98 +88,68 @@ For an opt-in model-based check of triggering and selective reference reads, run
 
 ## How it works
 
-1. When OpenCode loads premind, the plugin starts a local daemon process.
+1. When an OpenCode session first runs, the plugin starts a local daemon process if one is not already running.
 2. The daemon discovers the open PR for your current branch and automatically watches it only when it was authored by the GitHub account Premind is authenticated as.
 3. It polls watched PRs for new comments, reviews, check results, merge conflicts, and other changes.
 4. When changes arrive while the session is busy, they are queued.
-5. When the session becomes idle, premind injects a single `<system-reminder>` message with the incremental changes.
+5. When the session becomes idle, premind queues a single `<system-reminder>` message with the incremental changes, labelled "Premind: pull request updates" in the transcript.
 6. OpenCode processes the reminder like a normal follow-up prompt, and your existing notification setup fires when the model completes.
 
 ## Configuration
 
-Premind's config lives in a sibling file next to `opencode.jsonc`:
+OpenCode passes plugin options from the `plugins` entry:
 
-- **macOS / Linux:** `~/.config/opencode/premind.jsonc`
-
-The file is created with a commented-out template the first time premind starts. Configuration is deliberately **not** put into `opencode.jsonc` — opencode's schema validator rejects unknown top-level keys as a hard startup failure.
-
-### Available settings
-
-| Field | Type | Default | Env var |
-| --- | --- | --- | --- |
-| `idleDeliveryThresholdMs` | integer (ms, min 5000) | `60000` | `PREMIND_IDLE_DELIVERY_THRESHOLD_MS` |
-
-More fields will be added as they become real features.
-
-### Example
-
-```jsonc
-// ~/.config/opencode/premind.jsonc
+```json
 {
-  // Wait 15 seconds of idle before delivering PR updates.
-  "idleDeliveryThresholdMs": 15000
+  "plugins": [{ "package": "premind", "options": { "autoDeliver": false } }]
 }
 ```
 
-### Precedence
-
-Each field's effective value is resolved in this order (highest wins):
-
-1. Environment variable (`PREMIND_<FIELD_IN_UPPER_SNAKE>`)
-2. `~/.config/opencode/premind.jsonc`
-3. Schema default
-
-Malformed files and invalid env values are logged once and ignored — premind will keep running on defaults rather than fail to start.
-
-### Migration note
-
-Earlier versions documented a top-level `premind` key inside `opencode.jsonc`. That location was never actually usable — opencode's schema validator treats unknown top-level keys as a configuration error and refuses to start. If you previously tried to set premind config there and saw an error, this release is the fix: move your settings to `~/.config/opencode/premind.jsonc`.
+| Option | Type | Default | Effect |
+| --- | --- | --- | --- |
+| `autoDeliver` | boolean | `true` | When `false`, updates wait for `/premind:deliver` or the `premind_deliver` tool instead of arriving when the session goes idle. |
 
 ## Commands
 
-The server plugin registers these slash commands; the colored `/premind:status` additionally requires the TUI companion:
+In the OpenCode TUI these commands answer in a dialog or toast and never start a model turn. In OpenCode Desktop, web and `opencode run`, the server registers the same commands; their result joins the transcript on the next turn.
 
-- `/premind:status` — colored, linked current-session watched PRs in the OpenCode TUI companion; `/premind-status` is the plain server-plugin fallback
+- `/premind:status` — current-session watched PRs
 - `/premind:debug-status` — daemon-wide all-session diagnostics (also available as `premind_debug_status` to agents)
 - `/premind:doctor` — diagnose plugin, configuration, and daemon health
 - `/premind:deliver` — deliver queued PR updates immediately at the earliest safe harness boundary
 - `/premind-send-now` — deprecated OpenCode alias for `/premind:deliver`
+- `/premind:subscribe <pr> [owner/repo]`, `/premind:unsubscribe <pr> [owner/repo]` — watch or stop watching a PR in this session
+- `/premind:set-active-checkout <path>` — point this session at another checkout
+- `/premind:prune` — remove closed sessions and their delivered reminder batches
 - `/premind:pause` — pause reminders for this session only; subscriptions keep being watched
 - `/premind:resume` — resume reminders for this session without changing subscriptions
-- `/premind-disable` — disable GitHub polling globally
-- `/premind-enable` — re-enable GitHub polling globally
+- `/premind:disable` — disable GitHub polling globally
+- `/premind:enable` — re-enable GitHub polling globally
+- `/premind-status`, `/premind-enable`, `/premind-disable` — deprecated OpenCode aliases
 
 The complete cross-harness command and tool matrix, including intentional exceptions, is documented in [Command Capabilities](docs/command-capabilities.md).
 
 How plugins and the daemon stay compatible across releases, and how a newer daemon takes over, is documented in [Client–daemon protocol and upgrades](docs/protocol.md).
 
-OpenCode exposes `premind_set_active_checkout`, `premind_subscribe`, and `premind_unsubscribe` model tools. The Pi package exposes the same tools plus `/premind:set-active-checkout`, `/premind:subscribe`, and `/premind:unsubscribe` commands. Set the active checkout at the start of any PR work—including when already in the startup checkout—and again after switching branches before creating or following a PR. Automatic watches are limited to PRs authored by Premind's authenticated GitHub account. Manual subscriptions may intentionally target an external `owner/repo`; their reminders include a guard that changes require explicit user instruction, and status/reminders use fully qualified `owner/repo#number` identities.
+Pi and OpenCode expose `premind_set_active_checkout`, `premind_subscribe`, and `premind_unsubscribe` model tools plus `/premind:set-active-checkout`, `/premind:subscribe`, and `/premind:unsubscribe` commands. Set the active checkout at the start of any PR work—including when already in the startup checkout—and again after switching branches before creating or following a PR. Automatic watches are limited to PRs authored by Premind's authenticated GitHub account. Manual subscriptions may intentionally target an external `owner/repo`; their reminders include a guard that changes require explicit user instruction, and status/reminders use fully qualified `owner/repo#number` identities.
 
 Every harness can pause and resume one session. Pi, Claude Code, and OpenCode provide `/premind:pause` and `/premind:resume`. Every harness provides model tools: `premind_pause` and `premind_resume`, or `pause` and `resume` in Claude Code's MCP server. Codex's tools take the session handle from lifecycle context. Pausing withholds reminders from the current session only. Every subscription stays watched, PR updates keep accumulating, and the pause lasts until you resume, including across a host reload or restart. Pause is not a substitute for the global `disable` / `enable` controls.
 
-The global `enable` / `disable` model tools require `confirmGlobal: true` and refuse unconfirmed calls, so agents cannot mistake them for session controls. Codex does not have these tools yet (#77). `/premind-disable` is a daemon-wide kill switch: the daemon stays up and sessions keep registering, but no GitHub API calls are made until you re-enable. The flag is persisted in SQLite, so it survives daemon restarts. Queued events are preserved and delivered as normal once you re-enable.
+The global `enable` / `disable` model tools require `confirmGlobal: true` and refuse unconfirmed calls, so agents cannot mistake them for session controls. Codex does not have these tools yet (#77). `/premind:disable` is a daemon-wide kill switch: the daemon stays up and sessions keep registering, but no GitHub API calls are made until you re-enable. The flag is persisted in SQLite, so it survives daemon restarts. Queued events are preserved and delivered as normal once you re-enable.
 
-premind also exposes a `premind_probe` tool that returns runtime diagnostics. This is useful if you want to verify that the plugin actually initialized even when slash commands are not showing up yet.
+premind also exposes a `premind_doctor` tool (`premind_probe` in older OpenCode releases, still accepted) that returns runtime diagnostics. This is useful if you want to verify that the plugin actually initialized even when slash commands are not showing up yet.
 
 ## Debugging
 
-premind writes plugin runtime state to:
-
-- macOS: `~/Library/Application Support/premind/plugin-runtime.json`
-
-This file records whether the plugin initialized, whether the daemon started, whether the client registered, and whether commands were registered.
-
-If you're debugging a local install, useful checks are:
+Run `/premind:doctor` (or ask the agent to call `premind_doctor`) for the plugin version, daemon lock and daemon build. `/premind:debug-status` lists every session the daemon knows about. The daemon socket lives at:
 
 ```sh
-cat ~/Library/Application\ Support/premind/plugin-runtime.json
-ls ~/.cache/opencode/node_modules/premind/
 ls /var/folders/*/*/*/T/premind.sock 2>/dev/null
 ```
 
 ## Requirements
 
-- OpenCode
+- OpenCode 2.4 or later
 - `gh` CLI authenticated with access to your repository
 - OpenCode/Pi: Node 22.5+ with the package's `tsx` dependency for the source daemon launcher
 - Claude Code/Codex: Node 22.13+; Codex CLI 0.155.1+; installed plugins use self-contained generated bundles and do not require Bun, `tsx`, or repository `node_modules` at runtime
@@ -211,7 +160,7 @@ See [the initial implementation plan](./docs/plans/initial-implementation.md) fo
 
 The system has two runtime components:
 
-- **Plugin** — thin OpenCode hook that registers sessions, observes idle/busy transitions, registers commands/tools, and injects reminders
+- **Plugin** — thin OpenCode plugin that registers sessions, observes idle/busy transitions, registers commands, tools and the skill, and queues reminders as synthetic messages
 - **Daemon** — local background process that polls GitHub, diffs PR snapshots, and manages per-session event queues with SQLite persistence
 
 Multiple OpenCode sessions on the same PR share one daemon watcher. Each session has its own delivery cursor so reminders are incremental per session.
