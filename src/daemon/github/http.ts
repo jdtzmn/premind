@@ -51,6 +51,13 @@ export class GitHubHttpError extends Error {
   }
 }
 
+/**
+ * Test-only overrides read when the daemon starts, so end-to-end tests can
+ * point a real daemon at a fake GitHub. Unset in normal use.
+ */
+export const GITHUB_API_URL_ENV = "PREMIND_GITHUB_API_URL"
+export const GITHUB_TOKEN_ENV = "PREMIND_GITHUB_TOKEN"
+
 const defaultTokenProvider = async () => {
   const { stdout } = await execFileAsync("gh", ["auth", "token"], {
     timeout: TOKEN_LOOKUP_TIMEOUT_MS,
@@ -77,9 +84,16 @@ export class GitHubHttpClient {
   private cachedToken: string | null = null
 
   constructor(options: GitHubHttpOptions = {}) {
+    const fixtureUrl = options.baseUrl === undefined ? process.env[GITHUB_API_URL_ENV] : undefined
+    const fixtureToken = process.env[GITHUB_TOKEN_ENV]
+    if (fixtureUrl && (!fixtureToken || !/^http:\/\/127\.0\.0\.1:\d+\/?$/.test(fixtureUrl))) {
+      throw new Error("Fake GitHub requires a loopback API URL and a fixture token")
+    }
     this.fetchImpl = options.fetchImpl ?? fetch
-    this.tokenProvider = options.tokenProvider ?? defaultTokenProvider
-    this.baseUrl = options.baseUrl ?? GITHUB_API_BASE
+    this.tokenProvider = fixtureUrl && fixtureToken
+      ? async () => fixtureToken
+      : options.tokenProvider ?? defaultTokenProvider
+    this.baseUrl = (options.baseUrl ?? fixtureUrl ?? GITHUB_API_BASE).replace(/\/+$/, "")
     this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_GITHUB_REQUEST_TIMEOUT_MS
     this.rateLimit = options.rateLimit ?? new RateLimitTracker()
   }

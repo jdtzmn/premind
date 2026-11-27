@@ -9,7 +9,9 @@ import { afterEach, describe, test } from "node:test"
 import {
   PREMIND_CLIENT_LEASE_TTL_MS,
   PREMIND_CLOSED_SESSION_RETENTION_MS,
+  PREMIND_IDLE_SESSION_RETENTION_MS,
   PREMIND_PR_STREAM_RETENTION_MS,
+  PREMIND_SETTLED_HANDOFF_RETENTION_MS,
 } from "../../shared/constants.ts"
 import { StateStore } from "./store.ts"
 import type { PullRequestSnapshot } from "../github/types.ts"
@@ -481,6 +483,54 @@ describe("StateStore", () => {
     assert.deepEqual(
       batchIds.map((batchId) => store.getReminderBatchRecord(batchId)),
       [null, null, null],
+    )
+    store.close()
+  })
+
+  test("prunes settled handoff records after retention but keeps unsettled claims", () => {
+    const store = createStore()
+    store.registerClient("bundle-client", { pid: 1, projectRoot: "/tmp/project" })
+    store.registerSession({
+      clientId: "bundle-client",
+      sessionId: "bundle-session",
+      repo: "acme/repo",
+      branch: "feature/bundle",
+      isPrimary: true,
+      status: "active",
+      busyState: "idle",
+    })
+    const subscription = store.upsertSubscription({
+      sessionId: "bundle-session",
+      repo: "acme/repo",
+      prNumber: 7,
+      source: "manual",
+    })
+    store.createOrReplaceReminder("bundle-session", subscription.subscriptionId, "First", [], 0)
+    const settled = store.claimReminderBundle("bundle-session")
+    assert.ok(settled)
+    const settledAt = Date.now()
+    const ack = { sessionId: "bundle-session", handoffId: settled.handoffId, state: "confirmed" as const }
+    assert.equal(store.ackReminderBundle(ack, settledAt), 1)
+    store.createOrReplaceReminder("bundle-session", subscription.subscriptionId, "Second", [], 0)
+    const unsettled = store.claimReminderBundle("bundle-session", settledAt)
+    assert.ok(unsettled)
+
+    const cutoff = settledAt + PREMIND_SETTLED_HANDOFF_RETENTION_MS
+    assert.equal(store.pruneSettledHandoffs(cutoff - 1), 0)
+    assert.equal(store.ackReminderBundle(ack), 1, "a retried ack stays idempotent within retention")
+    // The settlement and its execution claim.
+    assert.equal(store.pruneSettledHandoffs(cutoff), 2)
+    assert.equal(store.ackReminderBundle(ack), 0)
+    assert.equal(
+      store.validateHandoffExecution({
+        handoffId: unsettled.handoffId,
+        sessionId: "bundle-session",
+        ownerInstanceId: "legacy-singleton",
+        sessionGeneration: 0,
+        executionGeneration: unsettled.executionGeneration,
+        expiresAt: settledAt,
+      }, settledAt),
+      true,
     )
     store.close()
   })
@@ -2359,6 +2409,89 @@ describe("StateStore", () => {
     assert.equal(store.hasDaemonDemand(), false)
     store.close()
   })
+
+  // Liveness probes evaluate demand on every request, so a storm of launchers
+  // must not turn each probe into a full rewrite of the watcher tables.
+  test("evaluating daemon demand is read-only and still sees branch-only demand", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "premind-store-test-"))
+    tempPaths.push(dir)
+    const dbPath = path.join(dir, "premind.db")
+    const store = new StateStore(dbPath)
+    store.registerClient("client-branch-demand", { pid: 1, projectRoot: "/repo" })
+    store.registerSession({
+      clientId: "client-branch-demand", sessionId: "session-branch-demand", repo: "acme/repo",
+      branch: "legacy-branch", isPrimary: true, status: "active", busyState: "idle",
+    })
+    store.upsertWorktreeBinding({
+      sessionId: "session-branch-demand", root: "/repo/.trees/feature",
+      gitDir: "/repo/.git/worktrees/feature", repo: "acme/repo", branch: "feature-branch",
+      headSha: "abc123", state: "waiting_for_pr",
+    })
+    store.ensureBranchWatcher("acme/repo", "feature-branch")
+    store.releaseClient("client-branch-demand")
+
+    const reader = new DatabaseSync(dbPath)
+    const watcherRows = () => reader.prepare(`SELECT * FROM branch_watchers ORDER BY repo, branch`).all()
+    const before = watcherRows()
+    assert.equal(store.hasDaemonDemand(Date.now() + 60_000), true)
+    assert.deepEqual(watcherRows(), before)
+
+    store.unregisterSession("session-branch-demand")
+    assert.equal(store.hasDaemonDemand(), false)
+    reader.close()
+    store.close()
+  })
+
+  test("session summaries use a fixed number of queries regardless of session count", () => {
+    const preparedStatementsFor = (sessionCount: number) => {
+      const store = createStore()
+      store.registerClient("client-summaries", { pid: 1, projectRoot: "/repo" })
+      for (let index = 0; index < sessionCount; index++) {
+        const sessionId = `session-summaries-${index}`
+        store.registerSession({
+          clientId: "client-summaries", sessionId, repo: "acme/repo",
+          branch: `feature/${index}`, isPrimary: false, status: "active", busyState: "idle",
+        })
+        store.upsertWorktreeBinding({
+          sessionId, root: `/repo/.trees/${index}`, gitDir: `/repo/.git/worktrees/${index}`,
+          repo: "acme/repo", branch: `feature/${index}`, headSha: "abc123", state: "waiting_for_pr",
+        })
+        store.upsertSubscription({ sessionId, repo: "acme/repo", prNumber: index + 1, source: "manual" })
+      }
+      store.setSessionPaused("session-summaries-0", true)
+      const db = (store as unknown as { db: DatabaseSync }).db
+      const prepare = db.prepare.bind(db)
+      let prepared = 0
+      db.prepare = (sql: string) => {
+        prepared++
+        return prepare(sql)
+      }
+      const summaries = store.listSessionSummaries()
+      db.prepare = prepare
+      assert.equal(summaries.length, sessionCount)
+      assert.equal(summaries.find(({ sessionId }) => sessionId === "session-summaries-0")?.status, "paused")
+      assert.ok(summaries.every((summary) => summary.subscriptions.length === 1 && summary.worktreeBinding))
+      store.close()
+      return prepared
+    }
+
+    assert.equal(preparedStatementsFor(20), preparedStatementsFor(2))
+  })
+
+  test("pending event counts seek past delivered events instead of scanning the PR stream", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "premind-store-test-"))
+    tempPaths.push(dir)
+    const dbPath = path.join(dir, "premind.db")
+    new StateStore(dbPath).close()
+    const db = new DatabaseSync(dbPath)
+    const plan = db
+      .prepare(
+        `EXPLAIN QUERY PLAN SELECT COUNT(*) FROM pr_events WHERE repo = ? AND pr_number = ? AND seq > ?`,
+      )
+      .all("acme/repo", 1, 0) as Array<{ detail: string }>
+    db.close()
+    assert.match(plan.map(({ detail }) => detail).join("\n"), /repo=\? AND pr_number=\? AND seq>\?/)
+  })
 })
 
 describe("migrate: legacy pr_watchers upgrade", () => {
@@ -2934,6 +3067,32 @@ describe("daemon and coordinator fencing", () => {
     }
   })
 
+  test("prunes expired daemon instance leases without disturbing live ones", () => {
+    const store = createStore()
+    try {
+      const exited = store.claimDaemonInstanceLease({
+        instanceId: "daemon-a",
+        incarnationNonce: "daemon-a-1",
+      }, 1_000)
+      const live = store.claimDaemonInstanceLease({
+        instanceId: "daemon-b",
+        incarnationNonce: "daemon-b-1",
+      }, exited.expiresAt - 1)
+
+      assert.equal(store.pruneExpiredDaemonInstanceLeases(exited.expiresAt), 1)
+      assert.equal(store.pruneExpiredDaemonInstanceLeases(exited.expiresAt), 0)
+      assert.equal(store.validateDaemonInstanceLease(live, exited.expiresAt), true)
+      // Generations come from a counter, so a pruned row's generation is never reissued.
+      const restarted = store.claimDaemonInstanceLease({
+        instanceId: "daemon-a",
+        incarnationNonce: "daemon-a-2",
+      }, exited.expiresAt)
+      assert.equal(restarted.generation, 3)
+    } finally {
+      store.close()
+    }
+  })
+
   test("transfers expired handoff execution without changing its stable id", () => {
     const store = createStore()
     try {
@@ -3063,6 +3222,65 @@ describe("session detach and deletion", () => {
         now + 2 + PREMIND_CLOSED_SESSION_RETENTION_MS + 1,
       )
       assert.equal(store.getSession("session-1"), undefined)
+    } finally {
+      store.close()
+    }
+  })
+})
+
+describe("idle session retention", () => {
+  test("closes long-idle detached and dormant sessions for retention", () => {
+    const store = createStore()
+    const start = 1_000
+    const now = start + PREMIND_IDLE_SESSION_RETENTION_MS + 1
+    try {
+      store.registerClient("client-1", { pid: 1, projectRoot: "/tmp/project" }, start)
+      const register = (sessionId: string, at: number) =>
+        store.registerSession({
+          clientId: "client-1",
+          sessionId,
+          repo: "acme/repo",
+          branch: "feature/x",
+          isPrimary: true,
+          status: "active",
+          busyState: "idle",
+        }, at)
+      register("dormant-old", start)
+      register("detached-old", start)
+      register("detached-recent", now - 1)
+      register("active-old", start)
+      store.releaseSessionOwner("dormant-old", start)
+      store.unregisterSession("detached-old", start)
+      store.unregisterSession("detached-recent", now - 1)
+      store.upsertSubscription({ sessionId: "dormant-old", repo: "acme/repo", prNumber: 7, source: "manual" })
+
+      assert.equal(store.closeIdleSessions(now), 2)
+      assert.deepEqual(
+        ["dormant-old", "detached-old", "detached-recent", "active-old"]
+          .map((sessionId) => store.getSession(sessionId)?.status),
+        ["closed", "closed", "detached", "active"],
+      )
+
+      // The closed-session prune then deletes the row and its subscriptions.
+      store.pruneClosedSessions(
+        PREMIND_CLOSED_SESSION_RETENTION_MS,
+        now + PREMIND_CLOSED_SESSION_RETENTION_MS + 1,
+      )
+      assert.equal(store.getSession("dormant-old"), undefined)
+      assert.deepEqual(store.listSessionSubscriptions("dormant-old"), [])
+
+      // A host that resumes the session later attaches it again as a new session.
+      const resumed = store.ensureSessionControl({
+        clientId: "client-1",
+        sessionId: "dormant-old",
+        repo: "acme/repo",
+        branch: "feature/x",
+        isPrimary: true,
+        busyState: "idle",
+        paused: false,
+      })
+      assert.deepEqual(resumed, { created: true, superseded: 0 })
+      assert.equal(store.getSession("dormant-old")?.status, "active")
     } finally {
       store.close()
     }

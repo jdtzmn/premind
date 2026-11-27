@@ -405,3 +405,87 @@ test("clients that disconnect before their reply never crash the daemon", async 
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+describe("IpcServer session lease recovery", () => {
+  const session = {
+    sessionId: "lease-session",
+    repo: "acme/repo",
+    branch: "main",
+    isPrimary: true,
+    status: "active" as const,
+    busyState: "idle" as const,
+  };
+  // A missed renewal (sleep, load) lets the daemon expire the lease while the
+  // client still caches it.
+  const expireLeases = (store: StateStore) =>
+    (store as unknown as { db: { exec: (sql: string) => void } }).db.exec(
+      "UPDATE session_daemon_leases SET expires_at = 1",
+    );
+  const connect = (socketPath: string) =>
+    new PremindDaemonClient({ host: "pi", socketPath, ensureDaemon: async () => {} });
+
+  test("reclaims an expired lease on the next session operation", async () => {
+    const { server, socketPath } = await createServer();
+    const client = connect(socketPath);
+    try {
+      await client.registerClient("/tmp/project", "test");
+      await client.registerSession(session);
+      expireLeases(server.store);
+
+      await client.updateSessionState({ sessionId: session.sessionId, busyState: "busy" });
+      assert.equal(server.store.getSession(session.sessionId)?.busy_state, "busy");
+    } finally {
+      await client.release();
+      await server.close(socketPath);
+    }
+  });
+
+  test("reclaims an expired lease when the heartbeat cannot renew it", async () => {
+    const { server, socketPath } = await createServer();
+    const client = connect(socketPath);
+    try {
+      await client.registerClient("/tmp/project", "test");
+      await client.registerSession(session);
+      expireLeases(server.store);
+
+      await client.heartbeat();
+      const reclaimed = await request(socketPath, {
+        type: "claimSessionLease",
+        protocolVersion: 2,
+        payload: {
+          sessionId: session.sessionId,
+          ownerInstanceId: server.daemonInstanceId,
+          clientIncarnationNonce: "another-client",
+        },
+      }) as { ok: boolean; error?: { code: string } };
+      assert.equal(reclaimed.ok, false);
+      assert.equal(reclaimed.error?.code, "SESSION_BUSY");
+    } finally {
+      await client.release();
+      await server.close(socketPath);
+    }
+  });
+
+  test("does not take a session from another live owner", async () => {
+    const { server, socketPath } = await createServer();
+    const client = connect(socketPath);
+    const other = connect(socketPath);
+    try {
+      await client.registerClient("/tmp/project", "test");
+      await client.registerSession(session);
+      expireLeases(server.store);
+      await other.registerClient("/tmp/project", "test");
+      await other.registerSession(session);
+
+      await assert.rejects(
+        client.updateSessionState({ sessionId: session.sessionId, busyState: "busy" }),
+        (error: unknown) => (error as { code?: string }).code === "SESSION_BUSY",
+      );
+      await other.updateSessionState({ sessionId: session.sessionId, busyState: "busy" });
+    } finally {
+      await other.release();
+      await client.release();
+      await server.close(socketPath);
+    }
+  });
+});

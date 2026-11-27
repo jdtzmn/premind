@@ -38,6 +38,8 @@ Once a protocol version is released, its request and response envelopes and the 
 
 Protocol v2 session operations carry a session lease (below). Released clients keep using protocol v1. The proxy on the historical socket accepts a fixed allowlist of v1 operations, translates them to the current daemon, and maps each legacy client to a durable lease. Operations outside the allowlist, including `pruneClosedSessions`, `deleteSession`, and `requestHandover`, are rejected there.
 
+Launchers probe liveness with a v1 `debugStatus` that carries a top-level `probe: true`. A current daemon answers it without the per-session list, which is too costly to build for every probe; an older daemon ignores the key and answers in full. A launcher waiting for a daemon keeps one probe in flight for its whole wait instead of abandoning and resending it, so a busy daemon is not buried in stale requests.
+
 ## Session ownership
 
 Pi and OpenCode clients hold a lease per session. Each lease has a generation that increases on every new claim, so a request from a superseded owner fails with `SESSION_MOVED` and the client claims again. Leases expire 30 seconds after their last renewal; an expired lease is rejected immediately, and the session's state is kept. Claude and Codex sessions are host-owned: their hooks register them by host session ID and need no lease.

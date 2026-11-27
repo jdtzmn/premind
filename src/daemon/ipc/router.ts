@@ -444,7 +444,11 @@ export class Router {
 							activeWatchers: this.store.countActiveWatchers(),
 							lastReapAt: this.store.getLastReapAt(),
 							lastReapCount: this.store.getLastReapCount(),
-							sessions: this.store.listSessionSummaries(request.payload.includeSnapshots === true),
+							// Liveness probes only need the daemon block; the summaries
+							// cost a busy daemon too much to build for every probe.
+							sessions: request.probe
+								? []
+								: this.store.listSessionSummaries(request.payload.includeSnapshots === true),
 						}),
 					);
 				case "pruneClosedSessions":

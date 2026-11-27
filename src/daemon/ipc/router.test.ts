@@ -11,6 +11,7 @@ import {
   requestSchema,
 } from "../../shared/ipc.ts";
 import { Router } from "./router.ts";
+import { LegacyV1ProxyRouter } from "../../shared/protocol/legacy-v1-proxy.ts";
 import { StateStore, type SessionLeaseToken } from "../persistence/store.ts";
 import { WorktreeBindingRegistry } from "../worktrees/worktree-binding-registry.ts";
 
@@ -298,6 +299,15 @@ describe("Router worktree subscription operations", () => {
     assert.equal(legacy.ok, true);
     if (!legacy.ok) throw new Error("legacy debugStatus failed");
     assert.equal("snapshot" in (legacy.result as { sessions: Array<{ subscriptions: Array<object> }> }).sessions[0]!.subscriptions[0]!, false);
+    // Liveness probes reach the router through the historical socket's proxy
+    // and must stay cheap, so they skip the per-session summaries.
+    const proxy = new LegacyV1ProxyRouter(store, "instance-1", (request) => router.handle(request));
+    const probe = await proxy.handle({ type: "debugStatus", protocolVersion: 1, payload: {}, probe: true });
+    assert.equal(probe.ok, true);
+    if (!probe.ok) throw new Error("probe debugStatus failed");
+    const probed = probe.result as { daemon: { protocolVersion: number }; sessions: unknown[] };
+    assert.equal(probed.daemon.protocolVersion, 1);
+    assert.deepEqual(probed.sessions, []);
     const response = await router.handle({
       type: "debugStatus",
       protocolVersion: 1,
