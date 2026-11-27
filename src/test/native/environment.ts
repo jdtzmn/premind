@@ -1,4 +1,6 @@
 import { execFileSync } from "node:child_process"
+import { existsSync, readFileSync } from "node:fs"
+import path from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import { readDaemonLockOwner } from "../../shared/daemon-startup.ts"
 import { startFakeGitHub, type FakeGitHub } from "../harness/fake-github.ts"
@@ -25,7 +27,7 @@ export type E2EEnvironment = {
 	daemon: DaemonState
 	env: NodeJS.ProcessEnv
 	/** Poll `condition` until it is truthy; fail with `diagnostics()` on timeout. */
-	waitFor<T>(description: string, condition: () => T | Promise<T>, timeoutMs?: number): Promise<NonNullable<T>>
+	waitFor<T>(description: string | (() => string), condition: () => T | Promise<T>, timeoutMs?: number): Promise<NonNullable<T>>
 	/** Stop the daemon and fakes and remove the sandbox. Stop the host first. */
 	close(): Promise<void>
 }
@@ -36,8 +38,12 @@ export async function startE2EEnvironment(options: {
 	diagnostics?: () => string
 	parent?: NodeJS.ProcessEnv
 } = {}): Promise<E2EEnvironment> {
-	const sandbox = createNativeSandbox(options.parent)
-	const closers: Array<() => Promise<void> | void> = [() => sandbox.dispose()]
+	const parent = options.parent ?? process.env
+	const sandbox = createNativeSandbox(parent)
+	// PREMIND_E2E_KEEP=1 keeps the sandbox for inspection after a run.
+	const closers: Array<() => Promise<void> | void> = [
+		() => (parent.PREMIND_E2E_KEEP === "1" ? console.error(`kept e2e sandbox ${sandbox.root}`) : sandbox.dispose()),
+	]
 	try {
 		const github = await startFakeGitHub()
 		closers.unshift(() => github.close())
@@ -54,7 +60,7 @@ export async function startE2EEnvironment(options: {
 				const value = await condition()
 				if (value) return value as NonNullable<typeof value>
 				if (Date.now() > deadline) {
-					throw new Error(`Timed out waiting for ${description}\n${options.diagnostics?.().slice(-6000) ?? ""}`)
+					throw new Error(`Timed out waiting for ${typeof description === "function" ? description() : description}\n--- host ---\n${options.diagnostics?.().slice(-6000) ?? ""}\n--- daemon ---\n${daemonLog(sandbox.state)}`)
 				}
 				await delay(100)
 			}
@@ -107,4 +113,9 @@ async function stopDaemon(stateDir: string) {
 	try {
 		process.kill(pid, "SIGKILL")
 	} catch {}
+}
+
+const daemonLog = (stateDir: string) => {
+	const file = path.join(stateDir, "daemon.log")
+	return existsSync(file) ? readFileSync(file, "utf8").slice(-6000) : "(no daemon log)"
 }
