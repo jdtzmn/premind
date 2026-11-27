@@ -215,6 +215,9 @@ export const requestSchema = z.discriminatedUnion("type", [
     type: z.literal("debugStatus"),
     protocolVersion: z.literal(PREMIND_PROTOCOL_VERSION),
     payload: debugStatusPayloadSchema,
+    // Top level because payloads are strict: older daemons drop the unknown
+    // key and answer in full instead of rejecting the probe.
+    probe: z.literal(true).optional(),
   }),
   z.object({
     type: z.literal("pruneClosedSessions"),

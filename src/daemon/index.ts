@@ -19,6 +19,7 @@ import {
   DAEMON_START_LOCK_TOKEN_ENV,
   holdsDaemonLock,
   isSocketReachable,
+  refreshDaemonLock,
   releaseDaemonLock,
   type DaemonLock,
 } from "../shared/daemon-startup.ts"
@@ -55,7 +56,8 @@ const logger = createLogger("daemon")
 let abortStartup: (() => Promise<void>) | undefined
 
 const STALENESS_SWEEP_INTERVAL_MS = 5 * 60 * 1000
-// How often a running daemon confirms it still owns the daemon lock.
+// How often a running daemon confirms it still owns the daemon lock and
+// refreshes it, which keeps a congested daemon's lock from being reclaimed.
 const DAEMON_LOCK_CHECK_INTERVAL_MS = 15 * 1000
 
 async function main() {
@@ -199,17 +201,23 @@ async function startDaemon(lock: DaemonLock) {
 
   // Prune closed session rows and orphaned PR events at startup so any backlog
   // accumulated while the daemon was down is cleaned up immediately.
-  const [startupPrunedSessions, startupPrunedEvents] = server.store.withCoordinatorLease(
+  const [startupClosedIdleSessions, startupPrunedSessions, startupPrunedEvents, startupPrunedDaemonLeases, startupPrunedHandoffs] = server.store.withCoordinatorLease(
     coordinatorLease,
     () => [
+      server.store.closeIdleSessions(),
       server.store.pruneClosedSessions(PREMIND_CLOSED_SESSION_RETENTION_MS),
       server.store.pruneOrphanedPrEvents(),
+      server.store.pruneExpiredDaemonInstanceLeases(),
+      server.store.pruneSettledHandoffs(),
     ] as const,
   )
-  if (startupPrunedSessions > 0 || startupPrunedEvents > 0) {
+  if (startupClosedIdleSessions > 0 || startupPrunedSessions > 0 || startupPrunedEvents > 0 || startupPrunedDaemonLeases > 0 || startupPrunedHandoffs > 0) {
     logger.info("startup prune", {
+      closedIdleSessions: startupClosedIdleSessions,
       prunedClosedSessions: startupPrunedSessions,
       prunedOrphanedEvents: startupPrunedEvents,
+      prunedDaemonLeases: startupPrunedDaemonLeases,
+      prunedHandoffRecords: startupPrunedHandoffs,
     })
   }
 
@@ -327,12 +335,18 @@ async function startDaemon(lock: DaemonLock) {
         thresholdMs: PREMIND_SESSION_STALE_MS,
       })
     }
+    const closedIdleSessions = server.store.closeIdleSessions()
     const prunedSessions = server.store.pruneClosedSessions(PREMIND_CLOSED_SESSION_RETENTION_MS)
     const prunedEvents = server.store.pruneOrphanedPrEvents()
-    if (prunedSessions > 0 || prunedEvents > 0) {
+    const prunedDaemonLeases = server.store.pruneExpiredDaemonInstanceLeases()
+    const prunedHandoffRecords = server.store.pruneSettledHandoffs()
+    if (closedIdleSessions > 0 || prunedSessions > 0 || prunedEvents > 0 || prunedDaemonLeases > 0 || prunedHandoffRecords > 0) {
       logger.info("pruned closed sessions and orphaned events", {
+        closedIdleSessions,
         prunedClosedSessions: prunedSessions,
         prunedOrphanedEvents: prunedEvents,
+        prunedDaemonLeases,
+        prunedHandoffRecords,
       })
     }
     })
@@ -374,7 +388,7 @@ async function startDaemon(lock: DaemonLock) {
   // A daemon whose lock was reclaimed (for example after it stopped answering)
   // must stop polling and writing so two daemons never run side by side.
   const lockCheckInterval = setInterval(() => {
-    if (holdsDaemonLock(lock)) return
+    if (refreshDaemonLock(lock)) return
     logger.warn("daemon lock taken over by another daemon; shutting down")
     lifecycle.requestStop("lock-lost")
   }, DAEMON_LOCK_CHECK_INTERVAL_MS)

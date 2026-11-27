@@ -106,6 +106,48 @@ test("leaves an unresponsive socket owner untouched", async () => {
   }
 });
 
+test("waits for a slow but live daemon instead of resending probes", async () => {
+  const dir = createTempDir();
+  const socketPath = path.join(dir, "premind.sock");
+  let requests = 0;
+  const server = net.createServer((socket) => {
+    socket.on("error", () => undefined);
+    socket.once("data", () => {
+      requests += 1;
+      setTimeout(() => {
+        if (!socket.writable) return;
+        socket.end(
+          `${JSON.stringify({
+            ok: true,
+            protocolVersion: 1,
+            result: {
+              daemon: { protocolVersion: 1, operations: [...CODEX_REQUIRED_DAEMON_OPERATIONS] },
+            },
+          })}\n`,
+        );
+      }, 400);
+    });
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(socketPath, resolve);
+  });
+  try {
+    await createDaemonLauncher({
+      socketPath,
+      stateDir: dir,
+      daemonEntry: path.join(dir, "must-not-start.mjs"),
+      requiredOperations: CODEX_REQUIRED_DAEMON_OPERATIONS,
+      startupTimeoutMs: 2_000,
+      retryMs: 10,
+    })();
+    // The quick initial probe gives up, then one patient probe gets the answer.
+    assert.equal(requests, 2);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
 test("captures early daemon stderr without retaining child pipes", async () => {
   const dir = createTempDir();
   const stateDir = path.join(dir, "state");

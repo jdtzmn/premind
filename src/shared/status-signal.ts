@@ -27,8 +27,9 @@ export function getPrSignal(
     return unknown;
   }
 
-  const merge = snapshot.mergeStateStatus?.toUpperCase();
-  if (!merge || merge === "UNKNOWN") return unknown;
+  // GitHub reports UNKNOWN while it recomputes mergeability; signals that do not
+  // depend on merge state still apply, but "ready to merge" stays unclaimed.
+  const merge = snapshot.mergeStateStatus?.toUpperCase() ?? "UNKNOWN";
 
   const review = snapshot.reviewDecision?.toUpperCase();
   const checks = snapshot.checks.map((check) => check.state?.toLowerCase() ?? "unknown");

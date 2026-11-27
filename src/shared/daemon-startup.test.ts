@@ -15,6 +15,7 @@ import {
   formatDaemonLockStatus,
   handOverOlderDaemon,
   holdsDaemonLock,
+  refreshDaemonLock,
   identifySignalableDaemon,
   inspectDaemon,
   isRunningDaemonOlder,
@@ -24,6 +25,7 @@ import {
   releaseDaemonLock,
   releaseDaemonStartLock,
   REQUEST_HANDOVER_OPERATION,
+  waitForDaemon,
 } from "./daemon-startup.ts";
 
 const tempPaths: string[] = [];
@@ -77,11 +79,13 @@ test("daemon start lock is shared and releases only its own acquisition", () => 
 // A PID far above any macOS or Linux default limit is never a live process.
 const DEAD_PID = 2 ** 30;
 
-const writeDaemonLock = (stateDir: string, pid: number, createdAt: number) =>
-  fs.writeFileSync(
-    path.join(stateDir, "daemon.lock"),
-    `${pid}:${createdAt}:previous-owner`,
-  );
+// The lock's mtime is set to its creation time, as for an owner that has not
+// refreshed it since.
+const writeDaemonLock = (stateDir: string, pid: number, createdAt: number) => {
+  const lockPath = path.join(stateDir, "daemon.lock");
+  fs.writeFileSync(lockPath, `${pid}:${createdAt}:previous-owner`);
+  fs.utimesSync(lockPath, new Date(createdAt), new Date(createdAt));
+};
 
 test("only one daemon holds the daemon lock while it is alive", async () => {
   const stateDir = createTempDir();
@@ -125,6 +129,33 @@ test("reclaims a live owner past its startup grace only when nothing serves", as
   const lock = await acquireDaemonLock({ stateDir, isServing: async () => false });
   assert.ok(lock);
   releaseDaemonLock(lock);
+});
+
+test("never reclaims a live owner that keeps refreshing its lock, even when its socket is unreachable", async () => {
+  const stateDir = createTempDir();
+  writeDaemonLock(stateDir, process.pid, Date.now() - 10 * 60_000);
+  const lockPath = path.join(stateDir, "daemon.lock");
+  fs.utimesSync(lockPath, new Date(), new Date());
+
+  assert.equal(
+    await acquireDaemonLock({ stateDir, isServing: async () => false }),
+    undefined,
+  );
+});
+
+test("a daemon refreshes only a lock it still holds", async () => {
+  const stateDir = createTempDir();
+  const lock = await acquireDaemonLock({ stateDir });
+  assert.ok(lock);
+  const longAgo = new Date(Date.now() - 10 * 60_000);
+  fs.utimesSync(lock.path, longAgo, longAgo);
+
+  assert.equal(refreshDaemonLock(lock), true);
+  assert.ok(fs.statSync(lock.path).mtimeMs > longAgo.getTime());
+
+  writeDaemonLock(stateDir, DEAD_PID, longAgo.getTime());
+  assert.equal(refreshDaemonLock(lock), false);
+  assert.ok(fs.statSync(lock.path).mtimeMs < longAgo.getTime() + 1_000);
 });
 
 test("a daemon notices when its lock was taken over", async () => {
@@ -216,6 +247,52 @@ test("classifies unreachable, malformed, and capability-incompatible daemons", a
     });
   } finally {
     await new Promise<void>((resolve) => legacy.close(() => resolve()));
+  }
+});
+
+test("probes ask the daemon to skip per-session status", async () => {
+  const dir = createTempDir();
+  const socketPath = path.join(dir, "premind.sock");
+  let request: unknown;
+  const server = net.createServer((socket) => {
+    socket.once("data", (chunk) => {
+      request = JSON.parse(chunk.toString());
+      socket.end(`${JSON.stringify({ ok: true, protocolVersion: 1, result: { daemon: { protocolVersion: 1 } } })}\n`);
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+  try {
+    assert.equal((await inspectDaemon(socketPath)).status, "compatible");
+    assert.deepEqual(request, { type: "debugStatus", protocolVersion: 1, payload: {}, probe: true });
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("waits for a daemon that answers slower than a single probe instead of resending", async () => {
+  const dir = createTempDir();
+  const socketPath = path.join(dir, "premind.sock");
+  let requests = 0;
+  // A CPU-starved daemon still answers, just late; abandoning and resending
+  // each probe piled up work until its accept backlog overflowed.
+  const slow = net.createServer((socket) => {
+    socket.on("error", () => undefined);
+    socket.once("data", () => {
+      requests += 1;
+      setTimeout(() => {
+        if (!socket.writable) return;
+        socket.end(
+          `${JSON.stringify({ ok: true, protocolVersion: 1, result: { daemon: { protocolVersion: 1 } } })}\n`,
+        );
+      }, 400);
+    });
+  });
+  await new Promise<void>((resolve) => slow.listen(socketPath, resolve));
+  try {
+    assert.equal(await waitForDaemon(socketPath, [], 2_000, 50), true);
+    assert.equal(requests, 1);
+  } finally {
+    await new Promise<void>((resolve) => slow.close(() => resolve()));
   }
 });
 

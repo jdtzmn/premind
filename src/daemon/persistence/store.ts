@@ -7,10 +7,12 @@ import {
 	PREMIND_COORDINATOR_LEASE_TTL_MS,
 	PREMIND_DAEMON_LEASE_TTL_MS,
 	PREMIND_CLOSED_SESSION_RETENTION_MS,
+	PREMIND_IDLE_SESSION_RETENTION_MS,
 	PREMIND_DB_PATH,
 	PREMIND_DATABASE_BUSY_TIMEOUT_MS,
 	PREMIND_PR_STREAM_RETENTION_MS,
 	PREMIND_REMINDER_HANDOFF_STALE_MS,
+	PREMIND_SETTLED_HANDOFF_RETENTION_MS,
 	PREMIND_REMINDER_CLAIM_LEASE_MS,
 	PREMIND_STATE_DIR,
 	PREMIND_SUBSCRIPTION_RETENTION_MS,
@@ -167,6 +169,17 @@ export type WorktreeBinding = {
 	headSha: string;
 	state: string;
 	updatedAt: number;
+};
+
+type WorktreeBindingRow = {
+	session_id: string;
+	root: string;
+	git_dir: string;
+	repo: string;
+	branch: string | null;
+	head_sha: string;
+	state: string;
+	updated_at: number;
 };
 
 export type SessionSubscription = {
@@ -613,6 +626,11 @@ export class StateStore {
 	deleteLegacyProxyLease(sessionId: string): boolean {
 		return (this.db.prepare(`DELETE FROM legacy_proxy_session_leases WHERE session_id = ?`)
 			.run(sessionId).changes as number) === 1;
+	}
+
+	pruneExpiredDaemonInstanceLeases(now = Date.now()): number {
+		return this.db.prepare(`DELETE FROM daemon_instance_leases WHERE expires_at <= ?`)
+			.run(now).changes as number;
 	}
 
 	pruneExpiredLegacyProxyLeases(now = Date.now()): number {
@@ -1205,19 +1223,11 @@ export class StateStore {
 	getWorktreeBinding(sessionId: string): WorktreeBinding | null {
 		const row = this.db
 			.prepare(`SELECT * FROM worktree_bindings WHERE session_id = ?`)
-			.get(sessionId) as
-			| {
-					session_id: string;
-					root: string;
-					git_dir: string;
-					repo: string;
-					branch: string | null;
-					head_sha: string;
-					state: string;
-					updated_at: number;
-			  }
-			| undefined;
-		if (!row) return null;
+			.get(sessionId) as WorktreeBindingRow | undefined;
+		return row ? this.toWorktreeBinding(row) : null;
+	}
+
+	private toWorktreeBinding(row: WorktreeBindingRow): WorktreeBinding {
 		return {
 			sessionId: row.session_id,
 			root: row.root,
@@ -1775,6 +1785,26 @@ export class StateStore {
 		return { reaped, oldestAgeMs };
 	}
 
+	/**
+	 * Closes detached and dormant sessions idle longer than retentionMs, so the
+	 * closed-session prune deletes them and releases their subscriptions.
+	 */
+	closeIdleSessions(now = Date.now(), retentionMs = PREMIND_IDLE_SESSION_RETENTION_MS): number {
+		const result = this.db
+			.prepare(
+				`UPDATE sessions SET status = 'closed', busy_state = 'idle', updated_at = :now
+				 WHERE status IN ('detached', 'dormant') AND last_activity_at < :cutoff
+				   AND NOT EXISTS (
+				     SELECT 1 FROM session_daemon_leases
+				     WHERE session_id = sessions.session_id AND expires_at > :now
+				   )`,
+			)
+			.run({ now, cutoff: now - retentionMs });
+		const closed = result.changes as number;
+		if (closed > 0) this.refreshWatcherCounts(now);
+		return closed;
+	}
+
 	getLastReapAt(): number | null {
 		return this.lastReapAt;
 	}
@@ -1926,10 +1956,19 @@ export class StateStore {
 			.get(sessionId) as SessionRow | undefined;
 	}
 
+	// Backs debugStatus, which every daemon liveness probe calls, so it runs a
+	// fixed set of queries instead of several per session.
 	listSessionSummaries(includeSnapshots = false) {
 		const sessions = this.db
 			.prepare(
-				`SELECT session_id, host, repo, branch, pr_number, status, busy_state, last_delivered_event_seq FROM sessions WHERE status != 'closed' ORDER BY updated_at DESC`,
+				`SELECT session_id, host, repo, branch, pr_number, status, busy_state,
+				   CASE WHEN pr_number IS NULL THEN 0 ELSE (
+				     SELECT COUNT(*) FROM pr_events
+				     WHERE pr_events.repo = sessions.repo
+				       AND pr_events.pr_number = sessions.pr_number
+				       AND pr_events.seq > sessions.last_delivered_event_seq
+				   ) END AS legacy_pending_count
+				 FROM sessions WHERE status != 'closed' ORDER BY updated_at DESC`,
 			)
 			.all() as Array<{
 			session_id: string;
@@ -1939,27 +1978,62 @@ export class StateStore {
 			pr_number: number | null;
 			status: "active" | "paused" | "detached" | "closed";
 			busy_state: "busy" | "idle";
-			last_delivered_event_seq: number;
+			legacy_pending_count: number;
 		}>;
+		const subscriptionRows = this.db
+			.prepare(
+				`SELECT session_subscriptions.*,
+				   CASE WHEN session_subscriptions.state = 'active' THEN (
+				     SELECT COUNT(*) FROM pr_events
+				     WHERE pr_events.repo = session_subscriptions.repo
+				       AND pr_events.pr_number = session_subscriptions.pr_number
+				       AND pr_events.seq > session_subscriptions.last_delivered_event_seq
+				   ) ELSE 0 END AS pending_event_count
+				 FROM session_subscriptions
+				 INNER JOIN sessions USING (session_id)
+				 WHERE sessions.status != 'closed'
+				 ORDER BY session_subscriptions.created_at ASC`,
+			)
+			.all() as Array<Parameters<StateStore["toSubscription"]>[0] & { pending_event_count: number }>;
+		const subscriptionsBySession = new Map<string, typeof subscriptionRows>();
+		for (const row of subscriptionRows) {
+			const rows = subscriptionsBySession.get(row.session_id) ?? [];
+			rows.push(row);
+			subscriptionsBySession.set(row.session_id, rows);
+		}
+		const bindings = new Map(
+			(
+				this.db
+					.prepare(
+						`SELECT worktree_bindings.* FROM worktree_bindings
+						 INNER JOIN sessions USING (session_id)
+						 WHERE sessions.status != 'closed'`,
+					)
+					.all() as WorktreeBindingRow[]
+			).map((row) => [row.session_id, this.toWorktreeBinding(row)]),
+		);
+		const pausedSessionIds = new Set(
+			(
+				this.db.prepare(`SELECT session_id FROM session_pauses`).all() as Array<{
+					session_id: string;
+				}>
+			).map((row) => row.session_id),
+		);
 
 		return sessions.map((session) => {
-			const subscriptions = this.listSessionSubscriptions(session.session_id).map(
-				(subscription) => ({
-					repo: subscription.repo,
-					prNumber: subscription.prNumber,
-					source: subscription.source,
-					writePolicy: subscription.writePolicy,
-					state: subscription.state,
-					pendingEventCount:
-						subscription.state === "active"
-							? this.countPendingEvents(
-									subscription.repo,
-									subscription.prNumber,
-									subscription.lastDeliveredEventSeq,
-								)
-							: 0,
-					...(includeSnapshots ? { snapshot: subscription.state === "active" ? this.getStatusSnapshot(subscription.repo, subscription.prNumber) : null } : {}),
-				}),
+			const subscriptions = (subscriptionsBySession.get(session.session_id) ?? []).map(
+				(row) => {
+					const subscription = this.toSubscription(row);
+					return {
+						repo: subscription.repo,
+						prNumber: subscription.prNumber,
+						source: subscription.source,
+						writePolicy: subscription.writePolicy,
+						state: subscription.state,
+						pendingEventCount: row.pending_event_count,
+						...(includeSnapshots ? { snapshot: subscription.state === "active" ? this.getStatusSnapshot(subscription.repo, subscription.prNumber) : null } : {}),
+					};
+				},
 			);
 			const pendingReminderCount =
 				subscriptions.length > 0
@@ -1969,14 +2043,8 @@ export class StateStore {
 								(count, subscription) => count + subscription.pendingEventCount,
 								0,
 							)
-					: session.pr_number === null
-						? 0
-						: this.countPendingEvents(
-								session.repo,
-								session.pr_number,
-								session.last_delivered_event_seq,
-							);
-			const binding = this.getWorktreeBinding(session.session_id);
+					: session.legacy_pending_count;
+			const binding = bindings.get(session.session_id);
 
 			return {
 				sessionId: session.session_id,
@@ -1985,7 +2053,7 @@ export class StateStore {
 				branch: session.branch,
 				prNumber: session.pr_number,
 				status:
-					session.status === "active" && this.isSessionPaused(session.session_id)
+					session.status === "active" && pausedSessionIds.has(session.session_id)
 						? "paused"
 						: session.status,
 				busyState: session.busy_state,
@@ -2107,22 +2175,35 @@ export class StateStore {
 		return row.count;
 	}
 
+	// Runs after every IPC request, liveness probes included, so it must stay a
+	// cheap read: rewriting watcher counts here made each probe cost tens of ms
+	// and let a storm of reconnecting clients keep the daemon saturated.
 	hasDaemonDemand(now = Date.now()): boolean {
 		if (this.countActiveClients(now) > 0) return true;
-		this.refreshWatcherCounts(now);
+		// An active PR watcher always has an active subscription, so the
+		// subscription check covers it; branch watchers mirror refreshWatcherCounts.
 		const row = this.db
 			.prepare(
 				`SELECT
-				   (SELECT COUNT(*) FROM session_subscriptions
+				   EXISTS (SELECT 1 FROM session_subscriptions
 				      INNER JOIN sessions USING (session_id)
 					  WHERE session_subscriptions.state = 'active'
-					    AND sessions.status IN ('active', 'paused')) +
-				   (SELECT COUNT(*) FROM pr_watchers WHERE active_session_count > 0) +
-				   (SELECT COUNT(*) FROM branch_watchers WHERE active_session_count > 0)
-				 AS count`,
+					    AND sessions.status IN ('active', 'paused'))
+				   OR EXISTS (SELECT 1 FROM sessions
+				      LEFT JOIN worktree_bindings
+				        ON worktree_bindings.session_id = sessions.session_id
+				      INNER JOIN branch_watchers
+				        ON (worktree_bindings.session_id IS NOT NULL
+				              AND worktree_bindings.repo = branch_watchers.repo
+				              AND worktree_bindings.branch = branch_watchers.branch)
+				          OR (worktree_bindings.session_id IS NULL
+				              AND sessions.repo = branch_watchers.repo
+				              AND sessions.branch = branch_watchers.branch)
+				      WHERE sessions.status IN ('active', 'paused'))
+				 AS demand`,
 			)
-			.get() as { count: number };
-		return row.count > 0;
+			.get() as { demand: number };
+		return row.demand === 1;
 	}
 
 	listBranchWatchTargets(now = Date.now()) {
@@ -2806,6 +2887,17 @@ export class StateStore {
 				batches,
 			};
 		});
+	}
+
+	/** Deletes settlements and execution claims settled before the retention window. */
+	pruneSettledHandoffs(now = Date.now(), retentionMs = PREMIND_SETTLED_HANDOFF_RETENTION_MS): number {
+		const cutoff = now - retentionMs;
+		return this.transaction(() =>
+			(this.db.prepare(`DELETE FROM reminder_handoff_settlements WHERE settled_at <= ?`)
+				.run(cutoff).changes as number) +
+			(this.db.prepare(`DELETE FROM reminder_handoff_execution_claims WHERE settled_at <= ?`)
+				.run(cutoff).changes as number),
+		);
 	}
 
 	/** Resolves exactly one claimed reminder bundle atomically. */
@@ -4428,6 +4520,11 @@ export class StateStore {
 				}
 			});
 		}
+		// Pending-event counts filter on seq; the dedupe index cannot seek on it.
+		this.db.exec(`
+			CREATE INDEX IF NOT EXISTS pr_events_pr_seq
+			ON pr_events(repo, pr_number, seq);
+		`);
 		this.installStorageEpochTriggers();
 	}
 
