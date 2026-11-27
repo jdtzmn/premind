@@ -71,14 +71,16 @@ test("Codex reference names follow advertised MCP tools and preserve safety guid
 	);
 });
 
-test("Pi and Claude skills render discoverable, host-specific references", async () => {
+test("Pi, Claude and OpenCode skills render discoverable, host-specific references", async () => {
 	const { generatedSkillFiles } = await import("./generate-premind-skills.ts");
 	const metadata = JSON.parse(
 		readFileSync(path.join(root, "package.json"), "utf8"),
 	);
 	assert.deepEqual(metadata.pi.skills, ["./skills/premind"]);
 	assert.ok(metadata.files.includes("skills"));
-	for (const host of ["pi", "claude"] as const) {
+	// OpenCode registers its skill from the packaged plugin directory.
+	assert.ok(metadata.files.includes("src"));
+	for (const host of ["pi", "claude", "opencode"] as const) {
 		const files = generatedSkillFiles(host);
 		assert.equal(files.length, 3);
 		const entry = files.find((file) => file.path.endsWith("/SKILL.md"));
@@ -119,7 +121,12 @@ test("Pi and Claude skills render discoverable, host-specific references", async
 			assert.doesNotMatch(subscriptions, /premind_set_active_checkout/);
 		} else {
 			assert.match(subscriptions, /premind_set_active_checkout/);
-			assert.match(reminders, /Pi can follow up on idle sessions/);
+			assert.match(
+				reminders,
+				host === "pi"
+					? /Pi can follow up on idle sessions/
+					: /OpenCode queues reminders/,
+			);
 			assert.doesNotMatch(subscriptions, /CLAUDE_CODE_SESSION_ID/);
 		}
 	}

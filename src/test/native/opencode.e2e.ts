@@ -3,6 +3,7 @@ import { existsSync } from "node:fs"
 import { after, before, describe, test } from "node:test"
 import { PremindRpc } from "../../plugin-opencode-v2/rpc.ts"
 import { BRANCH, REPO, startE2EEnvironment, type E2EEnvironment } from "./environment.ts"
+import { textOf } from "./fake-model.ts"
 import { locateHost } from "./host.ts"
 import { openCodeDriver, pluginDirectory, startOpenCode, type OpenCodeInstance, type OpenCodeSession } from "./opencode.ts"
 import { packedPremind } from "./package.ts"
@@ -73,6 +74,29 @@ describe("opencode: V2 plugin", { skip: "missing" in located ? located.missing :
 		assert.equal(reminder.description, "Premind: pull request updates")
 	})
 
+	test("offers the Premind tools to the model and lists the skill", async () => {
+		const tools = new Set(e2e.model.requests.at(-1)?.tools?.map((tool) => tool.function.name))
+		for (const name of ["status", "debug_status", "set_active_checkout", "subscribe", "unsubscribe", "deliver", "pause", "resume", "enable", "disable", "doctor"]) {
+			assert.ok(tools.has(`premind_${name}`), `premind_${name} is a direct tool`)
+		}
+		const skills = await opencode.client().skill.list()
+		const skill = JSON.stringify(skills)
+		assert.match(skill, /"name":"premind"/)
+		assert.match(skill, /Premind pull-request tracking and reminder instructions for OpenCode/)
+	})
+
+	test("runs premind_subscribe when the model calls it", async () => {
+		e2e.github.addPullRequest({ repo: REPO, number: 43, headRefName: "feature/other", title: "Other widgets" })
+		e2e.model.reply({ toolCalls: [{ name: "premind_subscribe", arguments: { prNumber: 43, repo: REPO, writePolicy: "observe-only" } }] })
+		e2e.model.reply({ text: "subscribed" })
+		await session.prompt("follow PR 43")
+		const result = e2e.model.requests.at(-1)?.messages.find((message) => message.role === "tool")
+		assert.match(textOf(result?.content), new RegExp(`premind subscribed to ${REPO}#43 with write policy observe-only`))
+		const row = e2e.daemon.get<{ write_policy: string }>(
+			"SELECT write_policy FROM session_subscriptions WHERE session_id = ? AND repo = ? AND pr_number = 43", session.id, REPO)
+		assert.equal(row?.write_policy, "observe-only")
+	})
+
 	test("delivers one merged reminder at the end of the running execution", async () => {
 		let release!: () => void
 		const waitFor = new Promise<void>((resolve) => { release = resolve })
@@ -85,9 +109,10 @@ describe("opencode: V2 plugin", { skip: "missing" in located ? located.missing :
 			e2e.github.addComment(REPO, 42, { author: "reviewer", body: first })
 			e2e.github.addComment(REPO, 42, { author: "reviewer", body: second })
 			await e2e.waitFor("both PR changes in a pending reminder", () => {
-				const batch = e2e.daemon.get<{ reminder_text: string }>(
-					"SELECT reminder_text FROM reminder_batches WHERE session_id = ? AND state = 'built'", session.id)
-				return batch?.reminder_text.includes(first) && batch.reminder_text.includes(second)
+				// Each subscription builds its own batch, so look across all of them.
+				const batches = e2e.daemon.all<{ reminder_text: string }>(
+					"SELECT reminder_text FROM reminder_batches WHERE session_id = ? AND state = 'built'", session.id) ?? []
+				return batches.some((batch) => batch.reminder_text.includes(first) && batch.reminder_text.includes(second))
 			})
 			assert.ok(!(await reminders()).some((message) => message.text.includes(first)), "nothing is injected mid-execution")
 		} finally {

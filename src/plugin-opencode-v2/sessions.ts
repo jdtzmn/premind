@@ -200,7 +200,16 @@ export function trackSessions(ctx: Plugin.Context) {
 
 	return {
 		daemon,
-		attach: (sessionID: string) => run(sessionID, () => refresh(sessionID, true)),
+		connect,
+		async withSession<T>(sessionID: string, action: () => Promise<T>) {
+			const result = await run(sessionID, async () => {
+				if (!await refresh(sessionID, true)) throw new Error("Premind requires an active primary session at this location")
+				return { value: await action() }
+			})
+			if (!result) throw new Error("Premind is shutting down")
+			return result.value
+		},
+		deliverNow: (sessionID: string) => delivery.deliver(sessionID, () => !abort.signal.aborted),
 		async dispose() {
 			abort.abort()
 			clearInterval(pollTimer)
