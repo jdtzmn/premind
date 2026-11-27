@@ -34,7 +34,8 @@ export const piDriver: HostDriver = {
 	harness: "pi",
 	binaryEnv: "PREMIND_E2E_PI_BIN",
 	command: "pi",
-	versionPattern: /^\d+\./,
+	// RPC mode, `agent_settled` and `--no-mcp` arrived in Pi 1.x; the 0.x peer dependency can shadow it on PATH.
+	versionPattern: /^1\./,
 	async start(e2e, { binary, packageRoot }) {
 		const env: NodeJS.ProcessEnv = { ...e2e.env, PI_SKIP_VERSION_CHECK: "1", PI_TELEMETRY: "0", PI_OFFLINE: "1" }
 		configurePi(env.PI_CODING_AGENT_DIR!, e2e.model.url)
@@ -54,7 +55,7 @@ export const piDriver: HostDriver = {
 			try {
 				await rpc.request({ type: "get_state" }, 30_000)
 			} catch (error) {
-				await process.stop()
+				await process.stop().catch(() => {})
 				throw new Error(`Pi did not start: ${process.output.stderr}`, { cause: error })
 			}
 			current = { process, rpc }

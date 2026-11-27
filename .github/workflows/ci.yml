@@ -116,7 +116,9 @@ jobs:
       matrix:
         include:
           - harness: pi
-            install: npm install --global "@earendil-works/pi-coding-agent@1.6.1"
+            package: "@earendil-works/pi-coding-agent@1.6.1"
+            binary: pi
+            binary_env: PREMIND_E2E_PI_BIN
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
@@ -127,7 +129,11 @@ jobs:
           node-version: "22.13"
       - run: bun install --frozen-lockfile
       - run: bun run build:runtime
-      - run: ${{ matrix.install }}
+      # Install the host globally and name its binary explicitly: bun run puts
+      # node_modules/.bin first, where an older peer-dependency copy can shadow it.
+      - run: |
+          npm install --global "${{ matrix.package }}"
+          echo "${{ matrix.binary_env }}=$(npm prefix --global)/bin/${{ matrix.binary }}" >> "$GITHUB_ENV"
       - run: bun run test:native:e2e
         env:
           PREMIND_E2E_REQUIRE: ${{ matrix.harness }}
