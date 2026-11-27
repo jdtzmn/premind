@@ -447,6 +447,51 @@ describe("delivery reliability", () => {
     store.close()
   })
 
+  // 2d. A session can receive its PR through the legacy session stream before
+  //     its worktree binding exists, while an automatic subscription for the same
+  //     PR sits deactivated. Confirming the legacy batch must move that
+  //     subscription's cursor too, or re-attaching it repeats the update.
+  test("an update confirmed before discovery re-attaches the subscription is not repeated", () => {
+    const store = createStore()
+    store.registerClient("client-early", { pid: 1, projectRoot: "/tmp" })
+    store.registerSession({
+      clientId: "client-early",
+      sessionId: "session-early",
+      repo: REPO,
+      branch: "feature/test",
+      isPrimary: true,
+      status: "active",
+      busyState: "idle",
+    })
+    store.recordBranchAssociation(REPO, "feature/test", PR)
+    store.activateWorktree({
+      sessionId: "session-early",
+      root: "/tmp/worktree",
+      gitDir: "/tmp/.git/worktrees/test",
+      repo: REPO,
+      branch: "feature/test",
+      headSha: "abc123",
+      state: "waiting_for_pr",
+    })
+    store.insertEvents(REPO, PR, [event(1)])
+
+    const first = store.claimReminderBundle("session-early")
+    assert.ok(first)
+    assert.deepEqual(first.batches.flatMap((batch) => batch.events.map((candidate) => candidate.summary)), ["comment 1"])
+    assert.equal(store.ackReminderBundle({ sessionId: "session-early", handoffId: first.handoffId, state: "confirmed" }), 1)
+
+    store.baselineAutomaticSubscription({ sessionId: "session-early", repo: REPO, prNumber: PR })
+    store.insertEvents(REPO, PR, [event(2)])
+    const second = store.claimReminderBundle("session-early")
+    assert.ok(second)
+    assert.deepEqual(
+      second.batches.flatMap((batch) => batch.events.map((candidate) => candidate.summary)),
+      ["comment 2"],
+      "the confirmed comment is not delivered again",
+    )
+    store.close()
+  })
+
   test("a first automatic attach still starts at high water instead of dumping history", () => {
     const store = createStore()
     store.registerClient("client-fresh", { pid: 1, projectRoot: "/tmp" })

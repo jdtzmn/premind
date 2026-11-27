@@ -197,6 +197,51 @@ describe("watcher integration", () => {
     store.close()
   })
 
+  test("branch discovery delivers its update to a worktree bound during the GitHub lookup", async () => {
+    // Hosts register a session and bind its worktree in two calls. A discovery tick
+    // that starts between them must not act on the pre-binding targets once GitHub
+    // answers, or the discovery event lands before any subscription exists.
+    const store = createStore()
+    const worktreeBindings = new WorktreeBindingRegistry(store)
+    const github = new FixtureGitHubClient()
+    github.prForBranch = { number: 42, title: "Test PR", url: "https://github.com/acme/repo/pull/42", draft: false, state: "open" }
+    const lookup = github.findOpenPullRequestForBranch.bind(github)
+    github.findOpenPullRequestForBranch = async (...args) => {
+      worktreeBindings.activateResolvedWorktree("session-split", "/tmp/worktree", {
+        root: "/tmp/worktree",
+        gitDir: "/tmp/.git/worktrees/test",
+        repo: "acme/repo",
+        branch: "feature/test",
+        headSha: "abc123",
+      })
+      return lookup(...args)
+    }
+    const watcher = new BranchDiscoveryWatcher(store, github, worktreeBindings)
+
+    store.registerClient("client-split", { pid: 1, projectRoot: "/tmp" })
+    store.registerSession({
+      clientId: "client-split",
+      sessionId: "session-split",
+      repo: "acme/repo",
+      branch: "feature/test",
+      isPrimary: true,
+      status: "active",
+      busyState: "idle",
+    })
+
+    await watcher.tick()
+    await watcher.tick()
+
+    const subscription = store.getSubscription("session-split", "acme/repo", 42)
+    assert.equal(subscription?.state, "active")
+    assert.deepEqual(
+      store.listUndeliveredEventsForSubscription(subscription!.subscriptionId)
+        .map((event) => event.kind),
+      ["pr.discovered"],
+    )
+    store.close()
+  })
+
   test("branch discovery baselines an automatic subscription from an active worktree", async () => {
     const store = createStore()
     const github = new FixtureGitHubClient()
