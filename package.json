@@ -2,6 +2,13 @@
   "name": "premind",
   "version": "0.1.0",
   "description": "Pi package and OpenCode plugin that keeps sessions up to date with pull request changes",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jdtzmn/premind.git"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "type": "module",
   "exports": {
     ".": "./src/plugin-opencode-v2/server.ts",
