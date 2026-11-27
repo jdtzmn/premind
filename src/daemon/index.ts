@@ -40,6 +40,7 @@ import { StateStore } from "./persistence/store.ts"
 import { createLogger } from "./logging/logger.ts"
 import { IpcServer } from "./ipc/server.ts"
 import { GitHubClient } from "./github/client.ts"
+import { GITHUB_API_URL_ENV } from "./github/http.ts"
 import { BranchDiscoveryWatcher } from "./watchers/branch-discovery.ts"
 import { PullRequestWatcher } from "./watchers/pr-watcher.ts"
 import { AdaptiveSchedule } from "./watchers/adaptive-schedule.ts"
@@ -180,7 +181,11 @@ async function startDaemon(lock: DaemonLock) {
   }
   // Adaptive per-PR scheduling: active PRs poll every 20s; quiet PRs stretch to
   // 5 minutes. The registry reconstructs canonical actors from SQLite here.
-  const prSchedule = new AdaptiveSchedule()
+  // A loopback GitHub fixture doesn't need GitHub's production rate limits.
+  const fixturePollMs = process.env[GITHUB_API_URL_ENV] ? 250 : undefined
+  const prSchedule = new AdaptiveSchedule(
+    fixturePollMs ? { tiers: [], idleIntervalMs: fixturePollMs } : undefined,
+  )
   const pullRequestWatcher = new PullRequestWatcher(server.store, github, { schedule: prSchedule })
 
   // Reap sessions whose last_activity_at is older than the staleness threshold.
@@ -272,7 +277,7 @@ async function startDaemon(lock: DaemonLock) {
       server.store.withCoordinatorLease(coordinatorLease, () => true)
       await discoveryWatcher.tick()
     }, logger),
-    { baseIntervalMs: 60_000, maxIntervalMs: 180_000, jitterFactor: 0.25 },
+    { baseIntervalMs: fixturePollMs ?? 60_000, maxIntervalMs: 180_000, jitterFactor: 0.25 },
   )
 
   const prScheduler = new PollScheduler(
@@ -281,7 +286,7 @@ async function startDaemon(lock: DaemonLock) {
       server.store.withCoordinatorLease(coordinatorLease, () => true)
       await pullRequestWatcher.tick()
     }, logger),
-    { baseIntervalMs: 20_000, maxIntervalMs: 120_000, jitterFactor: 0.2 },
+    { baseIntervalMs: fixturePollMs ?? 20_000, maxIntervalMs: 120_000, jitterFactor: 0.2 },
   )
 
   // Wire rate-limit observations from the HTTP client back into the poll
