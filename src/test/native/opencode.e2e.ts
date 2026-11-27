@@ -59,8 +59,9 @@ describe("opencode: V2 plugin", { skip: "missing" in located ? located.missing :
 
 	test("loads from the packed package and answers RPC without starting the daemon", async () => {
 		assert.equal(typeof (await ping()).version, "string")
-		const plugins = JSON.stringify(await opencode.client().plugin.list())
-		assert.ok(plugins.includes(pluginDirectory(packageRoot)), `plugin list includes the packed plugin: ${plugins.slice(0, 2000)}`)
+		// The list can lag the plugin answering RPC, so wait for it.
+		await e2e.waitFor("the plugin list to include the packed plugin", async () =>
+			JSON.stringify(await opencode.client().plugin.list()).includes(pluginDirectory(packageRoot)), 10_000)
 		assert.equal(existsSync(e2e.sandbox.socket), false, "loading an unused plugin leaves the daemon stopped")
 	})
 
