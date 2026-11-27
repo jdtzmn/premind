@@ -210,10 +210,16 @@ The spike ran a real `opencode serve` with a throwaway plugin in
   cleanup.
 - **Runtime:** plugins run in OpenCode's bundled Bun (`/$bunfs`), so the plugin
   must not import `node:sqlite`. Only the daemon, which runs under Node, uses it.
+- **Tool schemas (PR 6):** OpenCode turns tool input into JSON Schema for the
+  model and skips tools whose zod v3 schema it cannot convert ("Schema vendor
+  \"zod\" does not support JSON Schema conversion"). Tools declare JSON Schema
+  and validate the same shape with zod in `execute`.
+- **Skills (PR 6):** skills added with `skill.transform` appear in
+  `skill.list`. The plugin registers the generated `SKILL.md` body with the
+  packaged file as its path, so the model can read the references beside it.
 - **Still open, to settle in PR 8 with the TUI:** how `description` renders in
   the transcript, and whether TUI and server commands with the same name
-  collide. **To settle in PR 6:** whether skills added with `skill.transform`
-  are listed.
+  collide.
 
 ## PR stack
 
