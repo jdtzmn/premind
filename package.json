@@ -4,11 +4,11 @@
   "description": "Pi package and OpenCode plugin that keeps sessions up to date with pull request changes",
   "type": "module",
   "exports": {
-    ".": "./src/plugin-opencode/index.ts",
-    "./opencode": "./src/plugin-opencode/index.ts",
-    "./tui": "./src/plugin-opencode/tui.ts"
+    ".": "./src/plugin-opencode-v2/server.ts",
+    "./tui": "./src/plugin-opencode-v2/tui.ts",
+    "./rpc": "./src/plugin-opencode-v2/rpc.ts"
   },
-  "main": "./src/plugin-opencode/index.ts",
+  "main": "./src/plugin-opencode-v2/server.ts",
   "files": [
     "src",
     "docs",
@@ -59,6 +59,7 @@
   "dependencies": {
     "@opencode-ai/plugin": "latest",
     "@opencode-ai/sdk": "latest",
+    "@opencode/plugin": "^2.4.2",
     "semver": "^7.8.5",
     "tsx": "^4.20.6",
     "xstate": "^5.32.6",
@@ -67,7 +68,6 @@
   "devDependencies": {
     "@biomejs/biome": "2.4.10",
     "@opencode/client": "2.4.2",
-    "@opencode/plugin": "2.4.2",
     "@opentui/core": "^0.5.12",
     "@opentui/solid": "^0.5.12",
     "@types/node": "^24.6.0",

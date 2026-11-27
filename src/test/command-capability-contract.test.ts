@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import { existsSync, readdirSync } from "node:fs";
 import { describe, test } from "node:test";
 import { createPremindPiExtension } from "../extension/index.ts";
-import { createPremindPlugin } from "../plugin-opencode/index.ts";
+import { registerCommands } from "../plugin-opencode-v2/commands.ts";
+import { registerTools } from "../plugin-opencode-v2/tools.ts";
 import { codexMcpTools } from "../codex/mcp-server.ts";
-import { tool } from "@opencode-ai/plugin";
 import { skillRoots } from "../../scripts/generate-premind-skills.ts";
 import { ADAPTER_DRIVERS } from "./harness/adapters/index.ts";
 import { assertApprovedUnsupported } from "../shared/host-limitations.test-helpers.ts";
@@ -91,47 +91,30 @@ const collectPiSurface = () => {
 };
 
 const collectOpenCodeSurface = async () => {
-	const daemon = {
-		registerClient: async () => ({ heartbeatMs: 10_000 }),
-		heartbeat: async () => undefined,
-		release: async () => undefined,
-		debugStatus: async () => ({ sessions: [] }),
-	};
-	const plugin = await createPremindPlugin({
-		createDaemonClient: () => daemon as never,
-		ensureDaemon: async () => {},
-		loadConfig: () => ({ idleDeliveryThresholdMs: 60_000 }),
-	})({
-		directory: "/tmp/premind-contract",
-		client: {
-			session: {
-				get: async () => ({ data: {} }),
-				prompt: async () => undefined,
-				promptAsync: async () => undefined,
-			},
-			tui: { showToast: async () => undefined },
-		},
-	} as never);
-	const runtime = plugin as unknown as {
-		config: (input: Record<string, unknown>) => Promise<void>;
-		tool: Record<string, { args: Record<string, unknown>; description: string }>;
-	};
-	const config: Record<string, unknown> = {};
-	await runtime.config(config);
+	const commands = new Set<string>();
+	const tools = new Set<string>();
 	const schemas: ToolSchemas = {};
-	for (const [name, definition] of Object.entries(runtime.tool)) {
-		schemas[name] = normalizeJsonSchema(
-			tool.schema.toJSONSchema(tool.schema.object(definition.args as never)),
-		);
-	}
-	return {
-		commands: sorted(Object.keys(config.command as Record<string, unknown>)),
-		tools: sorted(Object.keys(runtime.tool)),
-		schemas,
-		descriptions: Object.fromEntries(
-			Object.entries(runtime.tool).map(([name, definition]) => [name, definition.description]),
-		),
+	const descriptions: Record<string, string> = {};
+	const ctx = {
+		tool: {
+			transform: (edit: (editor: unknown) => void) =>
+				edit({
+					add(definition: { name: string; description: string; input: unknown; options?: { namespace?: string } }) {
+						const name = `${definition.options?.namespace ?? ""}_${definition.name}`;
+						tools.add(name);
+						schemas[name] = normalizeJsonSchema(definition.input);
+						descriptions[name] = definition.description;
+					},
+				}),
+		},
+		command: {
+			transform: (edit: (editor: unknown) => void) =>
+				edit({ add: (definition: { name: string }) => commands.add(definition.name) }),
+		},
 	};
+	await registerTools(ctx as never, {} as never);
+	await registerCommands(ctx as never, {} as never);
+	return { commands: sorted(commands), tools: sorted(tools), schemas, descriptions };
 };
 
 const collectClaudeSurface = async () => {

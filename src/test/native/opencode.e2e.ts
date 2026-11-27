@@ -5,7 +5,7 @@ import { PremindRpc } from "../../plugin-opencode-v2/rpc.ts"
 import { BRANCH, REPO, startE2EEnvironment, type E2EEnvironment } from "./environment.ts"
 import { textOf } from "./fake-model.ts"
 import { locateHost } from "./host.ts"
-import { openCodeDriver, pluginDirectory, startOpenCode, type OpenCodeInstance, type OpenCodeSession } from "./opencode.ts"
+import { openCodeDriver, startOpenCode, type OpenCodeInstance, type OpenCodeSession } from "./opencode.ts"
 import { packedPremind } from "./package.ts"
 
 /**
@@ -65,7 +65,7 @@ describe("opencode: V2 plugin", { skip: "missing" in located ? located.missing :
 		assert.equal(typeof (await ping()).version, "string")
 		// The list can lag the plugin answering RPC, so wait for it.
 		await e2e.waitFor("the plugin list to include the packed plugin", async () =>
-			JSON.stringify(await opencode.client().plugin.list()).includes(pluginDirectory(packageRoot)), 10_000)
+			JSON.stringify(await opencode.client().plugin.list()).includes(packageRoot), 10_000)
 		assert.equal(existsSync(e2e.sandbox.socket), false, "loading an unused plugin leaves the daemon stopped")
 	})
 

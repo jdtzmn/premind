@@ -38,7 +38,8 @@ const subscribe = {
 }
 const confirmation = {
 	json: object({ confirmGlobal: { type: "boolean", description: GLOBAL_CONFIRMATION_DESCRIPTION } }, ["confirmGlobal"]),
-	parse: z.object({ confirmGlobal: z.boolean() }).strict(),
+	// A missing confirmation gets the refusal that tells the model to ask, not a validation error.
+	parse: z.object({ confirmGlobal: z.boolean().optional() }).strict(),
 }
 
 export function registerTools(ctx: Plugin.Context, actions: ReturnType<typeof premindActions>) {

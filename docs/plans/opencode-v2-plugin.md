@@ -48,9 +48,10 @@ One plugin, `id: "premind"`, loaded by one `plugins` entry:
 - `exports["./tui"]`: TUI part
 - `exports["./rpc"]`: RPC contract shared by both
 
-During development the V2 plugin lives in `src/plugin-opencode-v2/` with V2's
-bare-directory layout (`server.ts`, `tui.tsx`, `rpc.ts`), so the end-to-end
-tests can load it by path. The cutover PR points the package exports at it.
+The V2 plugin lives in `src/plugin-opencode-v2/` (`server.ts`, `tui.ts`,
+`rpc.ts`). Since the cutover the package exports point at it, and
+`@opencode/plugin` is a runtime dependency. The end-to-end suite loads the
+packed package through those exports, as users do.
 
 ### Delivery
 
@@ -113,8 +114,11 @@ supplies only "send this bundle" and "is this session idle".
 
 ### Settings
 
-Plugin options: `autoDeliver`, `idleGraceMs` (default 0), `showStatus`. The old
-`premind.jsonc` is read for one release with a deprecation warning.
+Plugin option: `autoDeliver`. `idleGraceMs` and `showStatus` were dropped: with
+delivery queued into the same execution, no grace period is needed, and the
+status footer is deferred to its own PR. The old `premind.jsonc` is no longer
+read; the README's upgrade section says so instead of a deprecation warning,
+because its only setting (`idleDeliveryThresholdMs`) has no V2 meaning.
 
 ## Testing
 
@@ -222,10 +226,12 @@ The spike ran a real `opencode serve` with a throwaway plugin in
   waits in the inbox and joins the transcript (and the model's input) with the
   next turn. The TUI shows results immediately over RPC instead, which is why
   it is the main surface.
-- **Still open, to settle with the cutover:** how `description` renders in
-  the transcript, whether TUI and server commands with the same name collide,
-  and how OpenCode loads the package's `./tui` export. The TUI is covered by
-  unit tests against a fake TUI context until then.
+- OpenCode loads every part of a package from one `plugins` entry: the TUI
+  loads the TUI parts of the plugins its server loads.
+- **Still open:** how `description` renders in the transcript, and whether TUI
+  and server commands with the same name collide in the TUI. The TUI is covered
+  by unit tests against a fake TUI context; a VHS recording follows with the
+  footer.
 
 ## PR stack
 
@@ -240,6 +246,7 @@ The spike ran a real `opencode serve` with a throwaway plugin in
 | 7 | RPC contract and server commands | Scenarios 1, 5 |
 | 8 | TUI part | Unit tests; VHS recording |
 | 9 | Cutover: package exports, capability registry, cross-adapter driver, README, migration note | Full contract suites; e2e against installed package |
+| 9b | TUI status footer (`prompt.footer.status`) driven by an RPC `status.changed` event | Unit tests; VHS recording |
 | 10 | Remove V1, `live-validation.ts`, its workflow; move `daemon-launcher.ts` to `src/client/` | Nothing imports old paths |
 
 `main` stays releasable throughout: nothing user-facing changes until PR 9, and
