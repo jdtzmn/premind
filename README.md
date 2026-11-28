@@ -8,27 +8,31 @@ When a PR receives new comments, review feedback, check results, or merge confli
 
 ### OpenCode
 
-Premind targets OpenCode 2. Add it to `plugins` in `opencode.json(c)`:
+Premind targets OpenCode 2. Once Premind is published to npm, add it to `plugins` in `opencode.json(c)`:
 
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugins": ["github:jdtzmn/premind"]
+  "plugins": ["premind"]
 }
 ```
 
-Use `"premind"` instead once it is published to npm. One entry loads every part of the plugin: the server part (session tracking, delivery, tools, commands and the skill) and the TUI part (slash and palette commands that answer in a dialog or toast without starting a model turn). There is no separate TUI companion to install.
+One entry loads both the server plugin and the TUI slash and palette commands.
 
-From a local checkout, point the entry at the checkout instead:
+Before the first npm release, build and load a local checkout:
 
 ```sh
 git clone https://github.com/jdtzmn/premind.git
-cd premind && bun install
+cd premind
+bun install
+bun run build:runtime
 ```
 
 ```json
 { "plugins": ["/absolute/path/to/premind"] }
 ```
+
+The runtime build generates the daemon used by the plugin. OpenCode 2.4.2 [cannot prepare Git-installed plugins that have build scripts](https://github.com/anomalyco/opencode/issues/49704), so use the local path or the npm package.
 
 #### Upgrading from OpenCode 1
 
@@ -97,13 +101,15 @@ For an opt-in model-based check of triggering and selective reference reads, run
 
 ## Configuration
 
-OpenCode passes plugin options from the `plugins` entry:
+OpenCode passes plugin options from the `plugins` entry. For a local checkout:
 
 ```json
 {
-  "plugins": [{ "package": "premind", "options": { "autoDeliver": false } }]
+  "plugins": [{ "package": "/absolute/path/to/premind", "options": { "autoDeliver": false } }]
 }
 ```
+
+Use `"package": "premind"` for an npm install.
 
 | Option | Type | Default | Effect |
 | --- | --- | --- | --- |
@@ -151,7 +157,8 @@ ls /var/folders/*/*/*/T/premind.sock 2>/dev/null
 
 - OpenCode 2.4 or later
 - `gh` CLI authenticated with access to your repository
-- OpenCode/Pi: Node 22.5+ with the package's `tsx` dependency for the source daemon launcher
+- OpenCode: Node 22.13+ for the bundled daemon
+- Pi: Node 22.5+ with the package's `tsx` dependency for the source daemon launcher
 - Claude Code/Codex: Node 22.13+; Codex CLI 0.155.1+; installed plugins use self-contained generated bundles and do not require Bun, `tsx`, or repository `node_modules` at runtime
 
 ## Architecture
@@ -173,3 +180,9 @@ bun run check    # typecheck
 bun run test     # all tests
 bun run daemon   # start daemon manually
 ```
+
+### Publishing to npm
+
+For the first version, run **Publish to npm** manually on `main` to verify and build the package without publishing. Download and extract the `premind-npm-package` artifact. Using npm CLI 11.21.3 or newer, sign in with `npm login`, run `npm stage publish ./premind.tgz --access public`, and approve the staged version on npmjs.com with 2FA.
+
+For subsequent versions, bump `package.json` on `main` and publish a GitHub release with a matching tag, such as `v0.1.1`. The workflow runs CI, checks a clean install of the tarball, and publishes it with provenance. Configure [npm Trusted Publishing](https://docs.npmjs.com/trusted-publishers/) just before the first automated release: GitHub owner `jdtzmn`, repository `premind`, workflow `publish.yml`, no environment, and **Allow npm publish**. The configuration expires if it doesn't publish successfully within two days.
